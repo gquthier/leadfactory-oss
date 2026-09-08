@@ -640,3 +640,34 @@ input[type="url"] {
     margin-top: 6px;
   }
 }
+
+/* --- Bandeau de synchronisation (données modifiées ailleurs / réseau) --- */
+.live-bar {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, 90vw);
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 6px 18px rgba(15, 20, 30, 0.14);
+  font-size: 13px;
+}
+
+.live-bar[hidden] {
+  display: none;
+}
+
+.live-bar[data-kind="offline"] {
+  border-color: var(--danger);
+}
+
+.live-bar .live-text {
+  flex: 1;
+  min-width: 0;
+}

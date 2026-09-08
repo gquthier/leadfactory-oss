@@ -1,10 +1,17 @@
 # LeadFactory Open Agency
 
-Le kit open source pour monter et opérer une agence de génération de leads : **skills, méthodes, second cerveau, rôles d'agents et logiciel de gestion local**.
+Le kit open source pour monter et opérer une agence de génération de leads : **23 skills, méthodes métier, second cerveau, équipe d’agents et logiciel de gestion local**. Vous le personnalisez avec votre offre, vos clients et vos comptes.
 
-Cette première version extrait les méthodes réutilisables de LeadFactory. Elle démarre avec vos propres clients, votre offre et vos connexions. Elle ne contient pas les dossiers clients, les résultats historiques ou l'infrastructure privée de l'agence.
+## Choisir votre démarrage
 
-## Démarrer
+| Mode | Ce que vous utilisez | Démarrage |
+|---|---|---|
+| Cockpit autonome | Gestion locale des clients, campagnes, tâches, onboarding et livrables ; assistant au choix | Clonez le dépôt et lancez `npm start` |
+| Agence dans BizOS local | Six agents, leur équipe, les skills et un cockpit qui partage leurs données | Dans la version BizOS qui inclut cette intégration : **Apps → Agence LeadFactory → Installer** |
+
+La [preview BizOS pour Mac Apple Silicon](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.2.0-preview.1) inclut l’agence, avec ses sources desktop correspondantes. Le parcours a été vérifié avec un vrai agent Claude : lecture du skill, création du client, brief enregistré et mise à jour visible sans recharger le dashboard. Cette preview locale est signée ad hoc, non notarisée. Le [guide BizOS](docs/BIZOS.md) explique l’installation et la compilation.
+
+## Démarrer le cockpit autonome
 
 Prérequis : [Node.js 22 ou plus récent](https://nodejs.org/).
 
@@ -16,24 +23,37 @@ cd leadfactory-oss
 npm start
 ```
 
-Ouvrez **http://127.0.0.1:4310**. Aucune dépendance à installer, aucun compte à créer pour le cockpit. Sur macOS, vous pouvez aussi double-cliquer sur `start.command` après avoir installé Node.js.
+Ouvrez **http://127.0.0.1:4310**. Le cockpit autonome ne demande aucune dépendance à installer ni compte pour gérer votre agence. Sur macOS, `start.command` permet aussi de le lancer après installation de Node.js.
 
-Le cockpit démarre vide. La démo facultative est entièrement fictive. Les données sont conservées sur votre ordinateur dans `data/`, exclu de Git. Le cockpit est conçu pour un utilisateur local ; ne l'exposez pas comme un SaaS public.
+Il démarre vide ; la démo facultative est fictive. Vos données restent dans `data/`, exclu de Git. Ce mode est destiné à un utilisateur sur son ordinateur. Il ne crée pas les agents BizOS.
+
+## Utiliser l’agence dans BizOS local
+
+1. Dans **Apps → Agence LeadFactory**, choisissez **Installer**. BizOS crée six agents, une équipe, installe les 23 skills inclus et prépare un vault dédié à l’agence, sans remplacer votre second cerveau existant.
+2. Ouvrez le cockpit depuis cette fiche. BizOS lance le dashboard local et ouvre une session authentifiée ; les agents et le cockpit utilisent les mêmes clients, campagnes, tâches, livrables et données d’onboarding.
+3. Dans les réglages BizOS, configurez votre modèle avec votre connexion personnelle Codex, Claude ou Cursor, selon les options disponibles. Ouvrez **Start Here** dans le cockpit pour renseigner l’agence, puis confiez une première mission à **Agency Director** dans Discussions.
+
+Les modifications des agents sont recherchées toutes les trois secondes par le cockpit. Si vous êtes en train de rédiger ou avez un brouillon non enregistré, il le conserve et signale les nouvelles données.
+
+Aucune routine n’est activée par défaut. Les comptes de cold email, de publicité et de génération d’images ou de vidéos sont les vôtres ; les actions externes ne partent pas automatiquement à l’installation.
 
 ## Ce qui est inclus
 
 | Brique | Utilisation |
 |---|---|
-| Cockpit | Clients, campagnes, tâches, checklist d'onboarding et livrables texte |
-| 23 skills métier | 21 skills adaptés du pack public, plus définition d'offre et relation client après livraison |
-| Parcours d'agence | De la définition de l'offre au reporting client : [guide](docs/AGENCY-PLAYBOOK.md) |
-| Second cerveau | Dossiers Markdown et rôles génériques dans [vault](vault/) |
-| Template BizOS | Données conformes au contrat `CompanyTemplate` observé : [intégration](docs/BIZOS.md) |
-| Portabilité | Export/import JSON et dossier client Markdown pour travailler avec un agent |
+| Cockpit | Clients, campagnes, tâches, questionnaire d’onboarding et livrables texte |
+| 23 skills métier | 21 méthodes adaptées du pack public, plus définition d’offre et relation client après livraison |
+| Parcours d’agence | De l’offre au reporting client : [guide](docs/AGENCY-PLAYBOOK.md) |
+| Second cerveau | Notes et processus personnalisables dans [vault](vault/) |
+| Équipe BizOS locale | Agency Director, Acquisition, Onboarding, Strategist, Creative et Account Manager |
+| Portabilité | Export/import JSON et dossier client Markdown |
+| Sources du runtime | Intégration locale sous [integrations/bizos-local/runtime](integrations/bizos-local/runtime/) |
 
-Les boutons de modèles préremplis fonctionnent sans IA. L'option **Rédiger avec mon IA** utilise votre connexion OpenRouter configurée dans **Start Here** et transmet le contexte du client sélectionné à ce fournisseur. Elle produit du texte. Les skills sont des instructions pour votre assistant : ils ne s'exécutent pas seuls. Pour produire des images, vidéos, recherches en ligne ou campagnes réelles, utilisez les outils et comptes connectés à votre assistant. Les frais éventuels de ces services restent à votre charge.
+Les modèles préremplis du cockpit fonctionnent sans IA. En mode autonome, **Rédiger avec mon IA** utilise votre connexion OpenRouter pour produire du texte ; dans BizOS, les agents utilisent le modèle personnel configuré dans l’application. Les skills guident l’assistant et ses outils disponibles. Une image ou une vidéo est livrée lorsque le fichier a réellement été produit par le service choisi.
 
-## Installer les skills
+## Installer les skills dans un autre assistant
+
+L’installation dans BizOS inclut déjà les 23 skills. Pour le mode autonome avec votre propre assistant :
 
 ```sh
 node scripts/install-skills.mjs --target ~/.codex/skills
@@ -41,32 +61,26 @@ node scripts/install-skills.mjs --target ~/.codex/skills
 node scripts/install-skills.mjs --target ~/.claude/skills
 ```
 
-L'installateur refuse d'écraser un skill existant. Le [catalogue](docs/SKILLS.md) précise les entrées, sorties, dépendances et adaptations. Choisissez le dossier de skills reconnu par votre environnement ; les commandes ci-dessus n'activent aucune connexion ni campagne.
+L’installateur refuse d’écraser un skill existant. Le [catalogue](docs/SKILLS.md) détaille les entrées, sorties et outils nécessaires.
 
 ## Votre premier client
 
-1. Ouvrez **Start Here**, renseignez votre agence et configurez vos outils selon vos besoins.
-2. Créez un client et complétez son questionnaire d'onboarding. Le brouillon peut être repris avant soumission.
-3. La soumission crée sa campagne brouillon, sa checklist et son brief. Préparez ensuite une séquence de cold email ou un autre livrable.
-4. Exportez son dossier Markdown et demandez à votre assistant d'appliquer le skill approprié.
-5. Vérifiez le livrable, puis réalisez l'action dans votre outil connecté avec l'autorisation et le budget correspondants.
+Suivez [Start Here](docs/START-HERE.md) : renseignez l’agence, créez un client et complétez son onboarding. La soumission prépare une campagne brouillon, une checklist et un brief.
 
-Exemple de demande : « À partir de ce dossier client, utilise `creative-brief` pour préparer trois angles publicitaires. Indique les preuves manquantes et fournis les prompts de génération ; ne présente pas les images comme produites tant qu'elles n'existent pas. »
-
-## État de cette version
-
-Le cockpit, les documents et les skills sont autonomes. La sélection et l'installation de ce template dans l'application BizOS sont **à intégrer** : placer le JSON dans un dossier ne crée pas une équipe exécutable dans BizOS. Le template n'embarque aucun moteur cloud privé.
-
-Il n'y a pas de moteur d'envoi de cold emails, de compte publicitaire connecté, de facturation, de portail client distant ou de génération vidéo intégrée. Le questionnaire d'onboarding se remplit dans le cockpit local, seul ou avec le client. Les processus et skills guident les opérations externes avec les outils de l'utilisateur. « Une agence open source » décrit le kit distribué ; cela ne garantit ni l'acquisition de clients ni une livraison entièrement automatique.
+Dans BizOS, demandez par exemple : « Crée le dossier de ce client, prépare son onboarding et enregistre le brief et les prochaines tâches dans le cockpit. » En mode autonome, exportez le dossier Markdown et fournissez-le à votre assistant avec le skill adapté. Relisez les livrables avant leur utilisation commerciale.
 
 ## Vérification et contribution
+
+Cockpit autonome :
 
 ```sh
 npm test
 ```
 
-Voir [CONTRIBUTING](CONTRIBUTING.md). N'ajoutez jamais vos clients réels, exports, clés API ou fichiers d'environnement à une contribution.
+Runtime BizOS : commandes dans [docs/BIZOS.md](docs/BIZOS.md). Voir aussi [CONTRIBUTING](CONTRIBUTING.md). Utilisez des fixtures fictives et gardez vos données clients et connexions hors des contributions.
 
 ## Licence et origine
 
-MIT pour le code et les documents originaux du kit. Les skills sont adaptés de [tarsluna/my-custom-skills](https://github.com/tarsluna/my-custom-skills), avec leur attribution et licence conservées dans [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md). Le logiciel de gestion a été réécrit pour ce kit : aucun historique du logiciel privé n'est redistribué.
+Le kit, son cockpit et ses documents originaux sont sous **MIT**. Les 21 skills adaptés viennent de [tarsluna/my-custom-skills](https://github.com/tarsluna/my-custom-skills). Le runtime intégré sous `integrations/bizos-local/runtime/` est sous **AGPL-3.0-only**, avec ses attributions amont conservées. Les détails et textes de licence sont référencés dans [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+
+Le logiciel de gestion du kit a été réécrit ; les dossiers clients et l’historique de l’ancien logiciel privé de LeadFactory ne sont pas redistribués.

@@ -1,6 +1,6 @@
 # Tools and sources of truth
 
-Nothing is connected by this template. Choose only the tools the agency actually needs.
+The BizOS local installer connects the agency agents to their own LeadFactory cockpit. The cockpit is the source of truth for client, campaign, onboarding, task and deliverable records. Its updates appear in the open dashboard. The Markdown-only template does not establish that connection. External tools and accounts remain your own choices.
 
 | Capability | Chosen tool / account | Source of truth | Allowed actions | Setup status |
 |---|---|---|---|---|

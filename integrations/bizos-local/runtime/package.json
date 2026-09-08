@@ -1,0 +1,26 @@
+{
+  "name": "@leadfactory/bizos-local-runtime",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "Local BizOS runtime with the LeadFactory agency template and shared client cockpit",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "kit:sync": "node scripts/sync-agency-kit.mjs --source ../../..",
+    "build": "npm run kit:sync && tsc -p tsconfig.json && node scripts/copy-agency-kit.mjs",
+    "test": "vitest run tests/agency.test.ts tests/agency-kit.test.ts tests/sidecar-agency.test.ts",
+    "start": "node dist/sidecar.js serve"
+  },
+  "dependencies": {
+    "jose": "6.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.11",
+    "electron": "44.1.0"
+  }
+}

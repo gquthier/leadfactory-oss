@@ -1,6 +1,6 @@
 # Start your agency
 
-This is a generic operating template inspired by LeadFactory. It contains no client data and has no services connected.
+This is the reusable LeadFactory operating template. It contains no originating client data or external service accounts.
 
 Open this folder with your chosen agent tool and ask it to read `AGENTS.md`. Start with this brief:
 
@@ -10,6 +10,6 @@ Put the answer in `Company.md`. Unknown details stay TODO. The Agency Director t
 
 To find clients, use `Processes/Acquisition.md`. For a signed client, use `Processes/Client onboarding.md`. A new client gets a separate folder copied from `Clients/Client template/`. A campaign gets a folder from `Campaigns/Campaign template/` with that client's identifier.
 
-The management app runs separately from these notes. Agree which system owns each field in `Connectors.md`; do not claim the app and notes synchronize automatically. Start with one client and one campaign before adding more complexity.
+When installed from Apps → LeadFactory in BizOS local, the cockpit owns the client, campaign, onboarding, task and deliverable records. Use the agency tools exposed by your active run to read and update them. They are the same records shown in the dashboard. Read a LeadFactory skill and its relevant references before doing that work; the runtime supplies tools to list and read the included skills.
 
-The companion JSON describes six agent roles for a future compatible importer. Copying these files does not install agents into BizOS. A working model connection, tool access and an actual run are needed to produce a result.
+If using these Markdown files without the BizOS installer, the management app runs separately. Agree which system owns each field in `Connectors.md`; an exported dossier is not automatic synchronization. Copying the JSON alone does not execute agents. In either setup, a working personal model connection, tool access and an actual run are needed to produce a result.

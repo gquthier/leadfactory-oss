@@ -1,33 +1,73 @@
-# Template d'agence pour BizOS
+# LeadFactory dans BizOS local
 
-Lecture du code et des contrats : **8 septembre 2026**. Statut : pack documentaire livré ; intégration et parcours dans l'application à développer et vérifier.
+État au **9 septembre 2026** : parcours vérifié sur **macOS Apple Silicon**, dans une application BizOS empaquetée et un profil de test isolé. Installation des six agents, ouverture du cockpit authentifié, lecture d’un skill par Claude, création d’un client fictif et enregistrement de son brief ont été observés. Cette distribution est une **preview locale**, signée ad hoc et non notarisée.
 
-Le fichier `templates/lead-gen-agency.company-template.json` décrit dossiers, notes, rôles et équipe au format `CompanyTemplate` observé dans le harnais local. Le dossier `vault/` reste utilisable comme second cerveau Markdown avec un assistant choisi par l'utilisateur. Aucune routine n'est activée par ce pack.
+## Télécharger BizOS ou compiler ses sources
 
-## Intégration locale attendue
+La [release v0.2.0-preview.1](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.2.0-preview.1) fournit :
 
-1. Ajouter le pack au catalogue de templates du harnais local avec son identifiant et sa version.
-2. Proposer « Agence de génération de leads » dans l'onboarding, avant l'application du template par défaut.
-3. Afficher les dossiers et agents à créer ; conserver l'identité de l'espace local et les données existantes.
-4. Appliquer via le mécanisme du harnais qui crée réellement notes, agents et threads, avec suivi idempotent de la version. Ne pas remplacer un second cerveau existant.
-5. Présenter l'équipe, le premier message et la configuration des outils manquants.
-6. Prouver création, échange réel, livrable, arrêt et reprise sans doublons dans l'app installée.
+- `BizOS-LeadFactory-mac-arm64.zip` : application pour Mac Apple Silicon ;
+- `BizOS-LeadFactory-desktop-source.tar.gz` : sources correspondantes de l’interface desktop, avec `BUILD-LEADFACTORY.md` ;
+- `SHA256SUMS.txt` : sommes de contrôle des deux archives.
 
-Le JSON est une donnée de template ; ce dépôt ne fournit pas d'importeur BizOS testé. Les noms d'agents ne leur confèrent aucun outil, compte ou accès automatiquement.
+Décompressez l’application, placez-la dans le dossier de votre choix puis ouvrez BizOS. Sélectionnez le **mode local** dans les réglages si l’app démarre en mode cloud. macOS peut demander une autorisation manuelle pour cette preview non notarisée. Les binaires Intel, Windows et Linux ne sont pas fournis ni validés dans cette version. Le cockpit autonome reste utilisable avec Node.js.
 
-## Cloud et local
+Pour reconstruire l’application, extrayez l’archive de sources desktop à côté du clone `leadfactory-oss`, puis suivez son `BUILD-LEADFACTORY.md`. Le runtime et les skills proviennent de ce dépôt public ; aucun accès à un dépôt privé n’est nécessaire.
 
-| Champ | Local OSS | Cloud BizOS |
+## Installer l’agence
+
+Dans une version BizOS locale qui inclut cette intégration, ouvrez **Apps → Agence LeadFactory → Installer**.
+
+L’installation crée :
+
+- six agents : **Agency Director**, **Acquisition**, **Onboarding**, **Strategist**, **Creative**, **Account Manager** ;
+- leur équipe et les **23 skills** fournis par ce dépôt ;
+- un vault dédié avec les notes, rôles et processus de l’agence.
+
+Votre second cerveau existant est conservé. Le fichier [CompanyTemplate](../templates/lead-gen-agency.company-template.json) fournit la matière du template ; le runtime local réalise l’installation. Aucune routine n’est créée par défaut.
+
+Configurez votre modèle dans les **réglages BizOS**, avec votre propre connexion Codex, Claude ou Cursor parmi les options disponibles. Dans **Discussions**, demandez à Agency Director de préparer un premier client et son onboarding. Les autres agents interviennent selon la mission confiée et les outils configurés.
+
+## Ouvrir et utiliser le cockpit partagé
+
+Depuis la fiche **Agence LeadFactory**, ouvrez le dashboard. BizOS démarre le cockpit local et fournit une session authentifiée. Si le lien d’ouverture expire, rouvrez-le depuis la fiche de l’app.
+
+Les agents disposent des outils `agency_*` pour gérer les clients, campagnes, tâches, livrables et l’onboarding. Ces outils et le dashboard utilisent **les mêmes données de l’espace BizOS local**. Un brief enregistré par un agent apparaît donc dans les livrables du client, sans export/import intermédiaire.
+
+Le cockpit vérifie les changements toutes les **trois secondes**. Pendant une saisie ou lorsqu’un brouillon n’est pas enregistré, il préserve votre travail et affiche un avis de mise à jour. Les notes du vault complètent le dossier client ; elles ne remplacent pas l’enregistrement des livrables dans le cockpit.
+
+Ouvrez **Start Here** pour renseigner votre agence. Le modèle des agents se configure dans BizOS. Pour la prospection, la publicité et les médias, branchez vos propres comptes et outils ; installation et onboarding ne déclenchent aucun envoi, publication ou dépense externe.
+
+## Autonome et embarqué
+
+| | Cockpit autonome | Cockpit embarqué dans BizOS local |
 |---|---|---|
-| product | local-bizos-oss | signal-bizos-cloud |
-| execution | Harnais local et fournisseur choisi par l'utilisateur | Harnais cloud BizOS |
-| data-owner | Espace local de l'utilisateur | Entreprise cloud autorisée |
-| capabilities | Dépendent des outils réellement configurés | Dépendent des outils et permissions serveur |
-| out-of-scope | Aucun accès ou transfert implicite cloud | Aucun export du moteur privé |
-| proof | Agents, threads et livrables locaux observables | Création et exécution réelles côté backend cloud |
+| Ouverture | `npm start` à la racine du kit | Fiche Agence LeadFactory dans Apps |
+| Données | `data/` du clone | Espace local de l’agence géré par BizOS |
+| Agents | Assistant externe choisi par l’utilisateur | Équipe installée dans BizOS, outils `agency_*` |
+| Rédaction IA | OpenRouter facultatif dans Start Here | Modèle personnel des agents, configuré dans BizOS |
+| Contexte | Export Markdown à fournir à l’assistant | Clients et livrables partagés avec le cockpit |
+| Accès au dashboard | Adresse locale sur l’ordinateur | Session locale authentifiée ouverte par BizOS |
 
-La même matière métier générique peut inspirer une intégration cloud, mais elle exige un adaptateur propre au backend cloud. Aucun transfert automatique d'identité, de conversations, de credentials ou de données entre modes. Un fournisseur distant personnel reste un service distant.
+Lancer `npm start` à la racine ne rattache pas automatiquement ce cockpit autonome à votre espace BizOS. Utilisez l’export/import pour déplacer volontairement vos données entre espaces.
 
-## Critères de réception
+## Compiler le runtime depuis le clone
 
-Un template est réellement intégré lorsque sa sélection crée une équipe exécutable persistante dans le bon mode, que les agents produisent et partagent un livrable autorisé, et que la reprise ne duplique ni dossiers ni équipe. Une galerie ou un manifeste seul ne valide pas ce parcours.
+Prérequis : **Node.js 22 ou plus récent**, npm et le clone complet du dépôt. Depuis sa racine :
+
+```sh
+cd integrations/bizos-local/runtime
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci
+npm run build
+npm test
+```
+
+`npm ci` installe les dépendances verrouillées. La variable évite le téléchargement du binaire Electron, utilisé ici pour les types. Le build synchronise le cockpit, les skills et les notes depuis le kit, compile le runtime puis copie les ressources nécessaires. `npm test` lance les tests ciblés de l’agence, du kit embarqué et de leur intégration au sidecar.
+
+Ce dossier contient le runtime local, pas à lui seul l’interface desktop de discussion. `npm start` dans ce dossier démarre le sidecar compilé ; ce n’est pas le lancement du cockpit autonome ni celui d’une application desktop complète. Les sources de l’interface et leur guide de compilation sont joints à la release indiquée plus haut.
+
+## Périmètre et licences
+
+Cette intégration cible **BizOS local OSS**. Elle n’importe ni moteur privé cloud, ni identité, ni conversations ou connexions d’une entreprise cloud. L’usage d’un modèle distant personnel reste une connexion au fournisseur choisi.
+
+Le runtime sous `integrations/bizos-local/runtime/` est **AGPL-3.0-only** ; ses notices amont sont conservées avec les sources. Le kit d’agence reste **MIT**. Voir [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md) et [le README du runtime](../integrations/bizos-local/runtime/README.md).

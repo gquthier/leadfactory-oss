@@ -10,7 +10,10 @@ let app;
 try {
   app = await createApp({ dataDir: process.env.DATA_DIR });
   app.server.listen(PORT, HOST, () => {
-    console.log(`LeadFactory OSS démarre sur http://${HOST}:${PORT}`);
+    // PORT=0 laisse le système choisir : on affiche le port réellement attribué.
+    const bound = app.server.address();
+    const shown = bound && typeof bound === 'object' ? bound.port : PORT;
+    console.log(`LeadFactory OSS démarre sur http://${HOST}:${shown}`);
     console.log(`Données : ${app.dataDir}/db.json (verrou : db.lock, connexions IA : connections.json)`);
     console.log('Ctrl+C pour arrêter.');
   });

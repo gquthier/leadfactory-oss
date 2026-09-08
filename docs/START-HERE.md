@@ -1,35 +1,47 @@
 # Start Here
 
-Start Here rassemble les étapes pour commencer dans le cockpit local. La gestion des clients et les modèles préremplis fonctionnent sans compte IA.
+Commencez par votre agence, puis un premier client. La gestion du cockpit et les modèles préremplis fonctionnent sans compte IA.
 
 ## 1. Votre agence
 
-Renseignez votre nom d'agence, offre, cible, langue et contact. Ces informations décrivent votre activité ; elles ne constituent pas un compte sur une plateforme externe. Créez ensuite votre premier client.
+Dans **Start Here**, renseignez votre nom d’agence, offre, cible, langue et contact. Créez ensuite votre premier client, ou demandez à un agent de le faire si vous utilisez BizOS local.
 
 ## 2. Votre IA personnelle
 
-Pour rédiger du texte depuis le cockpit, créez votre propre clé dans [OpenRouter](https://openrouter.ai/keys), choisissez un identifiant de modèle proposé par ce fournisseur, puis renseignez la connexion dans Start Here. Les frais de génération dépendent de votre compte et du modèle choisi.
+### Dans BizOS local
 
-Le bouton de test vérifie la clé auprès du fournisseur. Une clé enregistrée n'est pas encore une connexion vérifiée ; une clé vérifiée ne garantit pas que chaque modèle est accessible avec vos crédits ou vos droits. La rédaction renvoie une erreur explicite si le modèle ou le compte ne permet pas la demande.
+L’agence s’installe depuis **Apps → Agence LeadFactory → Installer** : six agents, leur équipe, les 23 skills et un vault dédié sont créés. Ouvrez le cockpit depuis cette fiche pour travailler sur les données partagées avec les agents.
 
-La clé reste dans le stockage local des connexions, séparé des dossiers clients. Elle n'est pas incluse dans l'export JSON métier ni dans les exports Markdown. Reconfigurez vos connexions sur une autre machine après restauration. Ne l'ajoutez pas à Git ou aux notes de l'agence.
+Configurez le modèle dans les **réglages BizOS**, avec votre propre abonnement ou connexion **Codex, Claude ou Cursor**, selon le fournisseur disponible. **Start Here** vous oriente vers ces réglages ; il ne demande pas de connexion OpenRouter pour utiliser les agents BizOS.
 
-Quand vous choisissez **Rédiger avec mon IA**, les informations du client et de la campagne sélectionnés sont envoyées à OpenRouter et au fournisseur de modèle utilisé. Le texte obtenu est enregistré comme livrable IA. Les modèles préremplis restent disponibles pour préparer un brouillon sans cet envoi.
+Dans **Discussions**, demandez à **Agency Director** : « Prépare le dossier de ce nouveau client et son onboarding. Enregistre son brief, sa campagne brouillon et les prochaines tâches dans le cockpit. » Les agents travaillent avec le modèle et les outils que vous avez configurés.
 
-Contrats utilisés : [vérification d'une clé](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key) et [génération de texte](https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion), consultés le 8 septembre 2026.
+### Avec le cockpit autonome
+
+Lancez `npm start` à la racine du clone. Vous pouvez travailler avec les modèles préremplis ou exporter un dossier client vers votre assistant.
+
+Pour rédiger directement depuis ce cockpit, configurez facultativement votre propre clé **OpenRouter** et un identifiant de modèle dans **Start Here**. Le bouton de test vérifie la clé ; l’accès au modèle dépend aussi de votre compte et de vos crédits. **Rédiger avec mon IA** transmet le contexte du client et de la campagne sélectionnés au fournisseur, puis enregistre un livrable texte à relire.
+
+La connexion est stockée localement et séparément des dossiers clients. Elle n’est pas incluse dans les exports métier : reconfigurez-la sur une autre machine après restauration.
 
 ## 3. Vos skills et outils
 
-Installez les skills dans le dossier reconnu par votre assistant avec les commandes du README. Ouvrez le second cerveau `vault/`, renseignez `Company.md`, puis fournissez un dossier client exporté au skill adapté. Le [catalogue](SKILLS.md) précise les besoins de chaque méthode.
+Dans BizOS, les **23 skills** sont inclus dans l’installation de l’agence. En mode autonome, installez-les dans votre assistant avec les commandes du [README](../README.md), puis fournissez-lui le dossier Markdown du client. Le [catalogue](SKILLS.md) décrit chaque méthode et ses dépendances.
 
-Pour le cold email, Meta Ads et les images/vidéos, connectez vos propres outils dans votre assistant ou votre plateforme. Ces connexions ne sont pas réalisées par le cockpit. Une page d'aide ou une configuration déclarée n'est pas une preuve de connexion.
+Le cold email, Meta Ads et la génération d’images ou de vidéos utilisent **vos propres comptes**, leurs crédits et les outils que vous connectez à votre environnement. Aucune routine ni action externe n’est activée par défaut. Les abonnements des assistants et services restent ceux de l’utilisateur.
 
 ## 4. Le premier onboarding
 
-Créez un client, ouvrez son questionnaire, puis complétez les étapes métier. Vous pouvez sauvegarder un brouillon incomplet et le reprendre. La soumission exige les informations essentielles ; elle prépare une campagne en brouillon, une checklist et un brief. Elle ne lance aucune publicité, recherche externe ou séquence d'envoi.
+Créez un client, ouvrez son questionnaire et complétez les étapes métier. Le brouillon peut être sauvegardé puis repris. La soumission exige les informations essentielles ; elle prépare une campagne en brouillon, une checklist et un brief.
 
-Relisez le brief avec le client et marquez-le revu lorsque cette revue a eu lieu. Une modification de fond nécessite une nouvelle validation. Le formulaire est local : il s'utilise par l'opérateur, seul ou avec le client ; ce n'est pas un lien d'onboarding public distant.
+Relisez le brief avec le client et marquez-le revu lorsque cette revue a eu lieu. Une modification de fond nécessite une nouvelle validation. Le formulaire s’utilise localement par l’opérateur, seul ou avec le client ; il ne fournit pas de lien d’onboarding public distant.
+
+Dans BizOS, les agents peuvent aussi gérer les étapes d’onboarding avec leurs outils d’agence. Leurs modifications apparaissent dans le même dossier que celui ouvert dans le cockpit.
 
 ## 5. Le premier livrable
 
-Choisissez un modèle prérempli ou une rédaction IA, relisez le résultat et enregistrez vos modifications. Pour une recherche, une image ou une vidéo, appliquez le skill correspondant avec ses outils disponibles, puis liez le fichier réellement produit au dossier. Ne confondez pas une idée de créative, un prompt et une image livrée.
+Dans BizOS, confiez une mission précise à un agent : client, objectif, preuves disponibles et livrable attendu. Demandez-lui d’enregistrer son résultat dans le dossier client du cockpit. En mode autonome, choisissez un modèle prérempli, une rédaction OpenRouter ou un skill exécuté par votre assistant.
+
+Le cockpit recherche les nouvelles données toutes les **trois secondes**. Si vous rédigez ou avez un brouillon non enregistré, il conserve votre saisie et signale les changements ; enregistrez votre travail avant d’appliquer la mise à jour.
+
+Relisez le résultat et enregistrez vos modifications. Pour une image ou une vidéo, liez le fichier réellement produit par l’outil utilisé : une idée ou un prompt reste une étape de préparation. Les envois aux prospects, publications et lancements publicitaires suivent ensuite vos instructions et autorisations.

@@ -47,6 +47,7 @@ const state = {
   db: { agency: {}, clients: [], campaigns: [], tasks: [], deliverables: [] },
   connections: { openrouter: { configured: false, model: '', status: 'unconfigured', verifiedAt: null, lastError: null } },
   schema: null,
+  hostedBy: null,
   view: 'start',
   clientId: null,
   onboarding: null, // { onboarding, progress, started } du client ouvert
@@ -59,6 +60,12 @@ const state = {
   hideDoneTasks: false,
   deliverableClient: ''
 };
+
+// Synchronisation avec les autres écrivains (agents locaux, second onglet).
+let live = null;
+// Révision lue AVANT les données actuellement chargées ; adoptée par render().
+let pendingAdopt = null;
+const liveUi = { notice: false, online: true };
 
 const NAV = [
   { id: 'start', label: 'Start Here' },
@@ -125,7 +132,12 @@ async function api(path, { method = 'GET', body } = {}) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
-  if (method !== 'GET') setSave('saving');
+  if (method !== 'GET') {
+    setSave('saving');
+    // Une écriture locale invalide tout cycle de synchronisation déjà démarré :
+    // ses données seraient périmées et produiraient un faux avis.
+    live?.invalidate();
+  }
   let res;
   try {
     res = await fetch(path, init);
@@ -151,10 +163,15 @@ async function api(path, { method = 'GET', body } = {}) {
 }
 
 async function refresh() {
+  // Révision d'abord, données ensuite : l'état chargé est donc au moins aussi
+  // récent que la révision retenue. Jamais l'inverse, sinon un changement
+  // survenu entre les deux requêtes passerait inaperçu.
+  const key = live ? await live.readKey() : null;
   state.db = await api('/api/state');
   if (state.view === 'onboarding' && state.clientId) {
     state.onboarding = await api(`/api/clients/${state.clientId}/onboarding`);
   }
+  pendingAdopt = key;
 }
 
 async function refreshConnections() {
@@ -192,6 +209,122 @@ async function run(action, successMessage) {
     toast(err.message, 'error');
     throw err;
   }
+}
+
+// --- Synchronisation avec les autres écrivains ----------------------------
+
+// Garde de saisie fournie par live-refresh.js (voir startLive).
+let inputGuard = null;
+let isTypingIn = () => false;
+
+/**
+ * Vrai quand recharger écraserait quelque chose : fenêtre modale ouverte,
+ * questionnaire d'onboarding ouvert, curseur dans un champ de saisie, ou
+ * brouillon modifié (éditeurs en ligne de Start Here compris).
+ */
+function wouldOverwriteInput() {
+  if (document.getElementById('dialog')?.open) return true;
+  if (state.view === 'onboarding') return true;
+  if (isTypingIn(document.activeElement)) return true;
+  return Boolean(inputGuard?.isDirty(document.getElementById('view')));
+}
+
+// --- Bandeau discret : avis de données modifiées et état de la connexion ---
+
+let liveBarNodes = null;
+function liveBar() {
+  if (liveBarNodes && liveBarNodes.root.isConnected) return liveBarNodes;
+  const text = el('span', { class: 'live-text' });
+  const action = el('button', { class: 'btn small', type: 'button' });
+  const root = el('div', { id: 'lf-live', class: 'live-bar', hidden: true, role: 'status' }, [text, action]);
+  document.body.append(root);
+  liveBarNodes = { root, text, action };
+  return liveBarNodes;
+}
+
+function renderLiveBar() {
+  const { root, text, action } = liveBar();
+  const setAction = (label, handler) => {
+    action.textContent = label;
+    action.onclick = handler;
+    action.hidden = false;
+  };
+  if (!liveUi.online) {
+    text.textContent = 'Serveur local injoignable. Nouvelle tentative automatique.';
+    root.dataset.kind = 'offline';
+    setAction('Réessayer', () => live?.wake());
+    root.hidden = false;
+    return;
+  }
+  if (liveUi.notice) {
+    text.textContent = 'Données modifiées ailleurs. Votre saisie en cours est conservée.';
+    root.dataset.kind = 'notice';
+    setAction('Recharger', () => live?.reloadNow());
+    root.hidden = false;
+    return;
+  }
+  root.hidden = true;
+  action.onclick = null;
+}
+
+/** Restaure la position de défilement après un rendu complet. */
+function withScroll(fn) {
+  const y = window.scrollY;
+  fn();
+  if (window.scrollY !== y) window.scrollTo(0, y);
+}
+
+/** Applique un état venu du serveur sans perdre vue, filtres ni sélection. */
+async function applyRemoteState(db) {
+  state.db = db;
+  let message = null;
+  const consulted = (state.view === 'client' || state.view === 'onboarding') && state.clientId;
+  if (consulted && !db.clients.some((c) => c.id === state.clientId)) {
+    state.view = 'clients';
+    state.clientId = null;
+    state.onboarding = null;
+    message = 'Le client consulté a été supprimé ailleurs : retour à la liste des clients.';
+  } else if (state.view === 'onboarding' && state.clientId) {
+    try {
+      state.onboarding = await api(`/api/clients/${state.clientId}/onboarding`);
+    } catch {
+      // Questionnaire devenu illisible : on retombe sur le dossier client.
+      state.view = 'client';
+      state.onboarding = null;
+    }
+  }
+  withScroll(() => render());
+  if (message) toast(message);
+}
+
+async function startLive() {
+  // Import dynamique : app.js reste par ailleurs un script classique valide.
+  const module = await import('./live-refresh.js');
+  const { createLiveRefresh } = module;
+  inputGuard = module.createInputGuard();
+  isTypingIn = module.isTypingIn;
+  live = createLiveRefresh({
+    readMeta: async () => {
+      const meta = await api('/api/meta');
+      state.hostedBy = meta.hostedBy === 'bizos-local' ? meta.hostedBy : null;
+      return meta;
+    },
+    readState: () => api('/api/state'),
+    applyState: applyRemoteState,
+    isBusy: wouldOverwriteInput,
+    onNotice: (notice) => {
+      liveUi.notice = notice !== null;
+      renderLiveBar();
+    },
+    onStatus: ({ online }) => {
+      liveUi.online = online;
+      renderLiveBar();
+    }
+  });
+  document.addEventListener('visibilitychange', () => live.setVisible(!document.hidden));
+  window.addEventListener('focus', () => live.wake());
+  live.setVisible(!document.hidden);
+  live.start();
 }
 
 // --- Dialogues -----------------------------------------------------------
@@ -683,6 +816,20 @@ function openClient(id) {
   render();
 }
 
+function backToClientsButton() {
+  return el('button', {
+    class: 'btn primary',
+    type: 'button',
+    text: '← Liste des clients',
+    onclick: () => {
+      state.view = 'clients';
+      state.clientId = null;
+      state.onboarding = null;
+      render();
+    }
+  });
+}
+
 function countsFor(clientId) {
   const tasks = state.db.tasks.filter((t) => t.clientId === clientId);
   return {
@@ -769,6 +916,7 @@ function commandBlock(command) {
 
 function viewStart() {
   const agency = state.db.agency ?? {};
+  const inBizos = state.hostedBy === 'bizos-local';
   const or = state.connections.openrouter;
   const profileDone = agencyConfigured();
   const aiDone = or.configured && or.model !== '';
@@ -781,11 +929,11 @@ function viewStart() {
     el('ol', { class: 'steps' }, [
       el('li', {}, [stepBadge(profileDone), ' Profil d’agence ', el('span', { class: 'hint', text: profileDone ? `enregistré le ${formatDate(agency.updatedAt)}` : 'nom d’agence requis' })]),
       el('li', {}, [
-        stepBadge(aiDone, or.status === 'verified' ? 'Vérifiée' : aiDone ? 'Configurée' : 'À faire'),
+        stepBadge(aiDone, inBizos ? 'Dans BizOS' : or.status === 'verified' ? 'Vérifiée' : aiDone ? 'Configurée' : 'À faire'),
         ' IA personnelle ',
-        el('span', { class: 'hint', text: aiDone ? `${KEY_STATUS_LABEL[or.status]}${or.verifiedAt ? ` le ${formatDate(or.verifiedAt)}` : ''}` : 'facultatif : les modèles préremplis fonctionnent sans IA' })
+        el('span', { class: 'hint', text: inBizos ? 'configurez votre modèle personnel dans les réglages BizOS' : aiDone ? `${KEY_STATUS_LABEL[or.status]}${or.verifiedAt ? ` le ${formatDate(or.verifiedAt)}` : ''}` : 'facultatif : les modèles préremplis fonctionnent sans IA' })
       ]),
-      el('li', {}, [stepBadge(skillsDeclared, skillsDeclared ? 'Déclaré installé' : 'À faire'), ' Skills et outils ', el('span', { class: 'hint', text: 'installation déclarée par vous : le cockpit ne peut pas la vérifier' })]),
+      el('li', {}, [stepBadge(inBizos || skillsDeclared, inBizos ? 'Inclus' : skillsDeclared ? 'Déclaré installé' : 'À faire'), ' Skills LeadFactory ', el('span', { class: 'hint', text: inBizos ? 'les agents du template peuvent consulter les skills et leurs références' : 'installation déclarée par vous : le cockpit ne peut pas la vérifier' })]),
       el('li', {}, [
         stepBadge(firstClient, submitted > 0 ? 'Onboarding soumis' : firstClient ? 'Client créé' : 'À faire'),
         ' Premier client ',
@@ -911,11 +1059,20 @@ function viewStart() {
   ]);
 
   return [
-    pageHead('Start Here', 'Configurez votre agence, votre IA et vos outils, puis lancez votre premier onboarding.'),
+    pageHead('Start Here', inBizos ? 'Votre agence dans BizOS local : les agents et ce dashboard partagent les mêmes clients, campagnes et livrables.' : 'Configurez votre agence, votre IA et vos outils, puis lancez votre premier onboarding.'),
     progress,
     profileCard,
-    aiCard,
-    skillsCard,
+    inBizos ? el('div', { class: 'card stack' }, [
+      el('h2', { text: '2. Vos agents dans BizOS' }),
+      el('p', { text: 'Dans les réglages de BizOS, connectez votre modèle personnel. Dans Discussions, demandez à Agency Director de créer votre premier client et de préparer son onboarding.' }),
+      el('p', { text: 'Les modifications enregistrées par les agents apparaissent ici automatiquement. Pendant une saisie, un avis vous permet de les charger quand vous êtes prêt.' })
+    ]) : aiCard,
+    inBizos ? el('div', { class: 'card stack' }, [
+      el('h2', { text: '3. Skills LeadFactory inclus' }),
+      el('p', { text: 'Les 21 skills issus de LeadFactory et les deux compléments offre et relation client sont inclus dans le template. Les agents consultent les instructions et références utiles à chaque mission ; aucune installation manuelle dans votre assistant n’est nécessaire.' }),
+      el('a', { href: SKILLS_CATALOG_URL, target: '_blank', rel: 'noopener noreferrer', text: 'Consulter les skills LeadFactory' }),
+      el('p', { text: 'Connectez vos outils d’envoi de cold emails, de publicité et de génération de médias dans BizOS. Le template ne fournit pas ces comptes.' })
+    ]) : skillsCard,
     clientsCard
   ];
 }
@@ -926,7 +1083,10 @@ function viewOnboarding() {
   const client = state.db.clients.find((c) => c.id === state.clientId);
   const data = state.onboarding;
   if (!client || !data || !state.schema) {
-    return [pageHead('Questionnaire indisponible', 'Client introuvable ou schéma non chargé.'), emptyState('Retournez à la liste des clients.')];
+    return [
+      pageHead('Questionnaire indisponible', 'Client introuvable ou schéma non chargé.', [backToClientsButton()]),
+      emptyState('Ce questionnaire n’est plus accessible. Les autres clients sont intacts.')
+    ];
   }
   const ob = data.onboarding;
   const progress = data.progress;
@@ -1221,7 +1381,10 @@ function viewClients() {
 function viewClientDetail() {
   const client = state.db.clients.find((c) => c.id === state.clientId);
   if (!client) {
-    return [pageHead('Client introuvable', 'Il a peut-être été supprimé.'), emptyState('Retournez à la liste des clients.')];
+    return [
+      pageHead('Client introuvable', 'Il a peut-être été supprimé ailleurs.', [backToClientsButton()]),
+      emptyState('Ce dossier n’existe plus. Les autres clients sont intacts.')
+    ];
   }
   const campaigns = state.db.campaigns.filter((c) => c.clientId === client.id);
   const tasks = state.db.tasks.filter((t) => t.clientId === client.id);
@@ -1423,7 +1586,10 @@ function viewClientDetail() {
     fiche,
     onboardingCard(client),
     generation,
-    aiCard,
+    state.hostedBy === 'bizos-local' ? el('div', { class: 'card stack' }, [
+      el('h2', { text: 'Travailler avec vos agents' }),
+      el('p', { text: `Dans BizOS, demandez à un agent de travailler sur le client « ${client.company} ». Ses briefs, séquences et comptes rendus enregistrés apparaîtront dans les livrables de ce dossier.` })
+    ]) : aiCard,
     campaignCard,
     taskCard,
     deliverableCard
@@ -1717,7 +1883,7 @@ function viewData() {
       el('h2', { text: 'Où sont mes données ?' }),
       el('p', {
         class: 'subtitle',
-        text: 'Dans le fichier data/db.json du projet, écrit de façon atomique à chaque modification, protégé par un verrou db.lock (une seule instance par dossier). La clé OpenRouter est dans data/connections.json (mode 0600). Rien n’est envoyé sur Internet en dehors du bouton « Rédiger avec mon IA » et du test de clé.'
+        text: state.hostedBy === 'bizos-local' ? 'Ces données appartiennent à votre espace BizOS local. Les agents et ce dashboard utilisent la même base. Exportez une sauvegarde JSON pour la restaurer ailleurs. Les agents utilisent le modèle et les outils personnels que vous avez configurés dans BizOS.' : 'Dans le fichier data/db.json du projet, écrit de façon atomique à chaque modification, protégé par un verrou db.lock (une seule instance par dossier). La clé OpenRouter est dans data/connections.json (mode 0600). Rien n’est envoyé sur Internet en dehors du bouton « Rédiger avec mon IA » et du test de clé.'
       })
     ])
   ];
@@ -1759,6 +1925,7 @@ function render({ keepFocus } = {}) {
     data: viewData
   };
   view.replaceChildren(...views[state.view]().filter(node => node !== null && node !== undefined));
+  inputGuard?.capture(view);
   if (keepFocus === 'search') {
     const input = view.querySelector('input[type="search"]');
     if (input) {
@@ -1766,10 +1933,35 @@ function render({ keepFocus } = {}) {
       if (selection !== null) input.setSelectionRange(selection, selection);
     }
   }
+  // Les données lues par `refresh()` sont maintenant à l'écran : la révision
+  // correspondante peut être considérée comme appliquée, pas avant.
+  if (pendingAdopt !== null) {
+    live?.adopt(pendingAdopt);
+    pendingAdopt = null;
+  }
 }
 
 async function boot() {
   document.getElementById('host-label').textContent = `${location.host} — données locales`;
+  // BizOS opens a one-use ticket in the fragment, never its service credential.
+  // Exchange it for an HttpOnly session before any business-data request.
+  if (location.hash.startsWith('#connect=')) {
+    const ticket = location.hash.slice('#connect='.length);
+    history.replaceState(null, '', location.pathname + location.search);
+    try {
+      if (!/^[a-f0-9]{64}$/i.test(ticket)) throw new Error('Lien de connexion invalide. Rouvrez le dashboard depuis BizOS.');
+      await api('/api/session', { method: 'POST', body: { ticket } });
+    } catch {
+      document.getElementById('view').replaceChildren(pageHead('Ouvrir depuis BizOS', 'Ce lien de connexion a expiré ou a déjà été utilisé. Dans BizOS local, ouvrez Apps → Agence LeadFactory → Ouvrir le dashboard.'));
+      return;
+    }
+  }
+  try {
+    await startLive();
+  } catch {
+    // Sans la boucle de synchronisation, l'outil reste utilisable manuellement.
+    toast('Synchronisation automatique indisponible : rechargez la page pour voir les changements externes.', 'error');
+  }
   try {
     await refresh();
     [state.connections, state.schema] = await Promise.all([api('/api/connections'), api('/api/onboarding/schema')]);
@@ -1777,7 +1969,11 @@ async function boot() {
     // Start Here est l'écran initial tant que l'agence n'est pas configurée.
     state.view = agencyConfigured() ? 'dashboard' : 'start';
   } catch (err) {
-    toast(err.message, 'error');
+    live?.stop();
+    document.getElementById('view').replaceChildren(pageHead('Dashboard indisponible', err.message, [
+      el('button', { class: 'btn', text: 'Réessayer', onclick: () => location.reload() })
+    ]));
+    return;
   }
   render();
 }
