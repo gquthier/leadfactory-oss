@@ -1,0 +1,19 @@
+{
+  "name": "leadfactory-oss",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Outil local de gestion d'agence lead gen (zéro dépendance)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gquthier/leadfactory-oss.git"
+  }
+}

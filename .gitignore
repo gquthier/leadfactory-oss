@@ -1,0 +1,9 @@
+node_modules/
+data/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.local.json
+exports/
