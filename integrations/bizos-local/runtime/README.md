@@ -12,7 +12,7 @@ npm run build
 npm test
 ```
 
-The desktop shell is distributed with the corresponding sources alongside the application release. See [the BizOS guide](../../../../docs/BIZOS.md). Starting this sidecar alone does not provide the desktop chat interface.
+The desktop shell is distributed with the corresponding sources alongside the application release. See [the BizOS guide](../../../docs/BIZOS.md). Starting this sidecar alone does not provide the desktop chat interface.
 
 A model and external accounts are supplied by the user. Inference through a personal remote provider is not offline inference. Profiles and client databases must never be added to this repository.
 
