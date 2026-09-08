@@ -39,10 +39,12 @@ interface Built {
  * `localTeamTools` shape, the same revoke + abort on settle. */
 function build(options: { kitRoot?: string; rootDir?: string; fetchImpl?: typeof fetch; abortOnSettle?: boolean; delayedStop?: boolean } = {}): Built {
   const rootDir = options.rootDir ?? root;
+  const scriptedCodexPath = join(rootDir, "scripted-codex");
   const broker = new LocalTeamBroker();
   const turns: CodexTurnInput[] = [];
   let agency: AgencyService | null = null;
   const startTurn = (input: CodexTurnInput): CodexTurnHandle => {
+    expect(input.cli).toBe(scriptedCodexPath);
     turns.push(input);
     return {
       stop: () => options.delayedStop ? undefined : input.onEvent({ type: "turn.completed", ok: false, stopReason: "interrupted" }),
@@ -53,6 +55,7 @@ function build(options: { kitRoot?: string; rootDir?: string; fetchImpl?: typeof
   };
   const harness = new LocalBizosHarness({
     rootDir,
+    homeDir: rootDir,
     baseUrl: "",
     readSessionCookie: async () => "",
     orgName: () => "Local workspace",
@@ -61,7 +64,11 @@ function build(options: { kitRoot?: string; rootDir?: string; fetchImpl?: typeof
     runAsNodeAvailable: false,
     mcpScriptPath: join(rootDir, "disabled-bizos-mcp.mjs"),
     clock: fixedClock(Date.parse("2026-09-09T09:00:00Z")),
-    environment: { PATH: "/nowhere" },
+    // CLI resolution runs before the injected driver. PATH alone is not
+    // isolation: GUI lookup also searches machine installation directories.
+    // The existing unpackaged test override names a fake path that only our
+    // scripted startTurn consumes; no installed CLI or sign-in is needed.
+    environment: { PATH: "/nowhere", LBZ_CODEX_PATH: scriptedCodexPath },
     startTurn,
     devices: false,
     localTeamTools: ({ bot, threadId, runId }) => {
