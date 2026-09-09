@@ -34,3 +34,7 @@ Chaque espace ne reçoit que les dossiers de son modèle. L’export JSON sauveg
 Fournir le manifest du template, les notes, les rôles, les skills avec licences, le dashboard et son schéma. L’enregistrer dans le catalogue du runtime et les routes métier, puis dans la liste des dashboards acceptés par le desktop. Réutiliser le service de liaison et le composant d’affichage intégré.
 
 Vérifier sur un espace vide puis après redémarrage : choix unique, reprise sans duplication, édition humaine et agent dans la même base, visibilité dans les dossiers, préservation des notes, refus d’un autre coffre, refus des chemins non autorisés et arrêt immédiat des outils après STOP.
+
+## Plusieurs OS pour un administrateur local
+
+Complément du 9 septembre 2026 : un administrateur peut posséder plusieurs OS, regroupés en organisations locales. Le sélecteur Entreprises de la sidebar crée ou ouvre un OS. Chaque OS a un état de runtime, un profil desktop et une liaison coffre/template distincts. Changer d’OS ne change pas le coffre de l’OS quitté. L’ouverture utilise une relance du profil et refuse une transition pendant un run actif. Les organisations locales ne sont pas des organisations cloud ni un mécanisme de partage entre utilisateurs.

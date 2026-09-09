@@ -12,7 +12,7 @@ Le second template **[E-commerce](ecommerce/README.md)** ajoute 24 skills, six r
 | Template dans BizOS local | Six agents, leur équipe, les skills et le dashboard intégré | **Apps → Agence ou E-commerce → choisir un coffre** |
 | E-commerce autonome | Produits, concurrents, fournisseurs, boutiques, créatives et opérations | `cd ecommerce && npm start` |
 
-La [preview BizOS pour Mac Apple Silicon](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.3.0-preview.1) inclut les deux templates, avec leurs dashboards intégrés et les sources desktop correspondantes. Des missions avec un vrai agent Claude ont vérifié la lecture de skills et les écritures partagées : dossier client pour Agency, produit, livrable et titre du dashboard pour E-commerce. Cette preview locale est signée ad hoc, non notarisée. Le [guide BizOS](docs/BIZOS.md) explique l’installation et la compilation.
+La [preview BizOS pour Mac Apple Silicon](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.3.0-preview.2) inclut les deux templates, avec leurs dashboards intégrés et les sources desktop correspondantes. Des missions avec un vrai agent Claude ont vérifié la lecture de skills et les écritures partagées : dossier client pour Agency, produit, livrable et titre du dashboard pour E-commerce. Cette preview locale est signée ad hoc, non notarisée. Le [guide BizOS](docs/BIZOS.md) explique l’installation et la compilation.
 
 ## Démarrer le cockpit autonome
 

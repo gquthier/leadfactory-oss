@@ -4,7 +4,7 @@
 
 ## Télécharger BizOS ou compiler ses sources
 
-La [release v0.3.0-preview.1](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.3.0-preview.1) fournit :
+La [release v0.3.0-preview.2](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.3.0-preview.2) fournit :
 
 - `BizOS-Business-Templates-mac-arm64.zip` : application pour Mac Apple Silicon ;
 - `BizOS-Business-Templates-desktop-source.tar.gz` : sources correspondantes de l’interface desktop, avec `BUILD-BUSINESS-TEMPLATES.md` ;
@@ -13,6 +13,16 @@ La [release v0.3.0-preview.1](https://github.com/gquthier/leadfactory-oss/releas
 Décompressez l’application, placez-la dans le dossier de votre choix puis ouvrez BizOS. Sélectionnez le **mode local** dans les réglages si l’app démarre en mode cloud. macOS peut demander une autorisation manuelle pour cette preview non notarisée. Les binaires Intel, Windows et Linux ne sont pas fournis ni validés dans cette version. Le cockpit autonome reste utilisable avec Node.js.
 
 Pour reconstruire l’application, extrayez l’archive de sources desktop à côté du clone `leadfactory-oss`, puis suivez son `BUILD-BUSINESS-TEMPLATES.md`. Le runtime et les skills proviennent de ce dépôt public ; aucun accès à un dépôt privé n’est nécessaire.
+
+## Plusieurs entreprises sur le même Mac
+
+En mode local, le bouton **Entreprises**, juste au-dessus de **Paramètres** dans la sidebar, ouvre la liste des OS regroupés par organisation. L’organisation est un regroupement local pour le même administrateur ; aucun compte cloud n’est nécessaire.
+
+**Créer un nouvel OS** permet de nommer l’entreprise et de choisir une organisation existante ou d’en créer une. BizOS ouvre ensuite cet espace vide ; dans **Apps**, choisissez son template et son coffre. Chaque OS conserve ses propres agents, conversations, données et connexions. Le coffre reste fixe à l’intérieur de cet OS.
+
+Cliquer sur une autre entreprise ferme puis rouvre l’application dans le profil correspondant. Les données restent dans leur OS ; rien n’est déplacé. L’espace local existant est conservé sur place. Si une tâche est encore active, terminez-la ou arrêtez-la avant de changer d’OS.
+
+Pendant une tâche, **Stop remplace le bouton emoji** dans la zone de message. Il annule les tâches actives de cette conversation ; emoji revient quand elles sont terminées ou annulées.
 
 ## Choisir son template et son coffre
 
