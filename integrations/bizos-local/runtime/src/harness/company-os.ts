@@ -21,9 +21,13 @@
 // Applying a template is the harness's job (`harness.templates`): this module
 // holds the data, the vault seeding and the agent folders, and keeps them
 // honest — a path that could leave the vault is refused here, whatever pack
-// it came from, and a vault the person has already touched is never
-// rewritten.
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+// it came from, and a folder that already exists is never rewritten.
+//
+// The Company OS is also the first row of the CATALOGUE (`templates.ts`):
+// the same pack, created on demand into a managed vault of its own when the
+// brain is already the person's. The second row, the Lead Gen Agency, is
+// `template-lead-gen-agency.ts`.
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { BrainError, STARTER_NOTES } from "./brain.js";
 import type { ReasoningEffort, RoutineTrigger } from "./types.js";
@@ -60,6 +64,8 @@ export interface CompanyTemplate {
   id: string;
   version: number;
   name: string;
+  /** One sentence for the catalogue row: what the workspace is for. */
+  description?: string;
   /** Folders created empty, so the tree shows where things go before anything is written. */
   folders: ReadonlyArray<string>;
   notes: ReadonlyArray<TemplateNote>;
@@ -89,14 +95,16 @@ export const AGENTS_DIRECTORY = "Agents";
 /** The longest folder name an agent gets; the roster caps a name at 60. */
 const MAX_FOLDER_CHARS = 80;
 
-/** What seeding did to the vault folder. */
+/** What seeding did to the vault folder. `"upgraded"` is only ever READ
+ * now, from a `template.json` an older build wrote when it replaced the
+ * untouched starter notes; nothing upgrades a folder any more. */
 export type VaultSeed = "seeded" | "upgraded" | "kept";
 
 // ── vault paths ──────────────────────────────────────────────────────────
 
 /** The same door as `brain.ts`: a template path is split on `/` and refused
  * if any segment could leave the vault or name something the vault hides. */
-function segmentsOf(path: string): string[] {
+export function segmentsOf(path: string): string[] {
   const segments = path.split("/");
   if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === ".." || segment.startsWith(".") || segment.includes("\\") || segment.includes("\0"))) {
     throw new BrainError(`a template cannot write ${JSON.stringify(path)}`);
@@ -211,8 +219,10 @@ export function ensureAgentFolder(
 // ── vault seeding ────────────────────────────────────────────────────────
 
 /** True when the folder holds exactly the legacy starter notes, byte for
- * byte: nothing the person wrote, nothing an agent wrote, so replacing them
- * loses nothing. Hidden entries (`.obsidian`, `.trash`) are ignored. */
+ * byte: nothing the person wrote, nothing an agent wrote. Older builds
+ * replaced such a folder with the Company OS; this one never does — the
+ * check is kept so the catalogue can tell a starter brain from a Company OS
+ * brain. Hidden entries (`.obsidian`, `.trash`) are ignored. */
 export function isUntouchedStarter(path: string): boolean {
   let entries: string[];
   try {
@@ -232,25 +242,51 @@ export function isUntouchedStarter(path: string): boolean {
 }
 
 /**
- * Writes the template into `path`: whole when the folder does not exist,
- * over the untouched legacy starter when that is all the folder holds, and
- * never otherwise — a vault with a person's or an agent's notes is theirs.
+ * Refuses a pack before anything touches the disk: a bad path in note 12
+ * must not leave notes 1–11 behind, and an agent the roster would truncate
+ * must not be created half. The limits are the roster's (`bots.ts`).
+ */
+export function validateTemplate(template: CompanyTemplate): void {
+  for (const folder of template.folders) segmentsOf(folder);
+  const paths = new Set<string>();
+  for (const note of template.notes) {
+    segmentsOf(note.path);
+    if (typeof note.text !== "string") throw new BrainError(`a template note needs text (${note.path})`);
+    if (paths.has(note.path)) throw new BrainError(`a template writes ${JSON.stringify(note.path)} twice`);
+    paths.add(note.path);
+  }
+  const slugs = new Set<string>();
+  const names = new Set<string>();
+  for (const bot of template.bots) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(bot.slug)) throw new BrainError(`a template agent has an invalid key ${JSON.stringify(bot.slug)}`);
+    if (slugs.has(bot.slug)) throw new BrainError(`a template names the agent ${bot.slug} twice`);
+    slugs.add(bot.slug);
+    const name = bot.name.trim();
+    // eslint-disable-next-line no-control-regex -- the control range IS the check
+    if (!name || name.length > 60 || /[\u0000-\u001f\u007f]/.test(name)) {
+      throw new BrainError(`a template agent has an invalid name ${JSON.stringify(bot.name)}`);
+    }
+    const folder = agentFolderName(name).toLowerCase();
+    if (names.has(folder)) throw new BrainError(`two template agents would share the folder ${JSON.stringify(agentFolderName(name))}`);
+    names.add(folder);
+    if (bot.title.length > 80 || bot.description.length > 600 || bot.instructions.length > 6000) {
+      throw new BrainError(`the agent ${name} is longer than the roster allows`);
+    }
+  }
+  for (const routine of template.routines) {
+    if (!slugs.has(routine.bot)) throw new BrainError(`a template routine belongs to an unknown agent ${routine.bot}`);
+  }
+}
+
+/**
+ * Writes the template into `path`, whole, when the folder does not exist —
+ * and never otherwise. A folder that is already there is somebody's: a
+ * person's or an agent's notes, or the legacy starter they have not touched
+ * yet. Neither is rewritten; `"kept"` says so and nothing was written.
  */
 export function seedTemplateVault(path: string, template: CompanyTemplate): VaultSeed {
-  // Validate the whole pack before touching the disk: a bad path in note 12
-  // must not leave notes 1–11 behind.
-  for (const folder of template.folders) segmentsOf(folder);
-  for (const note of template.notes) segmentsOf(note.path);
-
-  let outcome: VaultSeed;
-  if (!existsSync(path)) {
-    outcome = "seeded";
-  } else if (isUntouchedStarter(path)) {
-    for (const note of STARTER_NOTES) unlinkSync(join(path, note.path));
-    outcome = "upgraded";
-  } else {
-    return "kept";
-  }
+  validateTemplate(template);
+  if (existsSync(path)) return "kept";
   mkdirSync(path, { recursive: true, mode: 0o700 });
   for (const folder of template.folders) {
     mkdirSync(join(path, ...segmentsOf(folder)), { recursive: true, mode: 0o700 });
@@ -260,7 +296,52 @@ export function seedTemplateVault(path: string, template: CompanyTemplate): Vaul
     mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
     writeFileSync(absolute, note.text, { mode: 0o600 });
   }
-  return outcome;
+  return "seeded";
+}
+
+/**
+ * Completes an EXISTING vault with what the template has and the folder
+ * lacks: a missing folder is made, a missing note is written, and nothing
+ * already there — a person's note, an agent's, an older install's — is
+ * touched, whatever it holds. Validates the whole pack first. Answers
+ * `"completed"` when something was written, `"kept"` when nothing was.
+ */
+export function completeTemplateVault(path: string, template: CompanyTemplate): "completed" | "kept" {
+  validateTemplate(template);
+  if (!existsSync(path)) throw new BrainError("that vault is not a folder on this Mac", "not_found");
+  // Validate every existing component before writing any part of the pack.
+  for (const relative of [...template.folders, ...template.notes.map(note => note.path)]) {
+    let current = path;
+    for (const segment of ["", ...segmentsOf(relative)]) {
+      if (segment) current = join(current, segment);
+      try {
+        if (lstatSync(current).isSymbolicLink()) throw new BrainError("a template cannot be installed through a symbolic link", "read_only");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") break;
+        throw error;
+      }
+    }
+  }
+  let written = 0;
+  for (const folder of template.folders) {
+    const absolute = join(path, ...segmentsOf(folder));
+    if (existsSync(absolute)) continue;
+    mkdirSync(absolute, { recursive: true, mode: 0o700 });
+    written += 1;
+  }
+  for (const note of template.notes) {
+    const absolute = join(path, ...segmentsOf(note.path));
+    if (existsSync(absolute)) continue;
+    mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
+    try {
+      // `wx`: created or nothing, so a note written meanwhile is never replaced.
+      writeFileSync(absolute, note.text, { mode: 0o600, flag: "wx" });
+      written += 1;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+  return written > 0 ? "completed" : "kept";
 }
 
 // ── the Company OS ───────────────────────────────────────────────────────
@@ -633,6 +714,7 @@ export const COMPANY_OS: CompanyTemplate = {
   id: "company-os",
   version: 2,
   name: "Company OS",
+  description: "A company run with a team of AI agents where you stay the decision-maker: one CEO that learns your company and builds the team with you.",
   folders: ["Knowledge/Trusted", "Knowledge/Draft/Learnings", "Reports/Daily", AGENTS_DIRECTORY],
   notes: [
     { path: "AGENTS.md", text: AGENTS_MD },

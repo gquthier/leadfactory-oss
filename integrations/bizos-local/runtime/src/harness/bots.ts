@@ -115,11 +115,18 @@ export class BotStore {
     this.storage.writeJson(BOTS_FILE, this.bots);
   }
 
-  create(input: CreateBotInput): Bot {
+  /**
+   * `id` is for a caller that wrote the id down BEFORE creating the bot — a
+   * template's journal — so that a crash between this persist and the
+   * caller's own record still leaves one bot, findable by that id. Never a
+   * renderer's: the bridge refuses the key. A taken id is refused here.
+   */
+  create(input: CreateBotInput, id?: string): Bot {
     const name = trimmed(input.name, 60);
     if (!name) throw new Error("a bot needs a name");
+    if (id && this.bots.some((bot) => bot.id === id)) throw new Error("that bot id is taken");
     const bot: Bot = {
-      id: newId("bot"),
+      id: id ?? newId("bot"),
       name,
       ...(trimmed(input.title, 80) ? { title: trimmed(input.title, 80) } : {}),
       ...(trimmed(input.description, 600) ? { description: trimmed(input.description, 600) } : {}),

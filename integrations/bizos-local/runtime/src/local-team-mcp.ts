@@ -1,19 +1,21 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENCY_TOOL_SPECS, isAgencyToolName } from "./harness/agency-tools.js";
+import { COMMERCE_TOOL_SPECS, isCommerceToolName } from "./harness/commerce-tools.js";
 
 type Json = Record<string, unknown>;
 type TeamCall = (input: Json) => Promise<unknown>;
 
 const MAX_RESULT_CHARS = 16_000;
 /** Skills and documents are read whole; a SKILL.md is longer than a result card. */
-const MAX_AGENCY_RESULT_CHARS = 64_000;
+const MAX_PACK_RESULT_CHARS = 64_000;
 
 /**
- * Which tool families this server offers, from its OWN argv (`--toolset=team,agency`).
- * `team` is always there. `agency` is added by the sidecar only for the
- * agents of the installed agency pack — and listing is not granting: the
- * sidecar re-checks the calling agent on every `/agency` call.
+ * Which tool families this server offers, from its OWN argv
+ * (`--toolset=team,agency` or `--toolset=team,commerce`). `team` is always
+ * there. `agency` / `commerce` are added by the sidecar only for the agents
+ * of the installed pack — and listing is not granting: the sidecar re-checks
+ * the calling agent on every `/pack` call.
  */
 export function toolsetsFromArgv(argv: readonly string[]): Set<string> {
   const flag = argv.find((argument) => argument.startsWith("--toolset="));
@@ -134,8 +136,8 @@ const callRecruit: TeamCall = (input) => callEndpoint("/api/internal/local-team/
 const callManage: TeamCall = (input) => callEndpoint("/api/internal/local-team/manage", input);
 const callSchedule: TeamCall = (input) => callEndpoint("/api/internal/local-team/routine", input);
 const callCheckpoint: TeamCall = (input) => callEndpoint("/api/internal/local-team/checkpoint", input);
-/** One endpoint for every agency tool: `{ tool, arguments }`. */
-const callAgency: TeamCall = (input) => callEndpoint("/api/internal/local-team/agency", input);
+/** One endpoint for every pack tool: `{ tool, arguments }`. */
+const callPack: TeamCall = (input) => callEndpoint("/api/internal/local-team/pack", input);
 
 function textResult(value: unknown, isError = false, max = MAX_RESULT_CHARS): Json {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -146,10 +148,14 @@ function textResult(value: unknown, isError = false, max = MAX_RESULT_CHARS): Js
 }
 
 export interface LocalTeamMcpOptions {
-  /** The agency invoker, when this server was mounted with the `agency`
-   * toolset; `null` (the default) lists and routes the team tools only. */
-  agency?: TeamCall | null;
+  /** The pack invoker, when this server was mounted with the `agency` or
+   * `commerce` toolset; `null` (the default) lists and routes the team tools only. */
+  pack?: TeamCall | null;
+  /** Which pack's specs to list: `agency`, `commerce`, or none. */
+  toolsets?: ReadonlySet<string>;
 }
+
+const READ_ONLY_TOOL = /^(agency|commerce)_(context|schema|list_|read_)/;
 
 export async function handleLocalTeamMessage(
   message: Json,
@@ -159,7 +165,8 @@ export async function handleLocalTeamMessage(
   invokeCheckpoint: TeamCall = callCheckpoint,
   options: LocalTeamMcpOptions = {},
 ): Promise<Json | null> {
-  const invokeAgency = options.agency ?? null;
+  const invokePack = options.pack ?? null;
+  const toolsets = options.toolsets ?? new Set(invokePack ? ["team", "agency", "commerce"] : ["team"]);
   const id = message.id;
   const method = message.method;
   const params = (message.params ?? {}) as Json;
@@ -178,18 +185,16 @@ export async function handleLocalTeamMessage(
       ...tool,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }));
-    const agencyTools = invokeAgency
-      ? AGENCY_TOOL_SPECS.map((tool) => ({
+    const packTools = invokePack
+      ? [
+        ...(toolsets.has("agency") ? AGENCY_TOOL_SPECS : []),
+        ...(toolsets.has("commerce") ? COMMERCE_TOOL_SPECS : []),
+      ].map((tool) => ({
         ...tool,
-        annotations: {
-          readOnlyHint: tool.name === "agency_context" || tool.name.startsWith("agency_list") || tool.name.startsWith("agency_read"),
-          destructiveHint: false,
-          idempotentHint: false,
-          openWorldHint: false,
-        },
+        annotations: { readOnlyHint: READ_ONLY_TOOL.test(tool.name), destructiveHint: false, idempotentHint: false, openWorldHint: false },
       }))
       : [];
-    return reply({ tools: [...teamTools, ...agencyTools] });
+    return reply({ tools: [...teamTools, ...packTools] });
   }
   if (method === "tools/call") {
     try {
@@ -197,8 +202,8 @@ export async function handleLocalTeamMessage(
       if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
-      if (invokeAgency && isAgencyToolName(params.name)) {
-        return reply(textResult(await invokeAgency({ tool: params.name, arguments: params.arguments ?? {} }), false, MAX_AGENCY_RESULT_CHARS));
+      if (invokePack && ((toolsets.has("agency") && isAgencyToolName(params.name)) || (toolsets.has("commerce") && isCommerceToolName(params.name)))) {
+        return reply(textResult(await invokePack({ tool: params.name, arguments: params.arguments ?? {} }), false, MAX_PACK_RESULT_CHARS));
       }
       return reply(textResult(`Unknown tool: ${String(params.name)}`, true));
     } catch (error) {
@@ -242,5 +247,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     sessionPromise = null;
   });
   const toolsets = toolsetsFromArgv(process.argv.slice(2));
-  serveLocalTeam(process.stdin, { agency: toolsets.has("agency") ? callAgency : null });
+  serveLocalTeam(process.stdin, { pack: toolsets.has("agency") || toolsets.has("commerce") ? callPack : null, toolsets });
 }

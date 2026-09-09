@@ -109,6 +109,20 @@ function crudTool(input: {
 
 export const AGENCY_TOOL_SPECS = [
   {
+    name: "agency_dashboard",
+    description: "Read or replace the agency dashboard's title, intro and ordered sections. This is display configuration, never executable code.",
+    inputSchema: {
+      type: "object", additionalProperties: false, required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["get", "update"] },
+        config: { type: "object", additionalProperties: false, required: ["title", "intro", "sections"], properties: {
+          title: text(120, "Dashboard title."), intro: text(400, "Dashboard introduction."),
+          sections: { type: "array", minItems: 1, maxItems: 2, uniqueItems: true, items: { type: "string", enum: ["metrics", "tasks"] } },
+        } },
+      },
+    },
+  },
+  {
     name: "agency_context",
     description: "Read the agency profile and the list of clients, or one client's full dossier (client, campaigns, tasks, deliverables, onboarding progress) when clientId is given. format 'markdown' returns the dossier as the cockpit exports it.",
     inputSchema: {
@@ -222,3 +236,17 @@ export const AGENCY_TOOL_NAMES: ReadonlySet<string> = new Set(AGENCY_TOOL_SPECS.
 export function isAgencyToolName(value: unknown): value is AgencyToolName {
   return typeof value === "string" && AGENCY_TOOL_NAMES.has(value);
 }
+
+/** What every agent of the pack is told about its tools — appended to the
+ * pack's own instructions at install, naming exactly what the runtime grants. */
+export const AGENCY_TOOLS_INSTRUCTIONS = `## Runtime tools (Local BizOS)
+Your cockpit is the LeadFactory agency dashboard installed in this app (Apps → Agency). You reach its data only through these tools, granted to each of your runs and revoked when the run ends or is stopped:
+- agency_context — the agency profile and the list of clients, or one client's dossier (clientId; format markdown for the export).
+- agency_clients — list, get, create, update clients.
+- agency_campaigns, agency_tasks, agency_deliverables — list, get, create, update, always for ONE clientId.
+- agency_onboarding — the client questionnaire: schema, get, save (draft), submit. Marking it reviewed is the person's act in the dashboard; there is no review tool.
+- agency_profile_update — the agency's own profile.
+- agency_dashboard — get or update the title, introduction and ordered metrics/tasks sections shown in Apps.
+- agency_list_skills, agency_read_skill — the agency skills (SKILL.md, then its references). Read the one skill the task calls for, not all of them.
+- agency_read_document — a note of the agency vault (Processes/, Knowledge/, Clients/, Campaigns/, your role folder).
+Rules: work on one client at a time and pass its clientId; a campaign, task or deliverable of another client is refused. Nothing here sends emails, publishes ads, spends money or invoices: those stay with the person and their own tools. A tool result is the only proof that a change happened; never report a change you did not get back from a tool.`;

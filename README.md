@@ -2,14 +2,17 @@
 
 Le kit open source pour monter et opérer une agence de génération de leads : **23 skills, méthodes métier, second cerveau, équipe d’agents et logiciel de gestion local**. Vous le personnalisez avec votre offre, vos clients et vos comptes.
 
+Le second template **[E-commerce](ecommerce/README.md)** ajoute 24 skills, six rôles et un dashboard pour les produits, boutiques et opérations. Les deux templates suivent le [même contrat d’intégration dans BizOS local](docs/TEMPLATES.md).
+
 ## Choisir votre démarrage
 
 | Mode | Ce que vous utilisez | Démarrage |
 |---|---|---|
 | Cockpit autonome | Gestion locale des clients, campagnes, tâches, onboarding et livrables ; assistant au choix | Clonez le dépôt et lancez `npm start` |
-| Agence dans BizOS local | Six agents, leur équipe, les skills et un cockpit qui partage leurs données | Dans la version BizOS qui inclut cette intégration : **Apps → Agence LeadFactory → Installer** |
+| Template dans BizOS local | Six agents, leur équipe, les skills et le dashboard intégré | **Apps → Agence ou E-commerce → choisir un coffre** |
+| E-commerce autonome | Produits, concurrents, fournisseurs, boutiques, créatives et opérations | `cd ecommerce && npm start` |
 
-La [preview BizOS pour Mac Apple Silicon](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.2.0-preview.1) inclut l’agence, avec ses sources desktop correspondantes. Le parcours a été vérifié avec un vrai agent Claude : lecture du skill, création du client, brief enregistré et mise à jour visible sans recharger le dashboard. Cette preview locale est signée ad hoc, non notarisée. Le [guide BizOS](docs/BIZOS.md) explique l’installation et la compilation.
+La [preview BizOS pour Mac Apple Silicon](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.3.0-preview.1) inclut les deux templates, avec leurs dashboards intégrés et les sources desktop correspondantes. Des missions avec un vrai agent Claude ont vérifié la lecture de skills et les écritures partagées : dossier client pour Agency, produit, livrable et titre du dashboard pour E-commerce. Cette preview locale est signée ad hoc, non notarisée. Le [guide BizOS](docs/BIZOS.md) explique l’installation et la compilation.
 
 ## Démarrer le cockpit autonome
 
@@ -29,9 +32,11 @@ Il démarre vide ; la démo facultative est fictive. Vos données restent dans `
 
 ## Utiliser l’agence dans BizOS local
 
-1. Dans **Apps → Agence LeadFactory**, choisissez **Installer**. BizOS crée six agents, une équipe, installe les 23 skills inclus et prépare un vault dédié à l’agence, sans remplacer votre second cerveau existant.
-2. Ouvrez le cockpit depuis cette fiche. BizOS lance le dashboard local et ouvre une session authentifiée ; les agents et le cockpit utilisent les mêmes clients, campagnes, tâches, livrables et données d’onboarding.
-3. Dans les réglages BizOS, configurez votre modèle avec votre connexion personnelle Codex, Claude ou Cursor, selon les options disponibles. Ouvrez **Start Here** dans le cockpit pour renseigner l’agence, puis confiez une première mission à **Agency Director** dans Discussions.
+1. Dans **Apps**, choisissez **Agence LeadFactory** ou **E-commerce**, puis un nouveau coffre ou un dossier déjà partagé avec BizOS. Le choix reste fixe pour cet espace. BizOS y installe les notes, processus, skills, six agents et leur équipe.
+2. Le dashboard métier s’affiche directement dans Apps. Les agents et les formulaires utilisent la même base : clients et onboarding pour l’agence, produits et boutiques pour l’e-commerce.
+3. Dans les réglages, connectez votre modèle personnel. Complétez **Start Here**, puis confiez une mission au directeur de l’équipe dans Discussions.
+
+Dans **Second cerveau → Dossier**, vous retrouvez les rôles, processus, `skills/` et les dossiers métier. Les skills locaux sont modifiables ; leur réinstallation préserve vos éditions. Les agents peuvent adapter le titre, les sections et les checklists autorisées du dashboard.
 
 Les modifications des agents sont recherchées toutes les trois secondes par le cockpit. Si vous êtes en train de rédiger ou avez un brouillon non enregistré, il le conserve et signale les nouvelles données.
 
@@ -53,10 +58,12 @@ Les modèles préremplis du cockpit fonctionnent sans IA. En mode autonome, **R�
 
 ## Installer les skills dans un autre assistant
 
-L’installation dans BizOS inclut déjà les 23 skills. Pour le mode autonome avec votre propre assistant :
+L’installation Agency dans BizOS inclut déjà les 23 skills ; E-commerce en inclut 24. Pour le mode autonome avec votre propre assistant :
 
 ```sh
 node scripts/install-skills.mjs --target ~/.codex/skills
+# Pour le pack E-commerce :
+node scripts/install-skills.mjs --pack ecommerce --target ~/.codex/skills
 # Ou, pour Claude Code :
 node scripts/install-skills.mjs --target ~/.claude/skills
 ```

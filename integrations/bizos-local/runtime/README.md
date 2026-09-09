@@ -1,6 +1,6 @@
-# Local BizOS runtime for LeadFactory
+# Local BizOS runtime — Agency and E-commerce
 
-This folder contains the source closure of the local sidecar used by the LeadFactory-enabled BizOS build. It includes no cloud model credentials or private cloud engine. The cockpit, skills and notes are copied from this repository when building; the runtime is AGPL-3.0-only, with Apache-2.0 attributions preserved in NOTICE and licenses/. The agency kit retains its MIT licence.
+This folder contains the source closure of the local sidecar used by the LeadFactory-enabled BizOS build. It includes no cloud model credentials or private cloud engine. The cockpit, skills and notes are copied from this repository when building; the runtime is AGPL-3.0-only, with Apache-2.0 attributions preserved in NOTICE and licenses/. Both business kits retain their MIT licences.
 
 ## Build and test
 
@@ -18,7 +18,7 @@ A model and external accounts are supplied by the user. Inference through a pers
 
 ## Source scope and repeatable assets
 
-`source-manifest.json` identifies the 70 TypeScript files copied from the local
+`source-manifest.json` identifies the 77 source files copied from the local
 sidecar source closure, including type-only dependencies. No legacy Electron
 application entrypoint or private cloud engine is included. Electron is needed
 only to resolve the existing computer-host types; its binary is not used by
@@ -35,7 +35,7 @@ inputs do not drift with wall-clock time. `sourceCommit` is provenance metadata
 when Git metadata exists, or `null` in a source archive; compare file hashes
 when verifying archive and checkout builds.
 
-`npm test` runs isolated agency installation, permissions, shared cockpit and
+`npm test` runs isolated template installation and binding, permissions, shared cockpits and
 real-sidecar-process tests, with temporary profiles and scripted model drivers.
 Build first so the sidecar-process test is exercised. These tests do not call a
 paid model, test real user credentials or validate a signed desktop installer.

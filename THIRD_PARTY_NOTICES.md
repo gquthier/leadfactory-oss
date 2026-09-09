@@ -75,3 +75,7 @@ SOFTWARE.
 
 Also referenced (official SDK, not vendored): `higgsfield-ai/higgsfield-client`
 (Python SDK) and `higgsfield-ai/cli`.
+
+## E-commerce template
+
+The second business template and its 24 skills retain their own [source and license notices](ecommerce/THIRD_PARTY_NOTICES.md). Training transcripts and private business context are not part of this distribution.

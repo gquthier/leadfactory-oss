@@ -32,8 +32,12 @@ function copyTree(from, to) {
 try {
   lstatSync(SOURCE);
 } catch {
-  process.stderr.write("copy-agency-kit: src/agency-kit is missing; run `npm run kit:sync -- --source <leadfactory-oss>` first\n");
-  process.exit(1);
+  // `--optional`: a build without the kit still produces a sidecar that
+  // answers `kit_missing` for the packs, instead of no build at all.
+  const optional = process.argv.includes("--optional");
+  process.stderr.write(`copy-agency-kit: src/agency-kit is missing; run \`npm run kit:sync -- --source <leadfactory-oss>\` first${optional ? " (packs will report kit_missing)" : ""}\n`);
+  rmSync(TARGET, { recursive: true, force: true });
+  process.exit(optional ? 0 : 1);
 }
 rmSync(TARGET, { recursive: true, force: true });
 const files = copyTree(SOURCE, TARGET);

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Copies the PUBLIC part of the LeadFactory OSS kit into `src/agency-kit/`.
+// Copies the PUBLIC part of the LeadFactory OSS kit into `src/agency-kit/`:
+// the agency cockpit at the kit root, and the e-commerce cockpit under
+// `ecommerce/` when that subtree exists.
 //
 // The kit is a build-time input: this script is the only door through which
 // its files enter the runtime, and it takes a whitelist, not a folder. Nothing
@@ -28,6 +30,10 @@ import { fileURLToPath } from "node:url";
 
 const RUNTIME_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const KIT_TARGET = join(RUNTIME_ROOT, "src", "agency-kit");
+/** Where the checkout sits beside this runtime's parent, by default. */
+export const DEFAULT_SOURCE = resolve(RUNTIME_ROOT, "..", "..", "leadfactory-oss");
+
+const PUBLIC_EXTENSIONS = [".html", ".js", ".mjs", ".css", ".svg", ".ico", ".json", ".png", ".webp"];
 
 /** Files copied verbatim, relative to the kit root. */
 const FILES = [
@@ -40,13 +46,25 @@ const FILES = [
 /** Folders copied recursively, restricted to the listed extensions. */
 const TREES = [
   { dir: "lib", extensions: [".mjs"] },
-  { dir: "public", extensions: [".html", ".js", ".css", ".svg", ".ico", ".json"] },
+  { dir: "public", extensions: PUBLIC_EXTENSIONS },
   { dir: "vault", extensions: [".md"] },
-  { dir: "skills", extensions: [".md", ".json"] },
+  { dir: "skills", extensions: [".md", ".json", ".txt"] },
 ];
 
+/** The e-commerce subtree: optional (a checkout made before it existed still
+ * syncs), whole when present, with the same whitelist per folder. */
+export const ECOMMERCE_DIR = "ecommerce";
+const ECOMMERCE_FILES = ["template.json"];
+const ECOMMERCE_TREES = [
+  { dir: "lib", extensions: [".mjs"] },
+  { dir: "public", extensions: PUBLIC_EXTENSIONS },
+  { dir: "vault", extensions: [".md"] },
+  { dir: "skills", extensions: [".md", ".json", ".txt"] },
+];
+const ECOMMERCE_OPTIONAL_FILES = ["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
+
 /** Names refused wherever they appear, even inside a whitelisted tree. */
-const FORBIDDEN = /(^\.env($|\.)|^\.git$|^node_modules$|^data$|\.key$|\.pem$|\.log$|^\.DS_Store$|\.local\.json$)/i;
+const FORBIDDEN = /(^\.env($|\.)|^\.git$|^node_modules$|^data$|\.key$|\.pem$|\.log$|^\.DS_Store$|\.local\.json$|^test$|^tests$|^test-.*$)/i;
 
 export function parseArgs(argv) {
   const args = { source: undefined, dryRun: false };
@@ -63,7 +81,7 @@ export function parseArgs(argv) {
     }
     throw new Error(`Unknown argument ${flag}`);
   }
-  if (!args.source) throw new Error("--source <leadfactory-oss checkout> is required");
+  if (!args.source) args.source = DEFAULT_SOURCE;
   return args;
 }
 
@@ -91,10 +109,6 @@ export function collectKitFiles(source) {
     }
     files.push(relativePath);
   };
-  for (const file of FILES) {
-    if (!existsSync(join(root, file))) throw new Error(`kit file missing: ${file}`);
-    accept(file);
-  }
   const walk = (relativeDir, extensions) => {
     const absolute = join(root, relativeDir);
     if (lstatSync(absolute).isSymbolicLink()) throw new Error(`refusing symlink ${relativeDir}`);
@@ -111,11 +125,32 @@ export function collectKitFiles(source) {
       accept(child);
     }
   };
+  for (const file of FILES) {
+    if (!existsSync(join(root, file))) throw new Error(`kit file missing: ${file}`);
+    accept(file);
+  }
   for (const tree of TREES) {
     if (!existsSync(join(root, tree.dir))) throw new Error(`kit folder missing: ${tree.dir}`);
     walk(tree.dir, tree.extensions);
   }
-  return files.sort();
+  const ecommerce = join(root, ECOMMERCE_DIR);
+  let ecommercePresent = false;
+  if (existsSync(ecommerce)) {
+    if (lstatSync(ecommerce).isSymbolicLink()) throw new Error(`refusing symlink ${ECOMMERCE_DIR}`);
+    ecommercePresent = true;
+    for (const file of ECOMMERCE_FILES) {
+      if (!existsSync(join(ecommerce, file))) throw new Error(`e-commerce kit file missing: ${ECOMMERCE_DIR}/${file}`);
+      accept(`${ECOMMERCE_DIR}/${file}`);
+    }
+    for (const file of ECOMMERCE_OPTIONAL_FILES) {
+      if (existsSync(join(ecommerce, file))) accept(`${ECOMMERCE_DIR}/${file}`);
+    }
+    for (const tree of ECOMMERCE_TREES) {
+      if (!existsSync(join(ecommerce, tree.dir))) throw new Error(`e-commerce kit folder missing: ${ECOMMERCE_DIR}/${tree.dir}`);
+      walk(`${ECOMMERCE_DIR}/${tree.dir}`, tree.extensions);
+    }
+  }
+  return { files: files.sort(), ecommercePresent };
 }
 
 /** The kit's own commit, read from `.git` without running git (no hooks). */
@@ -134,20 +169,26 @@ function sourceCommit(source) {
   }
 }
 
+function templateSummary(path) {
+  const template = JSON.parse(readFileSync(path, "utf8"));
+  return { id: template.id, version: template.version, name: template.name };
+}
+
 export function sync({ source, dryRun = false, target = KIT_TARGET }) {
   const root = resolve(source);
-  const files = collectKitFiles(root);
+  const { files, ecommercePresent } = collectKitFiles(root);
   // Guard: no file may carry this machine's absolute paths into the runtime.
   for (const file of files) {
+    if (/\.(png|webp|ico)$/i.test(file)) continue;
     const text = readFileSync(join(root, file), "utf8");
     if (/\/Users\/[A-Za-z0-9_-]+\//.test(text)) {
       throw new Error(`${file} contains a machine-specific absolute path`);
     }
   }
-  const template = JSON.parse(readFileSync(join(root, "templates/lead-gen-agency.company-template.json"), "utf8"));
   const manifest = {
     kit: "leadfactory-oss",
-    template: { id: template.id, version: template.version, name: template.name },
+    template: templateSummary(join(root, "templates/lead-gen-agency.company-template.json")),
+    ecommerce: ecommercePresent ? { template: templateSummary(join(root, ECOMMERCE_DIR, "template.json")) } : null,
     sourceCommit: sourceCommit(root),
     syncedAt: new Date(Number(process.env.SOURCE_DATE_EPOCH ?? 0) * 1000).toISOString(),
     files: {},
@@ -168,7 +209,7 @@ export function sync({ source, dryRun = false, target = KIT_TARGET }) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const result = sync(parseArgs(process.argv.slice(2)));
-    process.stdout.write(`${JSON.stringify({ target: relative(RUNTIME_ROOT, result.target), files: result.files.length, template: result.manifest.template, sourceCommit: result.manifest.sourceCommit }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ target: relative(RUNTIME_ROOT, result.target), files: result.files.length, template: result.manifest.template, ecommerce: result.manifest.ecommerce, sourceCommit: result.manifest.sourceCommit }, null, 2)}\n`);
   } catch (error) {
     process.stderr.write(`sync-agency-kit: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);

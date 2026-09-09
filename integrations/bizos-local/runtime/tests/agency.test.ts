@@ -1,144 +1,40 @@
-// The LeadFactory agency pack inside a real harness: install, resume, the
-// shared cockpit, and the tools its agents get for one run and lose after.
+// The LeadFactory agency pack inside a real harness: install through the
+// generic installer, the shared cockpit in the bound vault, and the tools its
+// agents get for one run and lose after.
 //
 // The CLI is a scripted driver (no model, no network beyond loopback), the
 // cockpit is the kit's real `createApp` on an ephemeral port, and every
 // state lives under a temporary root that is removed after each test.
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+//
+// The installer itself — its journal, its crash points, its resume — is the
+// catalogue's and is covered in `templates.test.ts`; what is proved here is
+// what the PACK adds on top of it.
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  AgencyError,
-  AgencyService,
-  DEFAULT_KIT_ROOT,
-  TOOLS_INSTRUCTIONS,
-  ensureAgencyVault,
-  hostFromHarness,
-  loadKit,
-  type InstallJournal,
-} from "../src/harness/agency.js";
-import { AGENCY_TOOL_SPECS } from "../src/harness/agency-tools.js";
-import { fixedClock } from "../src/harness/clock.js";
-import type { CodexDynamicTool, CodexTurnHandle, CodexTurnInput } from "../src/harness/codex-driver.js";
-import { LocalBizosHarness } from "../src/harness/harness.js";
-import { LocalTeamBroker } from "../src/sidecar.js";
+import { AGENCY_APP_DIR, AGENCY_TEMPLATE_FILE, AgencyService, LEGACY_AGENCY_DIRECTORY, legacyAgencyVaultPath, PackError } from "../src/harness/agency.js";
+import { AGENCY_TOOL_SPECS, AGENCY_TOOLS_INSTRUCTIONS } from "../src/harness/agency-tools.js";
+import { completeTemplateVault } from "../src/harness/company-os.js";
+import { DEFAULT_KIT_ROOT, loadKit } from "../src/harness/pack-kit.js";
+import { LEAD_GEN_AGENCY } from "../src/harness/template-lead-gen-agency.js";
+import { buildPacks, dashboardSession, json, packHostOf, refused, toolsOf, type PackFixture, type PackFixtureOptions } from "./pack-fixture.js";
 
 let root: string;
 const cleanups: Array<() => Promise<void> | void> = [];
 
-interface Built {
-  harness: LocalBizosHarness;
-  broker: LocalTeamBroker;
-  turns: CodexTurnInput[];
-  agency: AgencyService;
-}
+/** The pack's kit, as the service loads it. */
+const kitOf = (kitRoot = DEFAULT_KIT_ROOT) => loadKit(kitRoot, AGENCY_TEMPLATE_FILE, "agency");
 
-/** The sidecar's composition, in miniature: the same broker, the same
- * `localTeamTools` shape, the same revoke + abort on settle. */
-function build(options: { kitRoot?: string; rootDir?: string; fetchImpl?: typeof fetch; abortOnSettle?: boolean; delayedStop?: boolean } = {}): Built {
-  const rootDir = options.rootDir ?? root;
-  const scriptedCodexPath = join(rootDir, "scripted-codex");
-  const broker = new LocalTeamBroker();
-  const turns: CodexTurnInput[] = [];
-  let agency: AgencyService | null = null;
-  const startTurn = (input: CodexTurnInput): CodexTurnHandle => {
-    expect(input.cli).toBe(scriptedCodexPath);
-    turns.push(input);
-    return {
-      stop: () => options.delayedStop ? undefined : input.onEvent({ type: "turn.completed", ok: false, stopReason: "interrupted" }),
-      respond: () => "allowed-once",
-      sessionId: () => null,
-      settled: () => false,
-    };
-  };
-  const harness = new LocalBizosHarness({
-    rootDir,
-    homeDir: rootDir,
-    baseUrl: "",
-    readSessionCookie: async () => "",
-    orgName: () => "Local workspace",
-    execPath: "/fake/node",
-    packaged: false,
-    runAsNodeAvailable: false,
-    mcpScriptPath: join(rootDir, "disabled-bizos-mcp.mjs"),
-    clock: fixedClock(Date.parse("2026-09-09T09:00:00Z")),
-    // CLI resolution runs before the injected driver. PATH alone is not
-    // isolation: GUI lookup also searches machine installation directories.
-    // The existing unpackaged test override names a fake path that only our
-    // scripted startTurn consumes; no installed CLI or sign-in is needed.
-    environment: { PATH: "/nowhere", LBZ_CODEX_PATH: scriptedCodexPath },
-    startTurn,
-    devices: false,
-    localTeamTools: ({ bot, threadId, runId }) => {
-      const session = broker.exchange(broker.issue({ botId: bot.id, threadId, runId }));
-      if (!agency?.isAgencyBot(bot.id)) return [];
-      return agency.dynamicTools(() => {
-        const capability = broker.authorize(session);
-        return { botId: capability.botId, threadId: capability.threadId, runId: capability.runId };
-      });
-    },
-    onLocalRunStopped: (runId) => {
-      broker.revoke(runId);
-      agency?.abortRun(runId);
-    },
-    onLocalRunSettled: (runId) => {
-      broker.revoke(runId);
-      if (options.abortOnSettle !== false) agency?.abortRun(runId);
-    },
-  });
-  agency = new AgencyService({
-    rootDir,
-    host: hostFromHarness(harness),
-    ...(options.kitRoot ? { kitRoot: options.kitRoot } : {}),
-    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-  });
-  const built = { harness, broker, turns, agency };
-  cleanups.push(async () => {
-    await built.agency.close();
-    harness.stop();
-  });
+/** The managed vault the pack binds when nothing else is chosen. */
+const vaultOf = (rootDir = root) => join(rootDir, "vaults", "lead-gen-agency");
+const dataDirOf = (rootDir = root) => join(vaultOf(rootDir), ...AGENCY_APP_DIR.split("/"), "data");
+
+function build(options: Partial<PackFixtureOptions> = {}): PackFixture {
+  const built = buildPacks({ rootDir: root, ...options });
+  cleanups.push(() => built.close());
   return built;
-}
-
-async function json(url: string, init: RequestInit = {}, cookie?: string): Promise<{ status: number; body: unknown }> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { ...(init.headers as Record<string, string> | undefined), ...(cookie ? { cookie } : {}) },
-  });
-  const body = await response.json();
-  return { status: response.status, body };
-}
-
-/** What a person's browser does with the URL `open()` hands out: the ticket
- * in the fragment becomes an HttpOnly session cookie, once. */
-async function dashboardSession(agency: AgencyService): Promise<{ url: string; ticket: string; cookie: string }> {
-  const opened = await agency.open();
-  const match = /^(http:\/\/127\.0\.0\.1:\d+)\/#connect=([0-9a-f]{64})$/.exec(opened.dashboardUrl ?? "");
-  if (!match) throw new Error(`unexpected open URL: ${opened.dashboardUrl}`);
-  const [, url, ticket] = match as unknown as [string, string, string];
-  const response = await fetch(`${url}/api/session`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ticket }),
-  });
-  if (response.status !== 200) throw new Error(`ticket exchange answered ${response.status}`);
-  const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0]!;
-  return { url, ticket, cookie };
-}
-
-function toolsOf(turn: CodexTurnInput | undefined): Record<string, CodexDynamicTool> {
-  return Object.fromEntries((turn?.dynamicTools ?? []).map((tool) => [tool.name, tool]));
-}
-
-async function refused(work: Promise<unknown>): Promise<string> {
-  try {
-    await work;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  throw new Error("expected a refusal");
 }
 
 beforeEach(() => {
@@ -152,7 +48,7 @@ afterEach(async () => {
 
 describe("the embedded kit", () => {
   it("loads the pack: six roles, twenty-three skills, safe paths", () => {
-    const kit = loadKit(DEFAULT_KIT_ROOT);
+    const kit = kitOf();
     expect(kit.template).toMatchObject({ id: "lead-gen-agency", version: 1, name: "Lead Gen Agency" });
     expect(kit.template.bots.map((bot) => bot.slug)).toEqual([
       "agency-director", "acquisition", "onboarding", "strategist", "creative", "account-manager",
@@ -164,17 +60,22 @@ describe("the embedded kit", () => {
       references: ["brief-format.md"],
     });
     expect(kit.template.notes.every((note) => !note.path.includes(".."))).toBe(true);
+    // The skills travel with the template: they are seeded into the vault the
+    // person binds, which is where the agents then read them.
+    expect(kit.template.notes.map((note) => note.path)).toEqual(
+      expect.arrayContaining(["skills/creative-brief/SKILL.md", "skills/creative-brief/references/brief-format.md"]),
+    );
   });
 
   it("names every real tool in the instructions of every role", () => {
-    for (const tool of AGENCY_TOOL_SPECS) expect(TOOLS_INSTRUCTIONS).toContain(tool.name);
+    for (const tool of AGENCY_TOOL_SPECS) expect(AGENCY_TOOLS_INSTRUCTIONS).toContain(tool.name);
     // No tool claims the human's review, no tool deletes, nothing generic.
     expect(AGENCY_TOOL_SPECS.map((tool) => tool.name)).not.toEqual(expect.arrayContaining([expect.stringMatching(/review|delete|http|fetch/)]));
   });
 });
 
 describe("before the install", () => {
-  it("reports not-installed with no dashboard, no bots, and the kit's skill count", async () => {
+  it("reports not-installed with no dashboard, no bots, no vault and the kit's skill count", async () => {
     const { agency } = build();
     expect(await agency.status()).toEqual({
       installed: false,
@@ -184,8 +85,11 @@ describe("before the install", () => {
       bots: [],
       groupId: null,
       skillsCount: 23,
+      rootId: null,
+      vaultPath: null,
+      boundTemplateId: null,
     });
-    expect(existsSync(join(root, "agency"))).toBe(false);
+    expect(existsSync(join(root, "vaults"))).toBe(false);
     await expect(agency.open()).rejects.toMatchObject({ code: "not_installed", status: 409 });
   });
 
@@ -196,19 +100,35 @@ describe("before the install", () => {
     expect(await agency.status()).toMatchObject({ installed: false, status: "error", error: expect.stringContaining("not embedded") });
     await expect(agency.install()).rejects.toMatchObject({ code: "kit_missing" });
   });
+
+  it("names the template the workspace is bound to, and refuses to install a second one", async () => {
+    const { agency, ecommerce } = build();
+    await ecommerce.install();
+    const state = await agency.status();
+    expect(state).toMatchObject({ installed: false, status: "not-installed", boundTemplateId: "ecommerce", vaultPath: null, bots: [] });
+    await expect(agency.install()).rejects.toMatchObject({ code: "exists" });
+    await expect(agency.open()).rejects.toMatchObject({ code: "not_installed", status: 409 });
+  });
 });
 
 describe("install", () => {
-  it("creates the vault, six agents on their role folders, a team thread and one cockpit", async () => {
+  it("creates the vault, six agents on their role folders, a team and one cockpit", async () => {
     const { harness, agency } = build();
     const state = await agency.install();
-    expect(state).toMatchObject({ installed: true, status: "ready", skillsCount: 23 });
+    expect(state).toMatchObject({
+      installed: true,
+      status: "ready",
+      skillsCount: 23,
+      rootId: "vault:lead-gen-agency",
+      vaultPath: vaultOf(),
+      boundTemplateId: null,
+    });
     expect(state.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(state.bots.map((bot) => bot.name)).toEqual([
       "Agency Director", "Acquisition", "Onboarding", "Strategist", "Creative", "Account Manager",
     ]);
 
-    const vault = join(root, "agency", "vault");
+    const vault = vaultOf();
     expect(readFileSync(join(vault, "AGENTS.md"), "utf8")).toContain("How this agency works");
     expect(existsSync(join(vault, "Processes", "Handoffs.md"))).toBe(true);
     const roster = await harness.bots.list();
@@ -223,6 +143,8 @@ describe("install", () => {
     }
     // No Company OS was seeded for these agents: their folders are the pack's.
     expect(existsSync(join(root, "brain", "Agents"))).toBe(false);
+    // The skills the agents read are the vault's own copy, not the kit's.
+    expect(existsSync(join(vault, "skills", "creative-brief", "SKILL.md"))).toBe(true);
 
     const director = roster.find((bot) => bot.name === "Agency Director")!;
     expect(director.pinned).toBe(true);
@@ -254,12 +176,11 @@ describe("install", () => {
     expect((await agency.status()).dashboardUrl).toBe(state.dashboardUrl);
     expect(JSON.stringify(await agency.status())).not.toContain("connect=");
 
-    const journal = JSON.parse(readFileSync(join(root, "agency", "install.json"), "utf8")) as InstallJournal;
-    expect(journal.status).toBe("ready");
-    expect(Object.keys(journal.bots)).toHaveLength(6);
-    expect(journal.welcomed).toEqual(["agency-director"]);
-
-    expect((await harness.brain.roots()).map((brainRoot) => brainRoot.id)).toContain("agency");
+    // The store is the vault's — the running cockpit holds its lock there —
+    // and the person's brain is untouched by it.
+    expect(existsSync(join(dataDirOf(), "db.lock"))).toBe(true);
+    expect(readFileSync(join(vaultOf(), ...AGENCY_APP_DIR.split("/"), "README.md"), "utf8")).toContain("do not edit it by hand");
+    expect((await harness.brain.roots()).map((brainRoot) => brainRoot.id)).toContain("vault:lead-gen-agency");
   });
 
   it("is idempotent: a second and a concurrent install answer the same team", async () => {
@@ -273,89 +194,65 @@ describe("install", () => {
     expect((await harness.threads.get({ botId: first.bots[0]!.botId })).messages).toHaveLength(1);
   });
 
-  it("resumes an interrupted install: adopts what exists, keeps edited notes, never duplicates", async () => {
+  it("adopts an older agency installation when its vault is bound: its agents, its store, nothing duplicated", async () => {
     const { harness, agency } = build();
-    const kit = loadKit(DEFAULT_KIT_ROOT);
-    const vault = join(root, "agency", "vault");
-    // What a crash mid-install leaves behind: the vault, one note the person
-    // already rewrote, one agent the journal knows and one it does not.
-    ensureAgencyVault(vault, kit.template);
-    writeFileSync(join(vault, "Company.md"), "# My agency\n\nEdited by hand.\n");
-    const director = await harness.bots.create({ name: "Agency Director", workspacePath: join(vault, "Agents", "Agency Director") });
-    const stray = await harness.bots.create({ name: "Acquisition", workspacePath: join(vault, "Agents", "Acquisition") });
-    const journal: InstallJournal = {
+    // What version 0.2 left on this Mac: its own vault under `agency/`, its
+    // agents already in the roster on their role folders, and its store.
+    mkdirSync(legacyAgencyVaultPath(root), { recursive: true });
+    const legacyVault = realpathSync(legacyAgencyVaultPath(root));
+    completeTemplateVault(legacyVault, LEAD_GEN_AGENCY);
+    writeFileSync(join(legacyVault, "Company.md"), "# My agency\n\nEdited by hand.\n");
+    const before: Record<string, string> = {};
+    for (const row of LEAD_GEN_AGENCY.bots) {
+      const bot = await harness.bots.create({ name: row.name, workspacePath: join(legacyVault, "Agents", row.name) });
+      before[row.slug] = bot.id;
+    }
+    const legacyData = join(root, LEGACY_AGENCY_DIRECTORY, "data");
+    mkdirSync(legacyData, { recursive: true });
+    writeFileSync(join(legacyData, "db.json"), JSON.stringify({
       version: 1,
-      template: { id: "lead-gen-agency", version: 1, name: "Lead Gen Agency" },
-      status: "installing",
-      step: "bot:acquisition",
-      startedAt: "2026-09-09T08:00:00Z",
-      updatedAt: "2026-09-09T08:00:00Z",
-      vault: "seeded",
-      bots: { "agency-director": director.id },
-      welcomed: [],
-    };
-    mkdirSync(join(root, "agency"), { recursive: true });
-    writeFileSync(join(root, "agency", "install.json"), JSON.stringify(journal));
+      clients: [{ id: "legacy-client", company: "Atelier Ancien", status: "actif" }],
+      campaigns: [], tasks: [], deliverables: [],
+    }));
 
-    const resumed = new AgencyService({ rootDir: root, host: hostFromHarness(harness) });
-    cleanups.push(() => resumed.close());
-    expect(await resumed.status()).toMatchObject({ installed: false, status: "installing" });
-    const state = await resumed.install();
-    expect(state.status).toBe("ready");
-    expect(state.bots.map((bot) => bot.botId)).toContain(director.id);
-    expect(state.bots.map((bot) => bot.botId)).toContain(stray.id);
+    const state = await agency.install("agency");
+    expect(state).toMatchObject({ status: "ready", rootId: "agency", vaultPath: legacyVault });
+    // The same six agents, adopted where they already work.
+    expect(Object.fromEntries(state.bots.map((bot) => [bot.slug, bot.botId]))).toEqual(before);
     expect(await harness.bots.list()).toHaveLength(6);
-    expect(readFileSync(join(vault, "Company.md"), "utf8")).toBe("# My agency\n\nEdited by hand.\n");
-    expect(existsSync(join(vault, "Processes", "Handoffs.md"))).toBe(true);
-    void agency;
+    // The note the person rewrote is theirs, and the pack's own notes are whole.
+    expect(readFileSync(join(legacyVault, "Company.md"), "utf8")).toBe("# My agency\n\nEdited by hand.\n");
+    expect(existsSync(join(legacyVault, "Processes", "Handoffs.md"))).toBe(true);
+    // The store moved into the vault, whole and once — never copied in two places.
+    expect(existsSync(legacyData)).toBe(false);
+    const { cookie, url } = await dashboardSession(agency);
+    expect((await json(`${url}/api/clients`, {}, cookie)).body).toEqual([expect.objectContaining({ id: "legacy-client", company: "Atelier Ancien" })]);
+    expect(existsSync(join(legacyVault, ...AGENCY_APP_DIR.split("/"), "data", "db.json"))).toBe(true);
+    expect(existsSync(join(root, LEGACY_AGENCY_DIRECTORY, "data"))).toBe(false);
   });
 
-  it("writes the welcome once, even when the crash lands between the append and its journal entry", async () => {
-    const { harness } = build();
-    const real = hostFromHarness(harness);
-    // The greeting is appended, then the process dies before `welcomed` is recorded.
-    const crashing = new AgencyService({
-      rootDir: root,
-      host: { ...real, greet: async (botId, text, key) => { await real.greet(botId, text, key); throw new Error("power cut after the append"); } },
-    });
-    cleanups.push(() => crashing.close());
-    await expect(crashing.install()).rejects.toThrow(/power cut/);
-    const director = (await harness.bots.list()).find((bot) => bot.name === "Agency Director")!;
-    expect((await harness.threads.get({ botId: director.id })).messages).toHaveLength(1);
-    const journal = JSON.parse(readFileSync(join(root, "agency", "install.json"), "utf8")) as InstallJournal;
-    expect(journal.status).toBe("error");
-    expect(journal.welcomed).toEqual([]);
-
-    const resumed = new AgencyService({ rootDir: root, host: real });
-    cleanups.push(() => resumed.close());
-    const state = await resumed.install();
-    expect(state.status).toBe("ready");
-    const chat = await harness.threads.get({ botId: director.id });
-    expect(chat.messages).toHaveLength(1);
-    expect(chat.messages[0]!.id).toMatch(/^msg_greet_/);
-    const after = JSON.parse(readFileSync(join(root, "agency", "install.json"), "utf8")) as InstallJournal;
-    expect(after.welcomed).toEqual(["agency-director"]);
-    // The raw log holds the one line; nothing was appended twice.
-    const raw = readFileSync(harness.storage.threadPath(`bot:${director.id}`), "utf8").trim().split("\n");
-    expect(raw).toHaveLength(1);
-  });
-
-  it("records a failed step and lets the next install retry it", async () => {
-    const { agency } = build();
+  it("records a cockpit that cannot start, and lets the next install retry it", async () => {
+    const built = build();
+    await built.agency.install();
     // The cockpit cannot start when another live process holds the data lock.
-    const dataDir = join(root, "agency", "data");
-    mkdirSync(dataDir, { recursive: true });
+    await built.agency.close();
+    const dataDir = dataDirOf();
     writeFileSync(join(dataDir, "db.lock"), JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }));
-    await expect(agency.install()).rejects.toMatchObject({ code: "cockpit_error" });
-    const journal = JSON.parse(readFileSync(join(root, "agency", "install.json"), "utf8")) as InstallJournal;
-    expect(journal.status).toBe("error");
-    expect(journal.error).toContain("cockpit could not start");
-    expect(Object.keys(journal.bots)).toHaveLength(6);
-    expect(await agency.status()).toMatchObject({ installed: false, status: "error" });
+    const agency = new AgencyService({ host: packHostOf(built.harness) });
+    cleanups.push(() => agency.close());
+    await expect(agency.install()).rejects.toMatchObject({ code: "cockpit_error", message: expect.stringContaining("cockpit could not start") });
+    const failed = await agency.status();
+    expect(failed).toMatchObject({ status: "error", dashboardUrl: null });
+    // The cockpit's own reason, kept as it was given: the lock it found.
+    expect(failed.error).toContain("db.lock");
+    // The agents the installer made are there; only the cockpit failed.
+    expect(failed.bots).toHaveLength(6);
+    await expect(agency.open()).rejects.toMatchObject({ code: "cockpit_error" });
     await rm(join(dataDir, "db.lock"));
     const state = await agency.install();
     expect(state.status).toBe("ready");
     expect(state.bots).toHaveLength(6);
+    expect(state.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 });
 
@@ -372,19 +269,19 @@ describe("restart and shutdown", () => {
     expect(created.status).toBe(201);
     await first.agency.close();
     await expect(fetch(`${installed.dashboardUrl}/api/state`)).rejects.toThrow();
-    expect(existsSync(join(root, "agency", "data", "db.lock"))).toBe(false);
+    expect(existsSync(join(dataDirOf(), "db.lock"))).toBe(false);
     await first.agency.close();
 
-    const second = new AgencyService({ rootDir: root, host: hostFromHarness(first.harness) });
+    const second = new AgencyService({ host: packHostOf(first.harness) });
     cleanups.push(() => second.close());
     const state = await second.status();
-    expect(state).toMatchObject({ installed: true, status: "ready" });
+    expect(state).toMatchObject({ installed: true, status: "ready", vaultPath: vaultOf() });
     expect(state.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     // The old session died with the old instance; a new ticket opens the new one.
     expect((await json(`${state.dashboardUrl}/api/clients`, {}, session.cookie)).status).toBe(401);
     const clients = await json(`${state.dashboardUrl}/api/clients`, {}, (await dashboardSession(second)).cookie);
     expect(clients.body).toEqual([expect.objectContaining({ company: "Atelier Nord" })]);
-    expect(existsSync(join(root, "agency", "data", "db.lock"))).toBe(true);
+    expect(existsSync(join(dataDirOf(), "db.lock"))).toBe(true);
   });
 });
 
@@ -416,6 +313,8 @@ describe("the agents' tools", () => {
     expect(created.item).toMatchObject({ company: "Atelier Nord", status: "prospect", budget: 1500 });
     const listed = await json(`${url}/api/clients`, {}, cookie);
     expect(listed.body).toEqual([expect.objectContaining({ id: created.id, company: "Atelier Nord" })]);
+    // The dossier the person reads in their vault is the record, mirrored.
+    expect(readFileSync(join(vaultOf(), "Clients", created.id, "Dossier.md"), "utf8")).toContain("Atelier Nord");
 
     // Modify through the dashboard (the person's session), read through the tool.
     const patched = await json(`${url}/api/clients/${created.id}`, {
@@ -579,10 +478,8 @@ describe("the agents' tools", () => {
   });
 
   it("a STOP between the read and the write of one call leaves no write behind (requests abandoned)", async () => {
-    const { turns, gate, url, cookie, call, client, campaign, harness, requests } = await (async () => {
-      const setup = await raceSetup(true);
-      return { ...setup, requests: setup.gate.requests };
-    })();
+    const { turns, gate, url, cookie, call, client, campaign, harness } = await raceSetup(true);
+    const requests = gate.requests;
     // The update reads the dossier first, then PATCHes. Hold the read.
     const reached = gate.hold(new RegExp(`^GET /api/clients/${client.id}$`));
     const update = call("agency_campaigns", { action: "update", clientId: client.id, campaignId: campaign.id, data: { status: "active" } });
@@ -642,8 +539,8 @@ describe("the agents' tools", () => {
 });
 
 describe("skills and documents", () => {
-  async function pack() {
-    const built = build();
+  async function pack(options: Partial<PackFixtureOptions> = {}) {
+    const built = build(options);
     await built.agency.install();
     const strategist = (await built.harness.bots.list()).find((bot) => bot.name === "Strategist")!;
     await built.harness.threads.send({ botId: strategist.id }, { text: "read" });
@@ -651,18 +548,25 @@ describe("skills and documents", () => {
     return { ...built, call: (name: string, args: unknown) => tools[name]!.call(args, { callId: "c", threadId: "t", turnId: "u" }) };
   }
 
-  it("read a skill and its references byte for byte, and refuse to leave the kit", async () => {
+  it("read a skill and its references from the vault, byte for byte, and refuse to leave it", async () => {
     const { call } = await pack();
+    const vault = vaultOf();
     const listed = await call("agency_list_skills", {}) as { count: number; skills: Array<{ name: string; references: string[] }> };
     expect(listed.count).toBe(23);
     expect(listed.skills.map((skill) => skill.name)).toContain("outbound-sequence-writer");
     const skill = await call("agency_read_skill", { name: "creative-brief" }) as { text: string; path: string; truncated: boolean };
     expect(skill.path).toBe("skills/creative-brief/SKILL.md");
+    expect(skill.text).toBe(readFileSync(join(vault, "skills", "creative-brief", "SKILL.md"), "utf8"));
     expect(skill.text).toBe(readFileSync(join(DEFAULT_KIT_ROOT, "skills", "creative-brief", "SKILL.md"), "utf8"));
     expect(skill.truncated).toBe(false);
     const reference = await call("agency_read_skill", { name: "creative-brief", reference: "brief-format.md" }) as { text: string; path: string };
     expect(reference.path).toBe("skills/creative-brief/references/brief-format.md");
-    expect(reference.text).toBe(readFileSync(join(DEFAULT_KIT_ROOT, "skills", "creative-brief", "references", "brief-format.md"), "utf8"));
+    expect(reference.text).toBe(readFileSync(join(vault, "skills", "creative-brief", "references", "brief-format.md"), "utf8"));
+
+    // The person's own edit of a skill is what the agent then reads.
+    const owned = join(vault, "skills", "creative-brief", "SKILL.md");
+    writeFileSync(owned, `${readFileSync(owned, "utf8")}\nOwner-specific test instruction.\n`);
+    expect(((await call("agency_read_skill", { name: "creative-brief" })) as { text: string }).text).toContain("Owner-specific test instruction.");
 
     expect(await refused(call("agency_read_skill", { name: "../lib" }))).toContain("skill name");
     expect(await refused(call("agency_read_skill", { name: "creative-brief", reference: "../SKILL.md" }))).toContain("reference must be one of");
@@ -678,25 +582,21 @@ describe("skills and documents", () => {
     mkdirSync(join(tampered, "skills", "evil", "references"), { recursive: true });
     symlinkSync(join(tampered, "lib", "app.mjs"), join(tampered, "skills", "evil", "SKILL.md"));
     symlinkSync(join(tampered, "lib", "store.mjs"), join(tampered, "skills", "creative-brief", "references", "linked.md"));
-    const other = mkdtempSync(join(tmpdir(), "lbz-agency-b-"));
-    cleanups.push(() => rm(other, { recursive: true, force: true }));
-    const built = build({ kitRoot: tampered, rootDir: other });
-    await built.agency.install();
-    const strategist = (await built.harness.bots.list()).find((bot) => bot.name === "Strategist")!;
-    await built.harness.threads.send({ botId: strategist.id }, { text: "read" });
-    const tools = toolsOf(built.turns[0]);
-    const call = (name: string, args: unknown) => tools[name]!.call(args, { callId: "c", threadId: "t", turnId: "u" });
+    // A symlinked skill is not in the kit, so it is never seeded into the vault.
+    expect(kitOf(tampered).skills.map((skill) => skill.name)).not.toContain("evil");
+    const { call } = await pack({ kitRoot: tampered });
     const listed = await call("agency_list_skills", {}) as { count: number; skills: Array<{ name: string; references: string[] }> };
     expect(listed.count).toBe(23);
     expect(listed.skills.map((skill) => skill.name)).not.toContain("evil");
     expect(listed.skills.find((skill) => skill.name === "creative-brief")!.references).toEqual(["brief-format.md"]);
+    expect(existsSync(join(vaultOf(), "skills", "evil"))).toBe(false);
     expect(await refused(call("agency_read_skill", { name: "evil" }))).toContain("unknown skill");
     expect(await refused(call("agency_read_skill", { name: "creative-brief", reference: "linked.md" }))).toContain("reference must be one of");
   });
 
-  it("read vault notes and list folders, never outside the vault", async () => {
+  it("read vault notes and list folders, never outside the vault and never the store", async () => {
     const { call } = await pack();
-    const kit = loadKit(DEFAULT_KIT_ROOT);
+    const kit = kitOf();
     const handoffs = await call("agency_read_document", { path: "Processes/Handoffs.md" }) as { kind: string; text: string };
     expect(handoffs.kind).toBe("file");
     expect(handoffs.text).toBe(kit.template.notes.find((note) => note.path === "Processes/Handoffs.md")!.text);
@@ -705,20 +605,24 @@ describe("skills and documents", () => {
     expect(rootListing.entries).toEqual(expect.arrayContaining([{ name: "Agents", kind: "folder" }, { name: "AGENTS.md", kind: "file" }]));
     const agents = await call("agency_read_document", { path: "Agents" }) as { entries: Array<{ name: string }> };
     expect(agents.entries.map((entry) => entry.name)).toContain("Strategist");
-    expect(await refused(call("agency_read_document", { path: "../install.json" }))).toContain("invalid path");
-    expect(await refused(call("agency_read_document", { path: "../data/db.json" }))).toContain("invalid path");
+    expect(await refused(call("agency_read_document", { path: "../templates.json" }))).toContain("invalid path");
     expect(await refused(call("agency_read_document", { path: ".trash" }))).toContain("invalid path");
     expect(await refused(call("agency_read_document", { path: "Processes/nope.md" }))).toContain("not found");
+    // The dashboard's own store — credentials included — is not a note.
+    writeFileSync(join(dataDirOf(), "connections.json"), '{"secret":"fixture"}');
+    for (const path of ["Apps/LeadFactory/data/db.json", "apps/leadfactory/data/connections.json", "Apps/LeadFactory/data"]) {
+      expect(await refused(call("agency_read_document", { path }))).toContain("data folder is not readable");
+    }
     // A link planted in the vault is refused, wherever it points.
-    symlinkSync(join(root, "agency", "install.json"), join(root, "agency", "vault", "Knowledge", "Draft", "link.md"));
-    expect(await refused(call("agency_read_document", { path: "Knowledge/Draft/link.md" }))).toContain("is a link");
+    symlinkSync(join(dataDirOf(), "db.json"), join(vaultOf(), "Knowledge", "Draft", "link.md"));
+    expect(await refused(call("agency_read_document", { path: "Knowledge/Draft/link.md" }))).toContain("links are not readable");
   });
 });
 
-describe("AgencyError", () => {
+describe("PackError", () => {
   it("carries a code and an HTTP status for the sidecar", () => {
-    const error = new AgencyError("nope", "other_client", 403);
-    expect(error).toMatchObject({ code: "other_client", status: 403, name: "AgencyError" });
-    expect(new AgencyError("x")).toMatchObject({ code: "agency_error", status: 400 });
+    const error = new PackError("nope", "other_client", 403);
+    expect(error).toMatchObject({ code: "other_client", status: 403, name: "PackError" });
+    expect(new PackError("x")).toMatchObject({ code: "pack_error", status: 400 });
   });
 });

@@ -100,13 +100,27 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       bots: [],
       teamThreadId: null,
       skillsCount: 23,
+      rootId: null,
+      vaultPath: null,
+      boundTemplateId: null,
     });
     expect((await api("POST", "/api/local/agency/open", {})).status).toBe(409);
     expect((await api("POST", "/api/local/agency/install", { force: true })).status).toBe(400);
 
     const installed = await api("POST", "/api/local/agency/install", {});
     expect(installed.status).toBe(200);
-    expect(installed.body).toMatchObject({ installed: true, status: "ready", skillsCount: 23 });
+    const vault = join(temp, "state", "runtime", "vaults", "lead-gen-agency");
+    expect(installed.body).toMatchObject({
+      installed: true,
+      status: "ready",
+      skillsCount: 23,
+      rootId: "vault:lead-gen-agency",
+      vaultPath: vault,
+      boundTemplateId: null,
+    });
+    // The vault the desktop shows is real, and the pack's store is inside it.
+    expect(existsSync(join(vault, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(vault, "skills"))).toBe(true);
     expect(installed.body.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(installed.body.bots).toHaveLength(6);
     const prefix = `local:${descriptor.instanceId}:`;
@@ -117,7 +131,9 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       expect(bot.slug).toBeTruthy();
     }
     expect(installed.body.teamThreadId.startsWith(`${prefix}thread:group:`)).toBe(true);
-    expect(JSON.stringify(installed.body)).not.toContain(temp);
+    // The bound vault is the one path the desktop is told; nothing else of
+    // this Mac (its state root, its home) leaks into the contract.
+    expect(JSON.stringify({ ...installed.body, vaultPath: null })).not.toContain(temp);
 
     // Idempotent, and the same after a GET.
     const again = await api("POST", "/api/local/agency/install", {});
@@ -174,8 +190,27 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     });
     expect(noCapability.status).toBe(401);
 
+    // One template per workspace: the other pack names the binding and
+    // installs nothing behind it.
+    const other = await api("GET", "/api/local/ecommerce");
+    expect(other.body).toMatchObject({
+      installed: false,
+      status: "not-installed",
+      template: { id: "ecommerce", name: "E-commerce", version: 1 },
+      boundTemplateId: "lead-gen-agency",
+      vaultPath: null,
+      dashboardUrl: null,
+      bots: [],
+    });
+    expect((await api("POST", "/api/local/ecommerce/install", {})).status).toBe(409);
+    expect((await api("POST", "/api/local/ecommerce/open", {})).status).toBe(409);
+    expect((await api("GET", "/api/local/workspace-template")).body.binding).toMatchObject({
+      templateId: "lead-gen-agency", rootId: "vault:lead-gen-agency", path: vault,
+    });
+    expect(existsSync(join(temp, "state", "runtime", "vaults", "ecommerce"))).toBe(false);
+
     // Stop: the cockpit port closes, the lock and the descriptor go.
-    const dataDir = join(temp, "state", "runtime", "agency", "data");
+    const dataDir = join(vault, "Apps", "LeadFactory", "data");
     expect(existsSync(join(dataDir, "db.lock"))).toBe(true);
     child!.kill("SIGTERM");
     await new Promise((resolveExit) => child!.once("exit", resolveExit));

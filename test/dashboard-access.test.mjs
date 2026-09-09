@@ -417,7 +417,7 @@ test('ni meta, ni export, ni les erreurs ne contiennent de secret', async (t) =>
   assert.deepEqual(Object.keys(meta).sort(), ['apiVersion', 'hostedBy', 'instanceId', 'product', 'revision']);
   assert.equal(meta.hostedBy, 'bizos-local');
   const exported = (await request(app.port, '/api/export', { headers: header })).body;
-  assert.deepEqual(Object.keys(exported).sort(), ['agency', 'campaigns', 'clients', 'deliverables', 'tasks', 'version']);
+  assert.deepEqual(Object.keys(exported).sort(), ['agency', 'campaigns', 'clients', 'dashboard', 'deliverables', 'tasks', 'version']);
 });
 
 // --- Cycle de vie ---------------------------------------------------------

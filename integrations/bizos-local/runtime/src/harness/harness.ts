@@ -1,7 +1,7 @@
 // Composition root for the local runtime. Everything Electron-specific is
 // injected, so the whole harness runs under vitest with no Electron at all.
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import {
@@ -80,17 +80,54 @@ import {
 } from "./brain.js";
 import {
   AGENTS_DIRECTORY,
+  agentFolderName,
   COMPANY_OS,
+  completeTemplateVault,
   ensureAgentFolder,
   isAgentFolder,
   seedTemplateVault,
   TEMPLATE_FILE,
+  validateTemplate,
+  type TemplateBot,
   type TemplateState,
   type VaultSeed,
 } from "./company-os.js";
+import {
+  bindingConflict,
+  describeUnavailable,
+  holdsTemplate,
+  installationStatus,
+  installationVaultDir,
+  isTemplateId,
+  legacyCompanyOsInstallation,
+  lstatOrNull,
+  managedVaultRoots,
+  readTemplateRegistry,
+  readWorkspaceBinding,
+  refuseSymlink,
+  summarize,
+  TEMPLATE_IDS,
+  templateOf,
+  vaultPathOf,
+  vaultRootId,
+  VAULTS_DIRECTORY,
+  writeTemplateRegistry,
+  writeWorkspaceBinding,
+  type PendingInstallation,
+  type TemplateId,
+  type TemplateInstallation,
+  type TemplateRegistry,
+  type TemplateSummary,
+  type WorkspaceBinding,
+  type WorkspaceTemplateProjection,
+} from "./templates.js";
+import { AGENCY_TOOLS_INSTRUCTIONS } from "./agency-tools.js";
+import { COMMERCE_TOOLS_INSTRUCTIONS } from "./commerce-tools.js";
+import { LEGACY_AGENCY_DIRECTORY, legacyAgencyVaultPath } from "./agency.js";
+import type { PackInstallation } from "./pack.js";
+import { newId, newMessageId } from "./ids.js";
 import { readCodexUsage } from "./codex-usage.js";
 import { readClaudeUsage } from "./claude-usage.js";
-import { agencyVaultPath } from "./agency.js";
 
 /** How long a plan's reported usage is trusted before the CLI is asked again. */
 const USAGE_CACHE_MS = 5 * 60_000;
@@ -266,6 +303,7 @@ export interface HarnessOptions {
   localTeamTools?(input: { bot: Bot; threadId: string; runId: string }): CodexDynamicTool[];
   /** Called for completed, failed and cancelled local runs. */
   onLocalRunSettled?(runId: string): void;
+  /** Called the moment a local run is asked to STOP, before the CLI settles. */
   onLocalRunStopped?(runId: string): void;
   /** Factual local runtime manifest injected into the agent prompt. */
   localArchitecture?(input: {
@@ -280,6 +318,35 @@ export interface HarnessOptions {
 /** Where the list of agents that have a computer is kept. Their partitions
  * outlive the process; without this the panel forgets they exist. */
 export const COMPUTERS_FILE = "computers.json";
+
+/** Where a template is installed: a managed vault this app makes, or an
+ * existing vault the person chose (its real path, resolved server-side). */
+interface InstallTarget {
+  rootId: string;
+  path: string;
+  managed: boolean;
+  label: string;
+}
+
+/** `lstat` that answers `null` for anything it cannot examine. */
+function lstatOrNullQuiet(path: string): ReturnType<typeof lstatSync> | null {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** What `templates.apply` answers: the vault to open, and whether this call
+ * made it or found it. `bots` is slug → roster id for the agents that exist. */
+export interface TemplateApplyResult {
+  id: TemplateId;
+  rootId: string;
+  created: boolean;
+  vault: VaultSeed;
+  bots: Record<string, string>;
+  groupId?: string;
+}
 
 /** What `runtime.models()` answers — the bridge contract, not the internal
  * catalogue shape. `source` is the honest part: the renderer can say
@@ -454,8 +521,8 @@ export class LocalBizosHarness {
       },
       ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: { threadId: string; runId: string }) =>
         options.localTeamTools!({ bot, ...context }) } : {}),
-      ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       ...(options.onLocalRunSettled ? { onRunSettled: (runId: string) => options.onLocalRunSettled!(runId) } : {}),
+      ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       workspaceFor: (bot) => this.workspaceFor(bot),
       // Only a build with a machine tells its bots they have one.
       hasComputer: () => Boolean(options.computerHost),
@@ -1231,30 +1298,594 @@ export class LocalBizosHarness {
     if (!stat?.isDirectory()) throw new SettingsError("that folder does not exist on this Mac");
   }
 
+  /** `<stateRoot>/vaults/` — one managed vault per template created from the catalogue. */
+  private vaultsDir(): string {
+    return join(this.storage.layout.root, VAULTS_DIRECTORY);
+  }
+
+  /** The binding, read strictly; a damaged file is the sentence the caller shows. */
+  private bindingOf(): WorkspaceBinding | null {
+    return readWorkspaceBinding(this.storage);
+  }
+
+  /** The binding, or `null` when it cannot be read — for the paths that
+   * must not fail on it (deleting an agent, listing folders to trash into). */
+  private bindingOrNull(): WorkspaceBinding | null {
+    try {
+      return this.bindingOf();
+    } catch (error) {
+      console.warn(`Local BizOS: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
+  /** A managed binding is one whose vault this app made: `vault:<templateId>`. */
+  private static managedBinding(binding: WorkspaceBinding): boolean {
+    return binding.rootId === vaultRootId(binding.templateId);
+  }
+
+  /** Every vault this app made agent folders in: the brain, each managed
+   * vault whose folder is really there — the vault of an application still
+   * in progress included when `pending` asks for it — the vault of an older
+   * agency installation, and the bound vault. A damaged registry hides the
+   * managed ones and says so; it never hides the brain. */
+  private managedVaults(options: { pending?: boolean } = {}): BrainRoot[] {
+    const brain: BrainRoot = { id: "brain", label: "Second brain", path: this.brainDir(), writable: true };
+    const binding = this.bindingOrNull();
+    const bound: BrainRoot[] = binding && !LocalBizosHarness.managedBinding(binding)
+      ? [{ id: binding.rootId, label: binding.label, path: binding.path, writable: true }]
+      : [];
+    const legacyAgency = legacyAgencyVaultPath(this.storage.layout.root);
+    const agency: BrainRoot[] = lstatOrNullQuiet(legacyAgency)?.isDirectory() && !bound.some((root) => root.path === legacyAgency)
+      ? [{ id: "agency", label: "Agency", path: legacyAgency, writable: true }]
+      : [];
+    try {
+      return [brain, ...managedVaultRoots(this.storage, readTemplateRegistry(this.storage, binding), undefined, options), ...agency, ...bound];
+    } catch (error) {
+      console.warn(`Local BizOS: ${error instanceof Error ? error.message : String(error)}`);
+      return [brain, ...agency, ...bound];
+    }
+  }
+
+  /** The roots an UNBOUND workspace offers: the brain when it exists, the
+   * agents' workspaces, the managed vaults, an older agency vault, and every
+   * shared folder — the legacy list, minus a brain that was never made. */
+  private unboundRoots(): BrainRoot[] {
+    const [brain, ...rest] = this.managedVaults();
+    return [
+      ...(lstatOrNullQuiet(brain!.path)?.isDirectory() ? [brain!] : []),
+      { id: "workspaces", label: "Agent workspaces", path: this.storage.layout.workspacesDir, writable: true },
+      ...rest,
+      ...this.settingsStore.get().access.grants.map((grant) => ({
+        id: grant.id,
+        label: grant.label,
+        path: grant.path,
+        writable: grant.mode === "read-write",
+      })),
+    ];
+  }
+
+  /** The vaults a template may be bound to: every writable root that is a
+   * real folder right now — never the agents' workspaces, never a link. */
+  private candidateVaults(): BrainRoot[] {
+    return this.unboundRoots().filter((root) => {
+      if (root.id === "workspaces" || root.writable === false) return false;
+      const stats = lstatOrNullQuiet(root.path);
+      return Boolean(stats?.isDirectory()) && !stats!.isSymbolicLink();
+    });
+  }
+
+  /** The installation behind a catalogue id: the registry's, else the legacy
+   * `template.json` for the Company OS when that one is complete. */
+  private installationOf(registry: TemplateRegistry, id: TemplateId): TemplateInstallation | null {
+    const listed = registry.installations[id];
+    if (listed) return listed;
+    if (id === COMPANY_OS.id) return legacyCompanyOsInstallation(this.storage, this.brainDir(), this.botStore.list());
+    return null;
+  }
+
+  /** Read, change, write — with no `await` in between, so two templates
+   * applied at once cannot each write back a registry missing the other. */
+  private updateRegistry(mutate: (registry: TemplateRegistry) => void): TemplateRegistry {
+    const registry = readTemplateRegistry(this.storage);
+    mutate(registry);
+    writeTemplateRegistry(this.storage, registry);
+    return registry;
+  }
+
+  private applyResultOf(installation: TemplateInstallation, created: boolean): TemplateApplyResult {
+    const bots = Object.fromEntries(
+      Object.entries(installation.bots).filter(([, botId]) => this.botStore.get(botId) !== undefined),
+    );
+    return {
+      id: installation.id,
+      rootId: installation.rootId,
+      created,
+      vault: installation.vault,
+      bots,
+      ...(installation.groupId ? { groupId: installation.groupId } : {}),
+    };
+  }
+
+  /** The pack's tool instructions, appended to a template agent's own so it
+   * knows exactly the tools the runtime grants it — nothing for the Company OS. */
+  private static instructionsFor(id: TemplateId, row: TemplateBot): string {
+    const tools = id === "lead-gen-agency" ? AGENCY_TOOLS_INSTRUCTIONS : id === "ecommerce" ? COMMERCE_TOOLS_INSTRUCTIONS : null;
+    return tools ? `${row.instructions.trim()}\n\n${tools}`.slice(0, 6000) : row.instructions;
+  }
+
+  /** The older agency installation's journal (`agency/install.json`), when
+   * the person bound that vault: its bots by slug and its team, to adopt. */
+  private legacyAgencyJournal(): { bots: Record<string, string>; groupId?: string } | null {
+    const raw = this.storage.readJson<unknown>(join(LEGACY_AGENCY_DIRECTORY, "install.json"), null);
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const record = raw as Record<string, unknown>;
+    const bots = record.bots && typeof record.bots === "object" && !Array.isArray(record.bots)
+      ? Object.fromEntries(Object.entries(record.bots as Record<string, unknown>).filter(([, id]) => typeof id === "string" && id)) as Record<string, string>
+      : {};
+    return { bots, ...(typeof record.groupId === "string" && record.groupId ? { groupId: record.groupId } : {}) };
+  }
+
   /**
-   * The template a workspace starts as. Today one template, the Company OS,
-   * applied once: the vault is seeded (or upgraded from the legacy starter,
-   * never over a person's notes), and — on an EMPTY roster only — its agents
-   * become bots working from their folders in the vault, each with its
-   * welcome already in its chat, plus a team thread when there are several
-   * and the template's routines. `template.json` remembers what was done so
-   * a restart never seeds twice, and a roster the person already built is
-   * never touched.
+   * In an EXISTING vault, the bot a template row already has: the older
+   * agency installation's, by its journal; else the roster bot whose working
+   * folder IS this row's role folder in that vault. Adopted, never remade —
+   * and never claimed twice within one application.
+   */
+  private adoptableBot(target: InstallTarget, row: TemplateBot, claimed: Set<string>): Bot | undefined {
+    const roster = this.botStore.list().filter((bot) => !bot.archived && !claimed.has(bot.id));
+    if (target.rootId === "agency") {
+      const legacyId = this.legacyAgencyJournal()?.bots[row.slug];
+      const legacy = legacyId ? roster.find((bot) => bot.id === legacyId) : undefined;
+      if (legacy) return legacy;
+    }
+    const folder = join(target.path, AGENTS_DIRECTORY, agentFolderName(row.name));
+    return roster.find((bot) => bot.workspacePath === folder);
+  }
+
+  /**
+   * Apply a catalogue template into its vault and put its agents in the
+   * roster — resumably. The vault is a MANAGED one this app makes
+   * (`vaults/<id>/`, seeded whole into a staging folder and renamed into
+   * place) or an EXISTING one the person chose (its missing notes written,
+   * nothing there rewritten). The order is the module comment of
+   * `templates.ts`: validate the pack, refuse anything already at a managed
+   * vault's path that no journal accounts for, then for every effect write
+   * its identity to the journal FIRST (the staging folder, each agent's id,
+   * each welcome's message id, the team's id), do it, mark it done. A second
+   * attempt after a crash — even one between an effect and its mark — finds
+   * what exists by the id it wrote down, finishes the rest, and creates
+   * nothing twice. In an existing vault, an agent that already works from
+   * its role folder is adopted rather than made again.
+   */
+  private async applyTemplate(id: TemplateId, target: InstallTarget): Promise<TemplateApplyResult> {
+    const template = templateOf(id);
+    validateTemplate(template);
+    const registry = readTemplateRegistry(this.storage);
+    const existing = this.installationOf(registry, id);
+    if (existing) {
+      if (existing.rootId !== target.rootId || LocalBizosHarness.comparableVaultPath(installationVaultDir(this.storage, existing)) !== LocalBizosHarness.comparableVaultPath(target.path)) {
+        throw new BrainError(`This template is already installed in ${existing.rootId}. Choose its existing vault to adopt it.`, "exists");
+      }
+      // "Open" comes through here too: an installation whose vault is gone
+      // or replaced answers a sentence, never another folder.
+      const status = installationStatus(this.storage, existing);
+      if (status !== "ready") throw describeUnavailable(template, existing, status);
+      completeTemplateVault(target.path, template);
+      return this.applyResultOf(existing, false);
+    }
+
+    const vaultDir = target.path;
+    const vaultName = target.managed ? vaultPathOf(id) : target.label;
+    const journal = (patch: Partial<PendingInstallation>): PendingInstallation => {
+      const updated = this.updateRegistry((current) => {
+        const row: PendingInstallation = current.pending[id] ?? {
+          id,
+          version: template.version,
+          startedAt: this.clock.nowIso(),
+          bots: {},
+          welcomes: {},
+        };
+        current.pending[id] = { ...row, ...patch };
+      });
+      return updated.pending[id]!;
+    };
+    let pending: PendingInstallation | undefined = registry.pending[id];
+    let vault: VaultSeed;
+    if (target.managed) {
+      const vaults = this.vaultsDir();
+      refuseSymlink(vaults, `${VAULTS_DIRECTORY}/`);
+      refuseSymlink(vaultDir, vaultPathOf(id));
+      const vaultStats = lstatOrNull(vaultDir, vaultPathOf(id));
+      if (vaultStats && !vaultStats.isDirectory()) {
+        throw new BrainError(`${vaultPathOf(id)} exists and is not a folder`, "exists");
+      }
+      if (vaultStats && !pending?.vault) {
+        // A folder is there and the journal never marked it ours. Only one
+        // story allows it: this application had started seeding a staging
+        // folder, renamed it into place, and crashed before the mark — and
+        // then the folder holds the pack, every note and folder of it. Any
+        // other folder is somebody's, whatever it holds.
+        if (!pending?.staging || !holdsTemplate(vaultDir, template)) {
+          throw new BrainError(
+            `a folder is already at ${vaultPathOf(id)} and this app did not make it — move it away first`,
+            "exists",
+          );
+        }
+        pending = journal({ vault: "seeded", staging: undefined });
+      }
+      // The journal exists BEFORE the first effect: from here on, a folder at
+      // `vaults/<id>` is accounted for.
+      if (!pending) pending = journal({});
+
+      if (!vaultStats) {
+        mkdirSync(vaults, { recursive: true, mode: DIRECTORY_MODE });
+        // A staging folder a previous attempt left half-written is not
+        // resumed: it is removed and seeding starts over, whole.
+        if (pending.staging) rmSync(join(vaults, pending.staging), { recursive: true, force: true });
+        const staging = `.${id}.staging-${process.pid}-${randomBytes(4).toString("hex")}`;
+        pending = journal({ staging, vault: undefined });
+        const stagingDir = join(vaults, staging);
+        try {
+          seedTemplateVault(stagingDir, template);
+          refuseSymlink(vaultDir, vaultPathOf(id));
+          renameSync(stagingDir, vaultDir);
+        } catch (error) {
+          rmSync(stagingDir, { recursive: true, force: true });
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === "EEXIST" || code === "ENOTEMPTY") {
+            throw new BrainError(`a folder appeared at ${vaultPathOf(id)} while it was being created`, "exists");
+          }
+          throw error;
+        }
+        pending = journal({ vault: "seeded", staging: undefined });
+      }
+      vault = "seeded";
+    } else {
+      // The person's vault: it must be a real folder now, and it is never
+      // rewritten — only what the pack has and the folder lacks is written.
+      refuseSymlink(vaultDir, vaultName);
+      const vaultStats = lstatOrNull(vaultDir, vaultName);
+      if (!vaultStats?.isDirectory()) throw new BrainError(`${vaultName} is not a folder on this Mac`, "not_found");
+      if (!pending) pending = journal({});
+      if (!pending.vault) pending = journal({ vault: completeTemplateVault(vaultDir, template) });
+      vault = pending.vault === "seeded" ? "seeded" : "kept";
+    }
+
+    // The agents, one at a time. Each id is journaled before the agent is
+    // created with THAT id, so a crash after the roster persisted it and
+    // before the mark still leaves one agent, found by id on the retry. An
+    // agent the journal names that the person deleted (`bots.remove` marks
+    // it) is left alone: a retry is not a reason to bring it back.
+    const bots: Record<string, string> = {};
+    const claimed = new Set<string>();
+    const agents = join(vaultDir, AGENTS_DIRECTORY);
+    refuseSymlink(agents, `${vaultName}/${AGENTS_DIRECTORY}`);
+    for (const row of template.bots) {
+      let planned = pending.bots[row.slug];
+      if (planned?.removed) continue;
+      if (!planned) {
+        const adopted = target.managed ? undefined : this.adoptableBot(target, row, claimed);
+        planned = adopted ? { id: adopted.id, created: true } : { id: newId("bot"), created: false };
+        pending = journal({
+          bots: { ...pending.bots, [row.slug]: planned },
+          // An adopted agent has been greeting the person already, in its own
+          // words: no welcome is added to its chat.
+          ...(adopted ? { welcomes: { ...pending.welcomes, [row.slug]: { id: "adopted", posted: true } } } : {}),
+        });
+      }
+      let bot = this.botStore.get(planned.id);
+      if (!bot) {
+        if (planned.created) continue; // created, then deleted by the person before `bots.remove` could mark it
+        const folderName = agentFolderName(row.name);
+        const seededFolder = join(agents, folderName);
+        refuseSymlink(seededFolder, `${vaultName}/${AGENTS_DIRECTORY}/${folderName}`);
+        const workspacePath = existsSync(seededFolder)
+          ? seededFolder
+          : ensureAgentFolder(vaultDir, { name: row.name, title: row.title, description: row.description }).path;
+        bot = await this.spawnBot(
+          {
+            name: row.name,
+            title: row.title,
+            description: row.description,
+            instructions: LocalBizosHarness.instructionsFor(id, row),
+            ...(row.thinking ? { thinking: row.thinking } : {}),
+            workspacePath,
+          },
+          planned.id,
+        );
+      }
+      claimed.add(bot.id);
+      if (!planned.created) {
+        // The rest of the agent's state, then the mark. Re-done on a retry
+        // that found the agent already persisted; setting a pin twice is
+        // the same pin.
+        if (row.pinned) this.botStore.update(bot.id, { pinned: true });
+        pending = journal({ bots: { ...pending.bots, [row.slug]: { ...planned, created: true } } });
+      }
+      bots[row.slug] = bot.id;
+    }
+    for (const row of template.bots) {
+      const botId = bots[row.slug];
+      if (!botId || !row.welcome) continue;
+      let welcome = pending.welcomes[row.slug];
+      if (welcome?.posted) continue;
+      if (!welcome) {
+        welcome = { id: newMessageId(), posted: false };
+        pending = journal({ welcomes: { ...pending.welcomes, [row.slug]: welcome } });
+      }
+      // The bot's first words, on the record before the person opens the
+      // chat — an immutable public message, no run behind it. Appended under
+      // the journaled id, and only when that id is not in the thread yet.
+      const threadId = threadIdForTarget({ botId });
+      let message = this.threadStore.get(threadId, welcome.id);
+      if (!message) {
+        message = this.threadStore.append(threadId, {
+          id: welcome.id,
+          role: "bot",
+          deliveryState: "complete",
+          botId,
+          blocks: [{ kind: "text", text: row.welcome }],
+        });
+      }
+      this.botStore.update(botId, { unread: true });
+      this.botStore.setStatus(botId, "idle", row.welcome);
+      pending = journal({ welcomes: { ...pending.welcomes, [row.slug]: { ...welcome, posted: true } } });
+      this.events.publish({ type: "thread.message.created", threadId, message });
+    }
+
+    // The team, when the pack has one: the same journal-first id. A team the
+    // person deleted is not remade. In an older agency vault, the team that
+    // installation made is adopted, whether or not this pack asks for one.
+    let groupId: string | undefined;
+    const memberIds = template.bots.map((row) => bots[row.slug]).filter((botId): botId is string => Boolean(botId));
+    const legacyGroup = target.rootId === "agency" ? this.legacyAgencyJournal()?.groupId : undefined;
+    const adoptedGroup = legacyGroup ? this.groupStore.get(legacyGroup) : undefined;
+    if (adoptedGroup && !adoptedGroup.archived) {
+      if (!pending.group) pending = journal({ group: { id: adoptedGroup.id, created: true } });
+      groupId = pending.group?.id;
+    } else if (template.team && memberIds.length > 1) {
+      let planned = pending.group;
+      if (!planned) {
+        planned = { id: newId("grp"), created: false };
+        pending = journal({ group: planned });
+      }
+      let group = this.groupStore.get(planned.id);
+      if (!group && !planned.created) {
+        group = this.groupStore.create({ name: template.team.name, memberIds }, planned.id);
+        this.events.publish({ type: "group.created", group });
+      }
+      if (!planned.created) pending = journal({ group: { ...planned, created: true } });
+      groupId = group?.id;
+    }
+    // A template's routines are NOT created: nothing scheduled comes from a
+    // catalogue row.
+
+    const installation: TemplateInstallation = {
+      id,
+      version: template.version,
+      rootId: target.rootId,
+      vaultPath: target.managed ? vaultPathOf(id) : target.path,
+      appliedAt: this.clock.nowIso(),
+      vault,
+      bots,
+      ...(groupId ? { groupId } : {}),
+      routineIds: [],
+    };
+    this.updateRegistry((current) => {
+      current.installations[id] = installation;
+      delete current.pending[id];
+    });
+    return this.applyResultOf(installation, true);
+  }
+
+  /** The install target a binding names. */
+  private targetOf(binding: WorkspaceBinding): InstallTarget {
+    return {
+      rootId: binding.rootId,
+      path: binding.path,
+      managed: LocalBizosHarness.managedBinding(binding),
+      label: binding.label,
+    };
+  }
+
+  /**
+   * Resolves what `bind` was asked for, BEFORE anything is written: `new`
+   * (or the managed root's own id) is `vaults/<templateId>` — refused when a
+   * folder this app did not make is already there; anything else must be
+   * one of the writable vaults this workspace offers, by id, resolved here
+   * to a real folder — never a path a caller sent.
+   */
+  private static comparableVaultPath(path: string): string {
+    try { return realpathSync(path); } catch { return path; }
+  }
+
+  private resolveTarget(templateId: TemplateId, rootId: string): InstallTarget {
+    const template = templateOf(templateId);
+    if (rootId === "new" || rootId === vaultRootId(templateId)) {
+      const vaults = this.vaultsDir();
+      refuseSymlink(vaults, `${VAULTS_DIRECTORY}/`);
+      const vaultDir = join(vaults, templateId);
+      refuseSymlink(vaultDir, vaultPathOf(templateId));
+      const registry = readTemplateRegistry(this.storage);
+      const stats = lstatOrNull(vaultDir, vaultPathOf(templateId));
+      if (stats && !registry.installations[templateId] && !registry.pending[templateId]?.vault
+        && !(registry.pending[templateId]?.staging && stats.isDirectory() && holdsTemplate(vaultDir, template))) {
+        throw new BrainError(`a folder is already at ${vaultPathOf(templateId)} and this app did not make it — move it away first`, "exists");
+      }
+      return { rootId: vaultRootId(templateId), path: vaultDir, managed: true, label: template.name };
+    }
+    if (rootId.startsWith("vault:")) {
+      throw new BrainError("a managed vault belongs to its own template; choose 'new' for a new managed vault", "not_found");
+    }
+    const root = this.candidateVaults().find((candidate) => candidate.id === rootId);
+    if (!root) throw new BrainError("that folder is not a vault this workspace can be bound to", "not_found");
+    let path: string;
+    try {
+      path = realpathSync(root.path);
+    } catch {
+      throw new BrainError(`${root.label} is not a folder this Mac can read`, "not_found");
+    }
+    return { rootId: root.id, path, managed: false, label: root.label };
+  }
+
+  /** Bind and apply, one at a time: two binds at once cannot both win, and
+   * a second apply of the same template joins the first. */
+  private bindChain: Promise<unknown> = Promise.resolve();
+
+  private serialized<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.bindChain.then(work, work);
+    this.bindChain = next.catch(() => undefined);
+    return next;
+  }
+
+  /** Bind (or confirm the binding) and install (or resume) — the one door. */
+  private async bindAndApply(templateId: TemplateId, rootId: string): Promise<TemplateApplyResult> {
+    return this.serialized(async () => {
+      let binding = this.bindingOf();
+      if (binding) {
+        if (!LocalBizosHarness.sameBinding(binding, templateId, rootId)) throw bindingConflict(binding, templateId, rootId);
+      } else {
+        const target = this.resolveTarget(templateId, rootId);
+        const installed = this.installationOf(readTemplateRegistry(this.storage), templateId);
+        if (installed && (installed.rootId !== target.rootId || LocalBizosHarness.comparableVaultPath(installationVaultDir(this.storage, installed)) !== LocalBizosHarness.comparableVaultPath(target.path))) {
+          throw new BrainError(`This template is already installed in ${installed.rootId}. Choose its existing vault to adopt it.`, "exists");
+        }
+        const fresh: WorkspaceBinding = {
+          version: 1,
+          templateId,
+          rootId: target.rootId,
+          label: target.label,
+          path: target.path,
+          boundAt: this.clock.nowIso(),
+        };
+        // Persisted BEFORE the first effect; exclusively, so a binding
+        // another process wrote a moment ago is read back and compared.
+        if (!writeWorkspaceBinding(this.storage, fresh)) {
+          binding = this.bindingOf();
+          if (!binding || !LocalBizosHarness.sameBinding(binding, templateId, rootId)) {
+            throw binding ? bindingConflict(binding, templateId, rootId) : new BrainError("the binding could not be written", "exists");
+          }
+        } else {
+          binding = fresh;
+        }
+      }
+      return this.applyTemplate(binding.templateId, this.targetOf(binding));
+    });
+  }
+
+  /** The same request as the binding: its template, and its root (or `new`
+   * when the binding is the managed vault `new` would make). */
+  private static sameBinding(binding: WorkspaceBinding, templateId: string, rootId: string | undefined): boolean {
+    if (binding.templateId !== templateId) return false;
+    if (rootId === undefined || rootId === binding.rootId) return true;
+    return rootId === "new" && LocalBizosHarness.managedBinding(binding);
+  }
+
+  /**
+   * The workspace's template and vault — chosen once, then pinned.
+   *
+   * `get` lists the catalogue, the vaults a template could be bound to, and
+   * the binding when there is one. `bind` writes the binding (before any
+   * effect, exclusively), installs the template into that vault — a managed
+   * vault made whole, or an existing vault completed with the pack's missing
+   * notes and its agents adopted where they already work — and answers the
+   * same projection. The same request again is idempotent; any other
+   * template or root is refused (409). Nothing here unbinds: that is the
+   * person's deliberate act on `workspace-binding.json`.
+   */
+  readonly workspaceTemplate = {
+    current: (): WorkspaceBinding | null => this.bindingOf(),
+    get: async (): Promise<WorkspaceTemplateProjection> => {
+      const binding = this.bindingOf();
+      return {
+        binding: binding ? { templateId: binding.templateId, rootId: binding.rootId, label: binding.label, path: binding.path } : null,
+        templates: TEMPLATE_IDS.map((id) => {
+          const template = templateOf(id);
+          return { id, name: template.name, description: template.description ?? "" };
+        }),
+        vaults: binding
+          ? [{ rootId: binding.rootId, label: binding.label, path: binding.path, writable: true }]
+          : this.candidateVaults().map((root) => ({ rootId: root.id, label: root.label, path: root.path, writable: true })),
+        canBind: binding === null,
+      };
+    },
+    bind: async (input: { templateId: string; rootId: string }): Promise<WorkspaceTemplateProjection> => {
+      if (!isTemplateId(input.templateId)) throw new BrainError("that template is not in the catalogue", "not_found");
+      if (typeof input.rootId !== "string" || !input.rootId.trim()) throw new BrainError("rootId is required: 'new' or a vault id");
+      await this.bindAndApply(input.templateId, input.rootId.trim());
+      return this.workspaceTemplate.get();
+    },
+    /** For the packs: what the registry holds for a template. */
+    installation: (id: TemplateId): PackInstallation => {
+      const registry = readTemplateRegistry(this.storage);
+      const installation = this.installationOf(registry, id);
+      if (installation) {
+        return {
+          status: "ready",
+          bots: Object.fromEntries(Object.entries(installation.bots).filter(([, botId]) => this.botStore.get(botId) !== undefined)),
+          groupId: installation.groupId ?? null,
+          rootId: installation.rootId,
+          vaultPath: installationVaultDir(this.storage, installation),
+        };
+      }
+      const pending = registry.pending[id];
+      const binding = this.bindingOf();
+      return {
+        status: pending ? "installing" : "none",
+        bots: pending ? Object.fromEntries(Object.entries(pending.bots).filter(([, row]) => row.created && !row.removed && this.botStore.get(row.id)).map(([slug, row]) => [slug, row.id])) : {},
+        groupId: pending?.group?.created ? pending.group.id : null,
+        rootId: binding?.templateId === id ? binding.rootId : "",
+        vaultPath: binding?.templateId === id ? binding.path : "",
+      };
+    },
+    /** For the packs: bind + install, then the installation. */
+    install: async (id: TemplateId, rootId: string): Promise<PackInstallation> => {
+      await this.bindAndApply(id, rootId);
+      return this.workspaceTemplate.installation(id);
+    },
+  };
+
+  /**
+   * Templates: the Company OS a legacy workspace started as, and the
+   * catalogue Apps → Second brain offers.
+   *
+   * `ensureDefault` runs at launch. On a BOUND workspace it resumes an
+   * installation a crash interrupted, and nothing else. On an unbound
+   * workspace that already has a brain folder it keeps the legacy behaviour
+   * (the Company OS seeded there once, the CEO made on an empty roster,
+   * `template.json` remembering it). On a NEW workspace — no brain, no
+   * `template.json`, no binding — it does nothing: the person chooses a
+   * template and a vault in the app rather than getting a business model
+   * installed for them.
+   *
+   * `list` and `apply` are the catalogue; `apply` goes through the binding.
    */
   readonly templates = {
     current: async (): Promise<TemplateState | null> => this.storage.readJson<TemplateState | null>(TEMPLATE_FILE, null),
-    ensureDefault: async (): Promise<{ id: string; vault: VaultSeed; bots: number; applied: boolean }> => {
+    ensureDefault: async (): Promise<{ id: string; vault: VaultSeed | "deferred"; bots: number; applied: boolean }> => {
+      const binding = this.bindingOf();
+      if (binding) {
+        const registry = readTemplateRegistry(this.storage, binding);
+        if (registry.pending[binding.templateId]) await this.bindAndApply(binding.templateId, binding.rootId);
+        const installation = this.workspaceTemplate.installation(binding.templateId);
+        return { id: binding.templateId, vault: "kept", bots: Object.keys(installation.bots).length, applied: false };
+      }
       const template = COMPANY_OS;
       const brainDir = this.brainDir();
-      const vault = seedTemplateVault(brainDir, template);
+      refuseSymlink(brainDir, "brain");
       const existing = await this.templates.current();
+      if (!existing && !existsSync(brainDir)) {
+        return { id: template.id, vault: "deferred", bots: 0, applied: false };
+      }
+      const vault = seedTemplateVault(brainDir, template);
       if (existing?.id === template.id) {
         return { id: existing.id, vault, bots: Object.keys(existing.bots).length, applied: false };
       }
       const bots: Record<string, string> = {};
       let groupId: string | undefined;
       const routineIds: string[] = [];
-      if (this.botStore.list().length === 0) {
+      if (vault === "seeded" && this.botStore.list().length === 0) {
         for (const row of template.bots) {
           // The template may have written the agent's folder with its own
           // role sheet; that folder is the bot's, not a namesake's.
@@ -1312,38 +1943,55 @@ export class LocalBizosHarness {
       this.storage.writeJson(TEMPLATE_FILE, state);
       return { id: state.id, vault, bots: Object.keys(bots).length, applied: true };
     },
+    /** The catalogue, with what is already on this Mac and which row the workspace is bound to. */
+    list: async (): Promise<{ templates: TemplateSummary[] }> => {
+      const binding = this.bindingOf();
+      const registry = readTemplateRegistry(this.storage, binding);
+      const roster = this.botStore.list();
+      return {
+        templates: TEMPLATE_IDS.map((id) => ({
+          ...summarize(this.storage, templateOf(id), this.installationOf(registry, id), roster),
+          ...(binding?.templateId === id ? { bound: true } : {}),
+        })),
+      };
+    },
+    /**
+     * Create a template's vault and agents, or answer the installation that
+     * exists — through the binding: an unbound workspace is bound to this
+     * template (`rootId`, default `new`); a bound one answers its own
+     * installation and refuses any other template or root.
+     */
+    apply: async (id: string, rootId?: string): Promise<TemplateApplyResult> => {
+      if (!isTemplateId(id)) throw new BrainError("that template is not in the catalogue", "not_found");
+      const binding = this.bindingOf();
+      if (binding && !LocalBizosHarness.sameBinding(binding, id, rootId)) throw bindingConflict(binding, id, rootId);
+      return this.bindAndApply(id, rootId ?? binding?.rootId ?? "new");
+    },
   };
+
+  /** The root a scan opens when none is named: the bound vault, else the brain. */
+  private defaultRootId(): string {
+    return this.bindingOrNull()?.rootId ?? "brain";
+  }
 
   /** Apps tab (local mode): the second brain — the workspace's notes as a
    * graph, as a folder, and as something the person edits. */
   readonly brain = {
-    /** The folders a vault can be: the company's brain, the agents' workspaces, and every shared folder.
+    /** The folders a vault can be. BOUND: the pinned vault, and nothing
+     * else — a root id outside it is refused on every route, not merely
+     * hidden. UNBOUND: the brain when it exists, the agents' workspaces,
+     * the managed vaults, an older agency vault, and every shared folder.
      *
      * Writability comes from the SAME grant the agents obey: a folder shared
-     * `read` is read-only here too, and the two folders this app owns are
+     * `read` is read-only here too, and the folders this app owns are
      * always writable. */
     roots: async (): Promise<BrainRoot[]> => {
-      const brainDir = this.brainDir();
-      // The vault exists before anyone looks at it, whether or not the
-      // template ran at boot (a test, an older sidecar).
-      seedTemplateVault(brainDir, COMPANY_OS);
-      // The agency pack's vault (`agency.ts`), once installed: the person
-      // reads and edits the same notes its agents work from.
-      const agencyVault = agencyVaultPath(this.storage.layout.root);
-      return [
-        { id: "brain", label: "Second brain", path: brainDir, writable: true },
-        { id: "workspaces", label: "Agent workspaces", path: this.storage.layout.workspacesDir, writable: true },
-        ...(existsSync(agencyVault) ? [{ id: "agency", label: "Agency", path: agencyVault, writable: true }] : []),
-        ...this.settingsStore.get().access.grants.map((grant) => ({
-          id: grant.id,
-          label: grant.label,
-          path: grant.path,
-          writable: grant.mode === "read-write",
-        })),
-      ];
+      const binding = this.bindingOf();
+      if (binding) return [{ id: binding.rootId, label: binding.label, path: binding.path, writable: true }];
+      return this.unboundRoots();
     },
     scan: async (rootId?: string): Promise<BrainScan & { roots: BrainRoot[]; home: string }> => {
-      const root = await this.brain.vault(rootId ?? "brain");
+      const root = await this.brain.vault(rootId ?? this.defaultRootId());
       return { ...scanVault(root, () => this.clock.now()), roots: await this.brain.roots(), home: this.homeDir };
     },
     note: async (rootId: string, id: string): Promise<BrainNoteContent> =>
@@ -1367,6 +2015,9 @@ export class LocalBizosHarness {
     vault: async (rootId: string): Promise<BrainRoot> => {
       const root = (await this.brain.roots()).find((candidate) => candidate.id === rootId);
       if (!root) throw new BrainError("that folder is not shared with your agents", "not_found");
+      if (root.id.startsWith("vault:")) refuseSymlink(join(this.storage.layout.root, "vaults"), "vaults");
+      refuseSymlink(root.path, "vault");
+      if (!existsSync(root.path) || !lstatSync(root.path).isDirectory()) throw new BrainError("the selected vault is unavailable", "not_found");
       return root;
     },
     writableVault: async (rootId: string): Promise<BrainRoot> => {
@@ -1987,27 +2638,7 @@ export class LocalBizosHarness {
      * decided at creation and shown in the agent's settings, where it can
      * be changed.
      */
-    create: async (input: CreateBotInput): Promise<Bot> => {
-      let workspacePath = input.workspacePath?.trim();
-      if (workspacePath) {
-        this.requireFolder(workspacePath);
-      } else if (this.settingsStore.get().local.workingDir) {
-        // The person chose a working directory for every agent in Settings:
-        // that choice stands, and `workspaceFor` puts the bot under it.
-        workspacePath = undefined;
-      } else {
-        const brainDir = this.brainDir();
-        seedTemplateVault(brainDir, COMPANY_OS);
-        workspacePath = ensureAgentFolder(brainDir, {
-          name: input.name,
-          ...(input.title ? { title: input.title } : {}),
-          ...(input.description ? { description: input.description } : {}),
-        }).path;
-      }
-      const bot = this.botStore.create({ ...input, ...(workspacePath ? { workspacePath } : {}) });
-      this.events.publish({ type: "bot.spawned", bot });
-      return this.decorate(bot);
-    },
+    create: async (input: CreateBotInput): Promise<Bot> => this.spawnBot(input),
     update: async (id: string, patch: UpdateBotInput): Promise<Bot> => {
       if (patch.workspacePath) this.requireFolder(patch.workspacePath);
       if (patch.planId && !this.planRegistry.get(patch.planId)) throw new SettingsError("unknown plan");
@@ -2035,17 +2666,23 @@ export class LocalBizosHarness {
         this.storage.removeDirectory(join(this.storage.layout.workspacesDir, safeFileName(bot.id)));
         // Its folder in the second brain is not erased: it holds notes the
         // person may want back, so it goes to the vault's trash the way a
-        // note does. Only a folder this app made under `Agents/` — a folder
-        // the person chose is theirs and stays where it is.
-        const brainDir = this.brainDir();
-        if (bot.workspacePath && isAgentFolder(brainDir, bot.workspacePath)) {
-          try {
-            trashEntry({ id: "brain", label: "Second brain", path: brainDir }, `Agents/${basename(bot.workspacePath)}`);
-          } catch {
-            /* already gone, or already in the trash */
+        // note does. Only a folder this app made under `Agents/` — in the
+        // brain or in a template's vault; a folder the person chose is
+        // theirs and stays where it is.
+        if (bot.workspacePath) {
+          const vault = this.managedVaults({ pending: true }).find((candidate) => isAgentFolder(candidate.path, bot.workspacePath!));
+          if (vault) {
+            try {
+              trashEntry(vault, `${AGENTS_DIRECTORY}/${basename(bot.workspacePath)}`);
+            } catch {
+              /* already gone, or already in the trash */
+            }
           }
         }
       }
+      // An agent a template is still creating: the journal learns it was
+      // deleted on purpose, so the template's retry does not bring it back.
+      this.forgetTemplateBot(id);
       this.botStore.remove(id);
       this.groupStore.removeMember(id);
       this.routineStore.removeForBot(id);
@@ -2064,6 +2701,64 @@ export class LocalBizosHarness {
       cleared: this.dispatcher.clearApprovals(id),
     }),
   };
+
+  /** Mark, in every journal that names it, a bot the person deleted. Best
+   * effort: a damaged registry must not stop a delete. */
+  private forgetTemplateBot(botId: string): void {
+    try {
+      const registry = readTemplateRegistry(this.storage);
+      const names = Object.values(registry.pending).some((row) =>
+        row && Object.values(row.bots).some((planned) => planned.id === botId),
+      );
+      if (!names) return;
+      this.updateRegistry((current) => {
+        for (const row of Object.values(current.pending)) {
+          if (!row) continue;
+          for (const [slug, planned] of Object.entries(row.bots)) {
+            if (planned.id === botId) row.bots[slug] = { ...planned, removed: true };
+          }
+        }
+      });
+    } catch (error) {
+      console.warn(`Local BizOS: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * The one way a bot is made, for the person's "New agent" and for a
+   * template alike: `id` is the template's journaled id — see
+   * `BotStore.create` — and absent for everyone else.
+   */
+  private async spawnBot(input: CreateBotInput, id?: string): Promise<Bot> {
+    let workspacePath = input.workspacePath?.trim();
+    if (workspacePath) {
+      this.requireFolder(workspacePath);
+    } else if (this.settingsStore.get().local.workingDir) {
+      // The person chose a working directory for every agent in Settings:
+      // that choice stands, and `workspaceFor` puts the bot under it.
+      workspacePath = undefined;
+    } else {
+      // A bound workspace: the agent's folder goes in the pinned vault, so a
+      // peer recruited during a pack's mission works from the same vault as
+      // the pack. Unbound: the legacy brain, seeded if it is not there yet.
+      const binding = this.bindingOf();
+      const vaultDir = binding ? binding.path : this.brainDir();
+      if (binding) {
+        this.requireFolder(vaultDir);
+      } else {
+        seedTemplateVault(vaultDir, COMPANY_OS);
+      }
+      workspacePath = ensureAgentFolder(vaultDir, {
+        name: input.name,
+        ...(input.title ? { title: input.title } : {}),
+        ...(input.description ? { description: input.description } : {}),
+      }).path;
+    }
+    const bot = this.botStore.create({ ...input, ...(workspacePath ? { workspacePath } : {}) }, id);
+    this.events.publish({ type: "bot.spawned", bot });
+    return this.decorate(bot);
+  }
+
 
   readonly groups = {
     list: async (): Promise<Group[]> => this.groupStore.list(),
@@ -2113,37 +2808,6 @@ export class LocalBizosHarness {
     },
     markRead: async (target: ThreadTarget): Promise<void> => this.threadStore.markRead(target),
     markUnread: async (target: ThreadTarget): Promise<void> => this.threadStore.markUnread(target),
-    /**
-     * A bot's first words, on the record with no run behind them — what a
-     * template does for its agents (`templates.ensureDefault`), offered to
-     * an installed pack too. An immutable public message: it claims nothing
-     * ran, it only greets.
-     */
-    greet: async (botId: string, text: string, key?: string): Promise<ThreadMessage> => {
-      const bot = this.botStore.get(botId);
-      if (!bot) throw new Error("bot not found");
-      const threadId = threadIdForTarget({ botId });
-      // A stable key gives a stable message id: a greeting written once and
-      // then asked for again (an install resumed after a crash between the
-      // append and its journal entry) is found on the full log, not written
-      // twice — and a torn second line collapses on read anyway.
-      const id = key ? `msg_greet_${createHash("sha256").update(key).digest("hex").slice(0, 24)}` : undefined;
-      if (id) {
-        const existing = this.threadStore.get(threadId, id);
-        if (existing) return existing;
-      }
-      const message = this.threadStore.append(threadId, {
-        role: "bot",
-        deliveryState: "complete",
-        botId,
-        blocks: [{ kind: "text", text }],
-        ...(id ? { id } : {}),
-      });
-      this.botStore.update(botId, { unread: true });
-      this.botStore.setStatus(botId, "idle", text);
-      this.events.publish({ type: "thread.message.created", threadId: message.threadId, message });
-      return message;
-    },
     answer: async (input: { runId: string; askId: string; answer: AskAnswer }): Promise<void> =>
       this.dispatcher.answer(input),
   };

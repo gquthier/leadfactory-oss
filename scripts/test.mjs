@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const root = resolve(import.meta.dirname, '..');
-const files = ['test', 'test-skills', 'test-pack'].flatMap((dir) =>
+const files = ['test', 'test-skills', 'test-pack', 'ecommerce/test'].flatMap((dir) =>
   readdirSync(resolve(root, dir))
     .filter((name) => name.endsWith('.test.mjs'))
     .sort()

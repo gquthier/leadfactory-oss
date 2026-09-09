@@ -73,11 +73,14 @@ export class GroupStore {
     this.storage.writeJson(GROUPS_FILE, this.groups);
   }
 
-  create(input: { name: string; memberIds: string[] }): Group {
+  /** `id`: the same seam as `BotStore.create` — a caller that journaled the
+   * id before creating the group. A taken id is refused. */
+  create(input: { name: string; memberIds: string[] }, id?: string): Group {
     const name = trimmed(input.name, 60);
     if (!name) throw new Error("a group needs a name");
+    if (id && this.groups.some((group) => group.id === id)) throw new Error("that group id is taken");
     const group: Group = {
-      id: newId("grp"),
+      id: id ?? newId("grp"),
       name,
       memberIds: memberList(input.memberIds),
       pinned: false,

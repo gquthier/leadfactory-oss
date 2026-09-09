@@ -185,6 +185,9 @@ export interface DispatchDependencies {
   onRunFinished?(input: { bot: Bot; outcome: "completed" | "failed"; preview: string }): void;
   /** Revoke ephemeral capabilities after every terminal outcome, including STOP. */
   onRunSettled?(runId: string): void;
+  /** Raised the moment a STOP is asked for, BEFORE the CLI has settled: a
+   * capability must die now, and every request it has in flight with it,
+   * not when the process finally exits. `onRunSettled` still follows. */
   onRunStopped?(runId: string): void;
   /** Raised when a routine's run reaches a terminal state, so the routine
    * store can stop claiming it is still running AND the scheduler can hand the

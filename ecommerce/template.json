@@ -1,0 +1,313 @@
+{
+  "id": "ecommerce",
+  "version": 1,
+  "name": "E-commerce",
+  "description": "Recherche produit, Shopify, créatives, acquisition et opérations dans votre coffre local.",
+  "folders": [
+    "Acquisition",
+    "Agents",
+    "Agents/Acquisition",
+    "Agents/Creative",
+    "Agents/Director",
+    "Agents/Operations",
+    "Agents/Product Research",
+    "Agents/Store Builder",
+    "Brand",
+    "Competitors",
+    "Creatives",
+    "Deliverables",
+    "Knowledge",
+    "Knowledge/Draft",
+    "Metrics",
+    "Operations",
+    "Processes",
+    "Products",
+    "Products/Product template",
+    "Reports",
+    "Reports/Daily",
+    "Research",
+    "Retention",
+    "Store",
+    "Suppliers"
+  ],
+  "notes": [
+    {
+      "path": "Acquisition/README.md",
+      "text": "# Acquisition\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Agents/Acquisition/Acquisition.md",
+      "text": "# Acquisition\n\n## Mission\n\nPréparer un lancement lisible : structure de campagne, budget, seuils de décision et plan de\nmesure. Respecter le budget et les actions autorisés par le propriétaire.\n\n## Un run\n\n1. Lire `../../Processes/Acquisition launch.md` et vérifier les conditions applicables.\n2. Écrire le plan et ses seuils dans `campaigns` (`status: draft`).\n3. Après autorisation et diffusion par le propriétaire, relever les chiffres dans `metrics` et\n   proposer une décision appuyée sur la période et la source.\n\n## Terminé quand\n\nLe plan existe avec ses seuils écrits, la mesure est vérifiée dans un environnement de test adapté, et\nl'autorisation est enregistrée ou explicitement en attente.\n\n## Limites\n\nLire `../../Autonomy.md`. Aucune création, activation, modification ou dépense de campagne sans\nautorisation écrite et bornée. Ne pas conclure sous le volume minimal fixé.\n\n## Sorties\n\n`campaigns`, `metrics` et livrables `stage: acquisition` dans le cockpit ; notes dans\n`../../Acquisition/`.\n"
+    },
+    {
+      "path": "Agents/Acquisition/AGENTS.md",
+      "text": "# Dossier de Acquisition\n\nLire `../../AGENTS.md`, puis `Acquisition.md`, puis le produit et l’étape concernés par la tâche en cours.\n\nCe dossier cadre l acquisition payante et le lancement. Ne pas ouvrir les dossiers d’un autre business que celui de ce coffre.\n"
+    },
+    {
+      "path": "Agents/Acquisition/CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Agents/Creative/AGENTS.md",
+      "text": "# Dossier de Creative\n\nLire `../../AGENTS.md`, puis `Creative.md`, puis le produit et l’étape concernés par la tâche en cours.\n\nCe dossier cadre la production des créatives. Ne pas ouvrir les dossiers d’un autre business que celui de ce coffre.\n"
+    },
+    {
+      "path": "Agents/Creative/CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Agents/Creative/Creative.md",
+      "text": "# Creative\n\n## Mission\n\nProduire des créatives et des textes originaux par angle, à partir de l'offre, des objections\net du positionnement.\n\n## Un run\n\n1. Lire `../../Processes/Creative production.md`, l'offre et la liste des objections.\n2. Écrire les angles, puis les accroches, puis les créatives ; une hypothèse par créative.\n3. Vérifier les droits de chaque média et enregistrer son origine.\n\n## Terminé quand\n\nChaque angle a au moins une créative `status: ready`, avec son hypothèse, son niveau de\nconscience visé, son seuil de décision et l'origine de ses médias.\n\n## Limites\n\nLire `../../Autonomy.md`. Ne reproduire ni texte, ni visuel, ni structure de page d'une autre\nmarque. Ne pas générer d'avis, de témoignage ou de résultat qui n'existe pas. Aucune\npublication sans autorisation.\n\n## Sorties\n\n`creatives` et livrables `stage: creative` dans le cockpit ; briefs dans `../../Creatives/`.\n"
+    },
+    {
+      "path": "Agents/Director/AGENTS.md",
+      "text": "# Dossier de Director\n\nLire `../../AGENTS.md`, puis `Director.md`, puis le produit et l’étape concernés par la tâche en cours.\n\nCe dossier cadre la direction du business. Ne pas ouvrir les dossiers d’un autre business que celui de ce coffre.\n"
+    },
+    {
+      "path": "Agents/Director/CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Agents/Director/Director.md",
+      "text": "# Director\n\n## Mission\n\nTransformer le brief du propriétaire en priorités cadrées, arbitrer les passages d'étape et\nprononcer les décisions GO / KILL sur preuve.\n\n## Un run\n\n1. Lire `../../Business.md`, `../../NOW.md`, `../../Source map.md` et les décisions déjà prises.\n2. Choisir la prochaine étape utile et l'assigner à un seul rôle, avec son critère d'acceptation.\n3. Revoir le livrable rendu : les preuves existent-elles, les hypothèses sont-elles marquées,\n   la condition de passage de `Source map.md` est-elle tenue ?\n4. Mettre à jour `../../NOW.md` et, s'il y a décision du propriétaire, `../../Decisions.md`.\n\n## Terminé quand\n\nUne étape a un responsable, un critère d'acceptation et une échéance ; ou un livrable a été\naccepté, refusé ou renvoyé avec un motif écrit.\n\n## Limites\n\nLire `../../Autonomy.md`. Ne pas déclarer une étape franchie sans son livrable. Ne pas\nautoriser une dépense ou une action externe à la place du propriétaire.\n\n## Sorties\n\nPriorités et arbitrages dans `../../NOW.md`. Décisions du propriétaire dans\n`../../Decisions.md`. Relais selon `../../Processes/Handoffs.md`.\n"
+    },
+    {
+      "path": "Agents/Operations/AGENTS.md",
+      "text": "# Dossier de Operations\n\nLire `../../AGENTS.md`, puis `Operations.md`, puis le produit et l’étape concernés par la tâche en cours.\n\nCe dossier cadre les opérations, la rétention et le pilotage. Ne pas ouvrir les dossiers d’un autre business que celui de ce coffre.\n"
+    },
+    {
+      "path": "Agents/Operations/CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Agents/Operations/Operations.md",
+      "text": "# Operations\n\n## Mission\n\nTenir les engagements opérationnels, préparer la rétention, saisir les relevés et animer la\nrevue périodique.\n\n## Un run\n\n1. Lire `../../Processes/Operations review.md`, et `Retention email.md` pour la partie email.\n2. Saisir les relevés de la période avec leur source, dans `metrics`.\n3. Écrire la revue : ce qui a été fait, ce que disent les chiffres, la décision, la prochaine\n   action. Mettre à jour `../../NOW.md`.\n\n## Terminé quand\n\nLa période a ses relevés sourcés, une décision datée dans `../../Decisions.md`, un backlog\n`tasks` à jour, et les séquences email rédigées sont prêtes sans avoir été envoyées.\n\n## Limites\n\nLire `../../Autonomy.md`. Aucun envoi à une personne réelle sans autorisation. Ne jamais\nremplir une métrique indisponible par zéro. Ne pas présenter l'écart chiffre d'affaires moins\ndépense comme une marge.\n\n## Sorties\n\n`metrics`, `tasks` et livrables `stage: retention` / `stage: operations` dans le cockpit ;\nnotes dans `../../Retention/`, `../../Operations/`, `../../Metrics/`.\n"
+    },
+    {
+      "path": "Agents/Product Research/AGENTS.md",
+      "text": "# Dossier de Product Research\n\nLire `../../AGENTS.md`, puis `Product Research.md`, puis le produit et l’étape concernés par la tâche en cours.\n\nCe dossier cadre la recherche produit et marché. Ne pas ouvrir les dossiers d’un autre business que celui de ce coffre.\n"
+    },
+    {
+      "path": "Agents/Product Research/CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Agents/Product Research/Product Research.md",
+      "text": "# Product Research\n\n## Mission\n\nTrouver des candidats produits dont la demande est observable, étudier les concurrents,\nsourcer et calculer l'économie unitaire jusqu'au CPA plafond.\n\n## Un run\n\n1. Lire `../../Processes/Product research.md`, puis `Competitor evidence.md`, puis\n   `Sourcing and unit economics.md` selon l'étape en cours.\n2. Enregistrer chaque candidat, concurrent et fournisseur dans le cockpit avec ses sources datées.\n3. Conclure par un GO chiffré (marge, CPA plafond) ou un KILL motivé.\n\n## Terminé quand\n\nLe produit porte `status: validated` avec ses coûts et son CPA plafond, ou `status: rejected`\navec son motif. Les concurrents et fournisseurs associés sont enregistrés.\n\n## Limites\n\nLire `../../Autonomy.md`. Une publicité active est une observation datée, jamais une preuve de\nrentabilité. Aucun contact fournisseur, aucun échantillon, aucune commande sans autorisation.\n\n## Sorties\n\n`products`, `competitors`, `suppliers` dans le cockpit ; notes de travail dans `../../Research/`,\n`../../Competitors/`, `../../Suppliers/`.\n"
+    },
+    {
+      "path": "Agents/Store Builder/AGENTS.md",
+      "text": "# Dossier de Store Builder\n\nLire `../../AGENTS.md`, puis `Store Builder.md`, puis le produit et l’étape concernés par la tâche en cours.\n\nCe dossier cadre la construction de la boutique. Ne pas ouvrir les dossiers d’un autre business que celui de ce coffre.\n"
+    },
+    {
+      "path": "Agents/Store Builder/CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Agents/Store Builder/Store Builder.md",
+      "text": "# Store Builder\n\n## Mission\n\nTransformer une offre validée en boutique testable : fiche produit, pages obligatoires,\nparcours d'achat, paiement, mesure.\n\n## Un run\n\n1. Lire `../../Processes/Store build.md` et l'offre validée.\n2. Lire le skill technique concerné dans les outils `commerce_list_skills` et `commerce_read_skill` avant toute manipulation.\n3. Construire, puis dérouler `../../Launch checklist.md` en écrivant une preuve par ligne.\n\n## Terminé quand\n\nUn enregistrement `storefronts` existe en `status: preview` (ou `building`), la checklist est\nprouvée ligne à ligne, et le parcours d'achat a été testé par une commande réelle remboursée.\n\n## Limites\n\nLire `../../Autonomy.md`. Aucune mise en ligne publique, aucune modification d'un compte de\npaiement ou de conditions de vente sans autorisation. `status: live` reflète une constatation\ndu propriétaire, pas une supposition.\n\n## Sorties\n\n`storefronts` et livrables `stage: store` dans le cockpit ; notes dans `../../Store/`.\n"
+    },
+    {
+      "path": "AGENTS.md",
+      "text": "# Comment ce business fonctionne\n\nLire dans cet ordre : `Start here.md`, `Business.md`, `Rules.md`, `Autonomy.md`, `Team.md`,\n`Source map.md`. Puis votre fiche de rôle, puis le seul produit ou la seule étape concernés\npar la tâche en cours. Ne pas charger l'ensemble du coffre pour une tâche ponctuelle.\n\nCe dossier est un espace de travail vide et réutilisable. Compléter les faits manquants\ndepuis le brief du propriétaire et des sources vérifiables. Ne jamais importer la marque, les\nproduits, les prix, les fournisseurs, les créatives ou les résultats d'un autre business.\n\n## Une tâche\n\nIdentifier l'étape (`Source map.md`) et le produit concerné, lire le processus correspondant\ndans `Processes/`, produire le livrable demandé, enregistrer les sources et ce qui manque,\npuis passer la main au rôle suivant selon `Processes/Handoffs.md`.\n\nUne fiche de rôle est une spécification. Un agent existe seulement quand l'exécution en cours\nen a réellement créé un. Un passage de relais n'est effectué que si un message ou une tâche a\nréellement été enregistré ; sinon il est écrit comme en attente.\n\n## Enregistrer le travail\n\nQuand les outils `commerce_*` sont disponibles, ils sont la source de vérité :\n\n- `commerce_schema` avant toute écriture : les champs, les valeurs autorisées et les étapes\n  viennent du serveur. Ne pas deviner une signature.\n- `commerce_records` pour lister, lire, créer et mettre à jour produits, concurrents,\n  fournisseurs, boutiques, créatives, campagnes, tâches, livrables et relevés.\n- `commerce_profile_update` pour le profil du business (nom, niche, marché, devise, étape).\n- `commerce_dashboard` pour adapter le cockpit : titre, introduction, sections, checklists.\n  La configuration est déclarative ; elle n'exécute aucun code.\n- `commerce_list_skills`, `commerce_read_skill` pour lire une procédure du pack,\n  `commerce_read_document` pour lire une note de ce coffre.\n\nNe jamais écrire directement dans les fichiers de base ou de verrou du cockpit. Sans ces\noutils, produire le livrable dans le dossier autorisé et nommer l'import restant à faire.\n\n## Distinguer ce qui est observé de ce qui est supposé\n\nUne publicité concurrente active, un nombre d'impressions ou une estimation de trafic sont\ndes **observations datées**. Ce ne sont pas des ventes, ni une preuve de rentabilité. Écrire\nla source et la date dans le champ prévu, et garder l'interprétation à part.\n\nNe jamais rédiger d'avis client, de témoignage ou de résultat qui n'a pas eu lieu. Un chiffre\nnon mesuré reste inconnu, jamais zéro.\n\nVoir `Autonomy.md` pour les actions qui exigent l'accord du propriétaire. Lire ce dossier\nn'active aucun compte, aucune routine et aucun envoi.\n"
+    },
+    {
+      "path": "Autonomy.md",
+      "text": "# Autonomie\n\nComportement par défaut, jusqu'à ce que le propriétaire enregistre une autorisation bornée\ndifférente dans `Decisions.md` :\n\n- Lire les fichiers et sources disponibles pour ce coffre ; rechercher, rédiger, organiser et\n  rendre compte à l'intérieur du business autorisé.\n- Écrire l'état métier dans le cockpit avec les outils `commerce_*` de l'exécution en cours.\n- Demander une information manquante seulement quand elle bloque une action utile ; continuer\n  la préparation indépendante en attendant.\n\nAutorisation explicite obligatoire avant de :\n\n- créer, modifier ou publier une boutique, une page, un produit ou un prix sur un compte réel ;\n- créer, activer, modifier ou arrêter une campagne publicitaire, ou engager la moindre dépense ;\n- envoyer un email, un message ou une séquence à une personne réelle ;\n- contacter un fournisseur, commander un échantillon ou passer une commande ;\n- modifier un compte de paiement, une configuration fiscale ou des conditions de vente ;\n- publier un contenu au nom de la marque.\n\nUne autorisation enregistrée précise : l'acteur, l'action, le système concerné, la limite\nchiffrée, la date d'expiration ou la condition de révocation, et la trace de l'instruction du\npropriétaire. Une ambition générale de lancer le business n'autorise aucune action externe.\n\nAucune routine, aucun connecteur et aucun compte n'est activé par la lecture de ce dossier.\n"
+    },
+    {
+      "path": "Brand/Positionnement.md",
+      "text": "# Positionnement et offre — modèle\n\n## Positionnement\n\n> Pour [client], la marque est celle qui [idée unique], parce que [raison vérifiable].\n\n- Formulation retenue :\n- Testée auprès de (personne extérieure, date) :\n- Reformulation obtenue :\n\n## Nom\n\n| Vérification | Résultat | Date |\n|---|---|---|\n| Marque déposée dans les juridictions visées | | |\n| Nom de domaine | | |\n| Comptes sociaux | | |\n\n## Charte minimale\n\n- Couleur de fond / accent / action :\n- Typographie :\n- Ton (trois adjectifs, et ce qu'on n'est pas) :\n\n## Offre\n\n| Élément | Contenu | Coût pour nous | Impact sur la marge |\n|---|---|---|---|\n| Produit | | | |\n| Complément | | | |\n| Garantie | | | |\n| Raison d'agir maintenant (uniquement si vraie) | | | |\n\n- Prix affiché :\n- Marge de contribution après offre :\n\n## Objections et réponses\n\n| Objection | Réponse factuelle | Preuve disponible |\n|---|---|---|\n\nCette liste alimente la fiche produit et les créatives.\n"
+    },
+    {
+      "path": "Business.md",
+      "text": "# Le business\n\nStatut : **non configuré**. Remplacer chaque `TODO` par le brief du propriétaire. Ne pas\ninventer de valeur par défaut ; un champ inconnu reste `TODO`.\n\n- Nom de la marque : TODO (peut rester vide tant que le produit n'est pas arrêté)\n- Propriétaire et décideur : TODO\n- Marché et langue de vente : TODO\n- Type de produit ou niche envisagée : TODO\n- Client visé et problème qu'il cherche à résoudre : TODO\n- Devise et fiscalité applicable : TODO\n- Budget de test accepté comme perte possible : TODO\n- Capacité de travail réelle par semaine : TODO\n- Outils et comptes déjà possédés (boutique, publicité, email, paiement) : TODO\n- Structure juridique et pays de facturation : TODO\n- Actions qui exigent un accord explicite : TODO\n- Contraintes personnelles ou réglementaires connues : TODO\n\n## Étape courante\n\nÉtape : `research`. Elle change quand le livrable de l'étape précédente existe et a été revu,\npas quand le travail a été commencé.\n\n## Ce qui est décidé et ce qui ne l'est pas\n\nLes décisions réellement prises vont dans `Decisions.md`, avec leur date et leur auteur. Tout\nle reste est une proposition, y compris ce que produit un agent.\n"
+    },
+    {
+      "path": "CLAUDE.md",
+      "text": "@AGENTS.md\n"
+    },
+    {
+      "path": "Competitors/Dossier concurrent.md",
+      "text": "# Dossier concurrent — modèle\n\n- Marque :\n- Produit comparable :\n- Site :\n- Bibliothèque publicitaire publique :\n- Date de relevé :\n\n## Observations datées\n\n| Élément | Observé | Date |\n|---|---|---|\n| Promesse principale | | |\n| Prix affiché | | |\n| Lots / montée de panier | | |\n| Garantie | | |\n| Marchés servis | | |\n| Publicités visibles (nombre, ancienneté de la plus ancienne) | | |\n| Structure de la page de vente | | |\n\n## Reproches récurrents (avis négatifs)\n\n| Reproche | Fréquence constatée | Source | Peut-on faire mieux, réellement ? |\n|---|---|---|---|\n\n## Hypothèses\n\nCe qui est déduit et non observé. À garder séparé du tableau ci-dessus.\n\n## Ce qu'on en retient\n\n- Place disponible :\n- Ce qu'on ne copiera pas :\n"
+    },
+    {
+      "path": "Connectors.md",
+      "text": "# Outils, comptes et source de vérité\n\nLe cockpit e-commerce détient l'état métier quand ce pack est installé depuis BizOS local.\nTout le reste — boutique, publicité, email, paiement, logistique — appartient au propriétaire\net n'est pas configuré par ce modèle.\n\n| Capacité | Outil / compte choisi | Source de vérité | Actions autorisées | État |\n|---|---|---|---|---|\n| État métier (produits, concurrents, boutiques, campagnes, relevés) | Cockpit e-commerce | Cockpit | Lecture et écriture via `commerce_*` | Fourni par l'installation |\n| Boutique | TODO | Plateforme | TODO | Non configuré |\n| Sourcing et fournisseurs | TODO | Devis et échanges datés | Aucun contact sans autorisation | Non configuré |\n| Publicité | TODO | Compte publicitaire | Aucune dépense sans autorisation | Non configuré |\n| Email et rétention | TODO | Outil email | Rédaction ; envoi sur autorisation | Non configuré |\n| Paiement | TODO | Prestataire de paiement | Aucune modification sans autorisation | Non configuré |\n| Logistique | TODO | Prestataire ou fournisseur | TODO | Non configuré |\n| Mesure | Saisie manuelle dans le cockpit | Relevés saisis, avec leur source | Saisie datée et sourcée | Manuel |\n\nPour chaque outil connecté, noter : le compte, le responsable, le périmètre accordé et la\nmanière de révoquer l'accès. Les identifiants restent hors de ce dossier.\n\nUn skill peut décrire un outil sans que cet outil soit installé. Une capacité absente produit\nun constat d'indisponibilité, jamais une action annoncée comme réalisée.\n"
+    },
+    {
+      "path": "Creatives/README.md",
+      "text": "# Creatives\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Decisions.md",
+      "text": "# Décisions\n\nAucune décision enregistrée.\n\nN'ajouter ici que des décisions réellement prises par le propriétaire :\n\n| Date | Décideur | Décision et périmètre | Source / autorisation | Revue ou expiration |\n|---|---|---|---|---|\n\nUne proposition reste dans les notes de travail jusqu'à la décision. Un exemple, un modèle ou\nune suggestion d'agent ne vaut pas autorisation.\n"
+    },
+    {
+      "path": "Deliverables/README.md",
+      "text": "# Deliverables\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Knowledge/Draft/README.md",
+      "text": "# Knowledge/Draft\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Knowledge map.md",
+      "text": "# Où lire quoi\n\n| Besoin | Lire |\n|---|---|\n| Cadre du business et priorité du moment | `Business.md`, `NOW.md` |\n| Limites, autorisations et décisions prises | `Rules.md`, `Autonomy.md`, `Decisions.md` |\n| Qui fait quoi | `Team.md`, `Agents/<Rôle>/<Rôle>.md` |\n| Quelle étape et quel livrable | `Source map.md` |\n| Méthode d'une étape | `Processes/<étape>.md` |\n| Avant toute mise en ligne | `Launch checklist.md` |\n| Outils, comptes et source de vérité | `Connectors.md` |\n| Procédure technique détaillée | `skills/` dans le coffre installé (lire le `SKILL.md` concerné) |\n\nLes dossiers `Research/`, `Products/`, `Competitors/`, `Suppliers/`, `Brand/`, `Store/`,\n`Creatives/`, `Acquisition/`, `Retention/`, `Operations/` et `Metrics/` accueillent le travail\ndaté. Chacun contient un modèle à copier.\n\nUn fait daté peut devenir faux : vérifier sa fraîcheur avant de le réutiliser, en particulier\nun prix fournisseur, un délai, une règle de plateforme ou une observation publicitaire.\n"
+    },
+    {
+      "path": "Launch checklist.md",
+      "text": "# Recette avant lancement\n\nPour chaque ligne : **validé avec preuve**, **à faire**, ou **non applicable avec justification**. Adapter cette liste au modèle choisi. Un point critique applicable non résolu bloque le lancement ; un point non applicable ne doit pas créer une tâche artificielle.\n\n- Produit, audience, offre et limites documentés ; sources et hypothèses distinctes.\n- Coûts, retours, acquisition et trésorerie évalués avec scénarios ; budget autorisé.\n- Fournisseur/échantillon, stock et délais vérifiés lorsque pertinents.\n- Droits des médias et preuves des affirmations établis ; aucun avis inventé.\n- Catalogue, variantes, prix, disponibilité, navigation et panier vérifiés.\n- Informations de contact, frais, délais et politiques adaptés à l'activité et au marché.\n- Checkout, confirmation et mesure testés en sandbox ou mode test approprié.\n- Transaction réelle seulement si nécessaire et autorisée ; frais possibles documentés.\n- Fichiers créatifs réellement produits et inspectés, liens disponibles.\n- Comptes et campagnes vérifiés, budget et conditions de revue/arrêt définis.\n- Emails/flows testés, exclusions après achat, suppressions et doublons contrôlés.\n- Circuit commande → préparation → suivi → exception → retour/remboursement prêt.\n- Publication autorisée et contrôlée dans les systèmes réels avant le statut `live`/`active`.\n\nConsigner la preuve dans le livrable de l'étape et les travaux restants dans le dashboard. Cette checklist décrit des critères, pas des résultats déjà obtenus.\n"
+    },
+    {
+      "path": "Metrics/README.md",
+      "text": "# Metrics\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "NOW.md",
+      "text": "# Maintenant\n\nStatut : en attente du brief du propriétaire.\n\n- Objectif de la période : TODO\n- Étape courante : `research`\n- Produit actif : aucun\n- Dernier livrable terminé et sa preuve : aucun\n- Blocage ou information manquante : le brief de `Business.md`\n- Prochaine action : répondre à la question de `Start here.md`\n- Responsable : Director\n\nMettre à jour après un travail réellement terminé, avec la date et le lien vers le livrable.\n"
+    },
+    {
+      "path": "Operations/README.md",
+      "text": "# Operations\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Processes/Acquisition launch.md",
+      "text": "# Préparer le lancement et la mesure\n\nResponsable : Acquisition. Entrées : produit, offre, fichiers créatifs, boutique et recette vérifiés.\n\nVérifier le magasin destinataire, les comptes autorisés, le suivi d'événements et les pages finales. La QA du checkout utilise le mode test approprié ; toute transaction réelle doit être nécessaire et couverte par l'autorisation du propriétaire. Les dépenses et publications restent dans la portée qu'il a donnée.\n\nLire les skills d'audit puis de gestion du canal retenu : Meta, Google ou autre outil disponible. Inspecter l'existant avant de créer des campagnes. Définir audience, objectif, créatives, budget, période de revue, hypothèse et critères de pause/itération. Les seuils proviennent de l'économie et du budget du projet, pas d'une règle universelle.\n\nUne structure de campagne ou une approche de reciblage est un choix à tester selon le volume et les exclusions nécessaires. Ne pas imposer un nombre fixe de campagnes ou interdire de nouveaux concepts par principe. Documenter les exclusions et les risques de doublon.\n\nEnregistrer le plan dans un livrable `acquisition` et la campagne au statut `draft` ou `ready`. Une campagne ne devient `active` qu'après confirmation de l'action dans la plateforme et contrôle de son état réel. Conserver les identifiants retournés et la date de contrôle.\n\nAprès lancement, rapprocher dépenses, commandes, retours et contribution avec les sources. Distinguer attribution de la plateforme, ventes observées et estimation d'incrémentalité. Écrire la prochaine décision et sa preuve.\n"
+    },
+    {
+      "path": "Processes/Competitor evidence.md",
+      "text": "# Observations concurrentes\n\nResponsable : Product Research. Livrable : comparaison datée et hypothèses de différenciation.\n\nChoisir un échantillon de concurrents directs et de solutions alternatives adapté au temps disponible. Examiner plusieurs types de preuve lorsque possible : pages produit, conditions affichées, bibliothèque publicitaire, avis et documentation. Indiquer les limites de couverture.\n\nPour chaque marque, enregistrer URL, date, marché, offre, prix, frais/délais affichés, angle publicitaire et sources. Le nombre d'annonces visibles est une observation ; dépenses, ventes ou rentabilité non publiées restent inconnues. Utiliser `competitors` avec le lien au produit, puis un livrable `competitors` pour l'analyse.\n\nLire des avis contrastés en tenant compte des biais de sélection. Des reproches récurrents peuvent suggérer un besoin à vérifier ; ils ne prouvent pas qu'une nouvelle offre le résoudra. Comparer bénéfices, objections, preuves, usages et limites.\n\nProposer une différenciation originale : audience, problème traité, caractéristique vérifiable ou service réellement tenable. Un angle sans preuve reste une hypothèse de recherche. Ne pas réutiliser les témoignages ou assets d'une autre marque comme preuves du propriétaire ; employer des médias dont les droits sont connus.\n\nÀ la fin : sources accessibles, interprétations séparées, produit concerné identifié, inconnues mises en tâches et prochaine décision proposée au Director. Lire `ecommerce-competitor-analyzer` ou `competitor-ads-analyst` pour la mission précise.\n"
+    },
+    {
+      "path": "Processes/Creative production.md",
+      "text": "# Production des créatives\n\nResponsable : Creative. Entrées : offre retenue, faits produit, audience et droits des assets.\n\nConstruire plusieurs angles originaux à partir de problèmes, usages et objections sourcés. Pour chacun, préciser hypothèse, message, preuve, format, placement et appel à l'action. Lire `ad-creative` et les observations concurrentes sans copier leurs assets ou témoignages.\n\nAccroche, rythme, niveau de connaissance de l'audience, offre, page et ciblage sont des variables à examiner. Ne pas attribuer un échec à une seule cause sans données. Définir un test et sa mesure avant de produire une série de variantes coûteuses.\n\nUtiliser les outils média réellement connectés par le propriétaire. Un prompt ou un script est un brief ; une image ou vidéo existe seulement après production d'un fichier lisible. Contrôler le rendu, les dimensions, le texte, le son, le produit représenté, la cohérence des promesses et les droits. En cas d'échec du fournisseur, enregistrer le brief et l'erreur, pas un asset prétendument terminé.\n\nEnregistrer le brief et les liens des fichiers dans `creatives`. Passer à `ready` seulement après contrôle du fichier et des conditions d'utilisation ; `published` nécessite une publication réelle. Le livrable d'acquisition reçoit les fichiers, angles, preuves, variations et questions ouvertes.\n\nÉvaluer les résultats avec la période, l'échantillon, le budget et le mode d'attribution. Le nombre de créations « gagnantes » seul ne mesure pas la qualité ni un effet causal.\n"
+    },
+    {
+      "path": "Processes/Handoffs.md",
+      "text": "# Passage de relais\n\nStructure d'un relais, à écrire dans un vrai message ou une vraie tâche :\n\n- Étape (`stage`) et produit concernés :\n- De / vers :\n- Objectif :\n- Entrées et sources datées :\n- Périmètre autorisé :\n- Livrable attendu et critère d'acceptation :\n- Échéance ou priorité :\n- Livrable produit et sa vérification :\n- Information manquante / prochaine action :\n\nLe destinataire vérifie le périmètre et les entrées, produit le livrable, puis répond avec son\nemplacement et sa vérification.\n\nSi aucun outil de message entre agents n'existe dans l'exécution en cours, enregistrer le\nrelais comme **en attente** et nommer qui doit le remettre. Ne jamais raconter comme exécuté\nun échange qui n'a été qu'écrit dans un fichier.\n"
+    },
+    {
+      "path": "Processes/Offer and brand.md",
+      "text": "# Offre et marque\n\nResponsables : Director et Creative. Entrée : faits produit et audience ; sortie : positionnement, offre chiffrée et textes vérifiables.\n\nÉcrire pour qui le produit est utile, quel problème il traite, sa différence concrète, ses limites et les preuves disponibles. Une promesse doit pouvoir être rattachée à une caractéristique ou une preuve. Écarter les témoignages inventés et les chiffres non établis.\n\nChoisir l'offre selon les coûts et le marché : produit seul, bundle, complément, livraison, service ou garantie peuvent être pertinents. Rien n'impose de combiner tous ces éléments. Évaluer leur effet attendu et leur coût ; une promotion peut réduire la contribution même si le panier augmente.\n\nMentionner une urgence ou une rareté seulement lorsqu'elle est réelle et explicable. Une offre sans urgence artificielle est parfaitement acceptable. Les conditions de garantie et de retour doivent correspondre à la politique effectivement tenue et aux règles applicables au marché.\n\nDéfinir une identité utilisable : nom, ton, couleurs, lisibilité, types de visuels et règles de preuve. Lire `brand-dna` et `copywriting` selon le besoin. Produire des textes originaux à partir du dossier, puis vérifier leur cohérence avec le catalogue, les frais et les délais affichés.\n\nEnregistrer le brief dans un livrable `offer` ou `brand`, avec hypothèses, variantes proposées et décision du propriétaire. Le Store Builder reçoit les textes, assets autorisés et conditions retenues.\n"
+    },
+    {
+      "path": "Processes/Operations review.md",
+      "text": "# Commandes, service et revue opérationnelle\n\nResponsable : Operations. Lire `ecommerce-operations`, les engagements de livraison et les politiques réellement applicables.\n\nPour une commande : vérifier le statut de paiement, le stock, l'attribution de préparation, l'expédition et le suivi auprès du système faisant autorité. Rapprocher les mouvements de stock, annulations et remboursements. Une promesse d'expédition ne prouve pas un envoi.\n\nPour une exception : identifier commande et problème, réunir les preuves, proposer une résolution conforme aux règles du propriétaire, puis lui transmettre les cas hors politique. Examiner les retours individuellement quand la situation le nécessite. Conserver statut, responsable et prochaine action.\n\nPour un retour : suivre demande, accord lorsque pertinent, réception/état, remise en stock ou perte, décision et confirmation du remboursement. Éviter les remboursements doubles. Les litiges sont un indicateur à surveiller avec les autres conditions du prestataire, pas une cause unique garantie de fermeture.\n\nLa revue datée porte sur commandes, dépenses, revenus, retours, hypothèses de contribution, trésorerie, stocks et qualité de service. Citer les sources et distinguer saisie manuelle de synchronisation. Enregistrer le rapport dans un livrable `operations` et les actions prioritaires dans `tasks`. Une routine n'est activée que si le propriétaire la demande dans le runtime disponible.\n"
+    },
+    {
+      "path": "Processes/Product research.md",
+      "text": "# Recherche produit\n\nResponsable : Product Research. Livrable : candidats sourcés, hypothèses et prochaine décision.\n\n1. Reprendre le marché, la langue, l'audience, les moyens disponibles et les contraintes du propriétaire. Choisir une taille de shortlist adaptée au temps et au budget ; aucune quantité universelle n'est obligatoire.\n2. Explorer les problèmes à résoudre et les alternatives déjà achetées. Pour chaque candidat, consigner les pages consultées, leur date, le prix observé, l'offre, les objections et les limites du produit.\n3. Distinguer fait observé, estimation et hypothèse. Une publicité active, un rang Amazon, des avis ou une estimation de trafic ne prouvent ni les ventes ni la rentabilité.\n4. Examiner demande, différenciation, saisonnalité, qualité, faisabilité fournisseur, droits et contraintes du marché. Accepter « inconnu, à vérifier » plutôt que forcer une réponse oui/non. Un produit saisonnier ou sans upsell peut rester pertinent selon le modèle choisi.\n5. Lire le skill `product-economics` pour calculer les coûts complets et les scénarios. Décider sur ces éléments plutôt que sur un multiple du prix d'achat.\n\nEnregistrer les candidats dans `products`, les observations dans `competitors`, le rapport comme livrable `research` et les recherches restantes comme tâches. Le produit reste `researching` tant que les inconnues critiques ne sont pas résolues. Le Director reçoit une proposition argumentée : poursuivre, tester sous conditions, ou écarter, avec preuves et limites.\n"
+    },
+    {
+      "path": "Processes/Retention email.md",
+      "text": "# Email et rétention\n\nResponsable : Operations. Livrable : flows et contenus testés, puis revue sourcée.\n\nLire `klaviyo-analyst` ou le skill du fournisseur réellement connecté. Examiner domaines d'envoi, sources de consentement, suppressions, événements reçus et flows existants. Une configuration supposée n'est pas une connexion vérifiée.\n\nChoisir selon le besoin : bienvenue, panier abandonné, après-achat, suivi d'usage ou réactivation. Pour chaque flow, définir déclencheur, éligibilité, délai, sortie, exclusion après achat, suppression après désinscription et prévention des doublons. Le délai est une hypothèse adaptée au parcours, pas une constante universelle.\n\nRédiger des textes originaux avec les faits produit et conditions d'offre retenues. Tester avec des profils et événements de recette : liens, personnalisation, fallback, rendu mobile, exclusions et suppression. Garder les flows en brouillon jusqu'à l'activation autorisée.\n\nUne capture supplémentaire ou une relance panier peut être une expérience ; elle ne garantit pas des inscriptions ou un retour immédiat. Comparer délivrabilité, clics, désinscriptions et commandes avec une période, un échantillon et un modèle d'attribution indiqués.\n\nEnregistrer la copie dans `creatives` (type `email`), la spécification dans un livrable `retention` et les actions restantes dans `tasks`. Une activation ou un envoi est rapporté uniquement avec la confirmation du fournisseur.\n"
+    },
+    {
+      "path": "Processes/Sourcing and unit economics.md",
+      "text": "# Fournisseurs et économie unitaire\n\nResponsable : Product Research, avec Operations. Livrable : comparaison de fournisseurs et calcul daté.\n\nComparer les fournisseurs adaptés au besoin : distributeur, plateforme ou fabricant. Demander des termes vérifiables : prix/devise/date du devis, quantité minimale, échantillon, contrôle qualité, production, expédition, suivi, retours et responsabilité en cas de défaut. Une information commerciale non confirmée reste une hypothèse. Une commande d'échantillon utilise le budget et l'autorisation du propriétaire.\n\nCalculer sur une base fiscale et monétaire cohérente : ventes nettes après remises et remboursements attendus, coût rendu du produit, préparation, livraison à charge, frais de paiement et coût attendu des retours. La contribution avant acquisition est la différence. Elle donne un seuil d'acquisition à l'équilibre ; un objectif inférieur doit laisser la contribution souhaitée.\n\nDistinguer coûts variables, frais fixes et besoin de trésorerie. Toute allocation d'abonnement par commande précise le volume supposé. Préparer des scénarios défavorable, central et favorable ; ne pas remplacer une inconnue par zéro dans l'analyse.\n\nUn coût d'acquisition estimé n'est pas un résultat mesuré. Si l'économie semble possible mais la demande inconnue, proposer un test borné avec seuils de revue. Enregistrer les fiches `suppliers` liées au produit, puis la méthode, les sources et les scénarios dans un livrable `sourcing`. Le prix/coût/livraison affiché par le dashboard n'est qu'une partie du calcul.\n"
+    },
+    {
+      "path": "Processes/Store build.md",
+      "text": "# Construire et tester la boutique Shopify\n\nResponsable : Store Builder. Sortie : code, catalogue brouillon, aperçu réel et rapport de recette.\n\n## Accès et environnement\n\nLire `shopify-setup` avec `commerce_read_skill`, puis les procédures Shopify pertinentes. Vérifier le magasin autorisé, les droits et la version des outils disponibles. Suivre la [documentation Shopify de création de thème](https://shopify.dev/docs/storefronts/themes/getting-started/create), consultée le 9 septembre 2026 et à revérifier avant exécution.\n\nAvec Shopify CLI configuré, `shopify theme init` prépare un thème. Depuis ce dossier, `shopify theme dev --store <votre-magasin>` démarre la prévisualisation de développement sur le magasin choisi. Vérifier l'identité du magasin avec `shopify theme info`. Un accès manquant doit être signalé ; ne pas inventer une URL d'aperçu.\n\n## Construction\n\nUtiliser `shopify-themes`, `shopify-liquid` et `shopify-catalog` pour le thème et les produits/variantes brouillons. Préparer fiche produit, navigation, panier, contact, informations de livraison et politiques correspondant à l'activité réelle. Utiliser des médias dont les droits sont connus et des textes fondés sur les faits produit.\n\nConcevoir des variantes à tester : les visuels, bénéfices et moyens de paiement peuvent modifier les résultats, mais aucune recette ne garantit la conversion. Vérifier disponibilité, frais, compatibilité et contraintes des prestataires de paiement pour le compte du propriétaire.\n\n## Recette\n\nExécuter les contrôles du skill `shopify-testing` et `shopify theme check`, puis vérifier mobile et bureau : choix de variante, prix/stock, quantité, ajout/retrait du panier, frais/délais, checkout en mode test, confirmation et événement de mesure. Utiliser d'abord les modes test/sandbox appropriés. Une transaction réelle n'est réalisée que si nécessaire et déjà autorisée avec un montant et un compte définis ; un remboursement ne garantit pas l'absence de frais.\n\nLire `shopify-performance` pour mesurer les pages réelles. Enregistrer les captures, erreurs corrigées, limites et identifiants de thème dans un livrable `store`. Le statut reste `building` ou `preview` selon les preuves. Une mise en ligne exige la portée autorisée par le propriétaire et une vérification réelle après publication. La commande de publication n'est pas une étape automatique de la recette.\n"
+    },
+    {
+      "path": "Products/Product template/Economie.md",
+      "text": "# Économie unitaire — modèle\n\nToutes les valeurs sont hors taxes, dans la devise du profil. Une valeur inconnue reste vide,\njamais zéro. Indiquer la source de chaque montant (devis, capture, estimation).\n\n| Ligne | Montant | Source |\n|---|---|---|\n| Prix de vente hors taxes | | |\n| Coût du produit rendu | | |\n| Emballage | | |\n| Préparation et manutention | | |\n| Expédition vers le client | | |\n| Frais de paiement | | |\n| Retours et casse (taux prudent) | | |\n| Outils et abonnements affectés | | |\n\n- **Marge de contribution** = prix hors taxes − somme des coûts :\n- **CPA plafond** (= marge de contribution) :\n- Coût d'acquisition plausible dans ce marché, et sur quelle base :\n\n## Scénarios\n\n| Scénario | Coût d'acquisition | Résultat par vente | Conclusion |\n|---|---|---|---|\n| Optimiste | | | |\n| Réaliste | | | |\n| Dégradé | | | |\n\nUn modèle qui ne tient que dans le scénario optimiste n'a pas de marge de manœuvre.\n\n## Conformité\n\n- Normes applicables dans le marché de vente :\n- Étiquetage et mentions obligatoires :\n- Vérifié le / par :\n"
+    },
+    {
+      "path": "Products/Product template/Produit.md",
+      "text": "# Produit — modèle\n\nCopier ce dossier pour chaque produit réellement travaillé. L'enregistrement `products` du\ncockpit fait foi ; cette note sert au raisonnement et aux sources détaillées.\n\n- Identifiant dans le cockpit :\n- Nom :\n- Statut : idea / researching / validated / rejected / launched\n- Problème résolu, en une phrase :\n- Client visé :\n- Marché et langue :\n\n## Preuves\n\n| Affirmation | Ce qui a été observé | Source | Date de relevé |\n|---|---|---|---|\n\nSéparer strictement l'observation de l'interprétation.\n\n## Les sept filtres\n\n| # | Filtre | Réponse | Justification |\n|---|---|---|---|\n| 1 | Besoin réel et déjà exprimé | | |\n| 2 | S'expédie sans difficulté | | |\n| 3 | Écart coût / valeur perçue large | | |\n| 4 | Vendable toute l'année | | |\n| 5 | Montée de panier possible | | |\n| 6 | Prix compatible avec le marché | | |\n| 7 | Niveau d'exigence atteignable | | |\n\n## Angle de différenciation\n\n- Pour qui :\n- Contre quel défaut du marché :\n- Preuve disponible aujourd'hui :\n\n## Décision\n\n- GO / KILL :\n- Date et motif :\n- Si KILL : ce qu'il faudrait pour le reconsidérer.\n"
+    },
+    {
+      "path": "Reports/Daily/README.md",
+      "text": "# Reports/Daily\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Research/Session de recherche.md",
+      "text": "# Session de recherche — modèle\n\nCopier ce fichier par session, en le datant. Une session correspond à un terrain examiné.\n\n- Date de la session :\n- Terrain examiné (qui, quel moment, quelle gêne) :\n- Marché et langue :\n\n## Signaux relevés\n\n| Signal | Ce qui a été observé | Source | Date de relevé |\n|---|---|---|---|\n| Demande d'achat | | | |\n| Demande de recherche | | | |\n| Demande sociale | | | |\n| Demande payante | | | |\n\nDeux signaux indépendants minimum pour continuer. Sinon, écrire « terrain abandonné » et le motif.\n\n## Candidats repérés\n\n| Produit | Marque de référence | Problème résolu | Prix constaté | Lien | Enregistré dans le cockpit |\n|---|---|---|---|---|---|\n\nDix candidats au maximum, toutes sessions confondues.\n\n## Conclusion\n\n- Ce qui est observé :\n- Ce qui reste une hypothèse :\n- Décision (continuer / abandonner) et motif :\n- Prochaine action :\n"
+    },
+    {
+      "path": "Retention/README.md",
+      "text": "# Retention\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Rules.md",
+      "text": "# Règles de travail\n\n1. Lire la source avant d'affirmer un fait. Noter la date de la source et la date de lecture\n   quand la fraîcheur compte : une publicité, un prix et un délai fournisseur changent.\n2. Marquer distinctement une observation, une estimation, une hypothèse, une décision et un\n   résultat mesuré. Ne jamais promouvoir une estimation en résultat.\n3. `TODO` pour tout fait inconnu. Une métrique non mesurée reste inconnue, pas zéro.\n4. Une seule source de vérité par donnée. Quand les outils `commerce_*` existent, le cockpit\n   détient les enregistrements ; les notes ne sont pas synchronisées automatiquement.\n5. Ne pas écrire d'avis, de témoignage, de chiffre de vente ou de garantie qui n'existe pas.\n   Un avis se collecte auprès d'un vrai client ; à défaut, la page n'en affiche aucun.\n6. S'inspirer d'un concurrent pour comprendre un mécanisme, jamais recopier ses textes, ses\n   visuels ou ses pages. Vérifier les droits de chaque média utilisé.\n7. Conserver les originaux. Créer une nouvelle version avant de réécrire un livrable existant.\n8. Enregistrer l'autorisation avant toute action externe : dépense, publication, envoi,\n   modification d'un compte. Préparer n'est pas exécuter.\n9. Un passage de relais nomme le responsable, le périmètre, le livrable, la preuve et la\n   prochaine action. Une tâche est terminée quand le livrable et sa vérification existent.\n10. Respecter un STOP. Ne pas relancer une chaîne arrêtée ni créer de récurrence implicite.\n11. Les identifiants et clés restent dans le gestionnaire de secrets de l'outil concerné,\n    jamais dans ces notes, ni dans un prompt, ni dans un export.\n"
+    },
+    {
+      "path": "Source map.md",
+      "text": "# Parcours e-commerce : livrables et passages de relais\n\nLes étapes correspondent au champ `stage` du dashboard. Adapter leurs critères au marché, au produit et au budget du propriétaire. Certaines recherches peuvent avancer en parallèle ; les promesses de la boutique dépendent des faits produit et le lancement dépend des contrôles applicables.\n\n| Étape | Processus | Livrable et condition de passage |\n|---|---|---|\n| `research` | Product research | Candidats sourcés, hypothèses et contraintes ; sélectionner une piste ou une recherche complémentaire argumentée. |\n| `competitors` | Competitor evidence | Comparaison datée des offres, pages et ads ; différenciation proposée avec preuves et limites. |\n| `sourcing` | Sourcing and unit economics | Fournisseurs, coûts complets, contribution et scénarios ; décision ou test borné, acquisition estimée distinguée du mesuré. |\n| `offer` | Offer and brand | Promesse, prix et conditions tenables ; composants promotionnels facultatifs et chiffrés. |\n| `brand` | Offer and brand | Identité, ton et assets autorisés ; cohérence avec l'offre et les faits vérifiée. |\n| `store` | Store build | Thème et catalogue, aperçu réel, panier/checkout testés ; critères applicables de la checklist documentés. |\n| `creative` | Creative production | Fichiers réellement produits, inspectés et reliés aux angles ; droits et plan de mesure connus. |\n| `acquisition` | Acquisition launch | Campagne préparée, mesure vérifiée, budget/portée autorisés ; contrôle réel après activation. |\n| `retention` | Retention email | Flows pertinents testés avec déclencheurs, exclusions et suppressions ; activation dans le périmètre autorisé. |\n| `operations` | Operations review | Circuit de commande, exceptions et retours, revue sourcée ; prochaines actions attribuées. |\n\nLes processus sont dans `Processes/`. Lire seulement l'étape utile. Chaque dossier doit distinguer observations, estimations, hypothèses, décisions et actions réellement exécutées.\n\nLes procédures sont des rédactions originales. Les skills réutilisés et leurs licences figurent dans les notices du pack, puis dans `skills/THIRD_PARTY_NOTICES.md` du coffre installé. Les transcripts et contextes privés de formation ne sont pas distribués.\n\nUne publicité visible ne permet pas de conclure aux ventes ou à la rentabilité de son annonceur. Un calcul prévisionnel n'est pas une validation de marché. Une préparation ou une prévisualisation n'est pas une publication.\n"
+    },
+    {
+      "path": "Start here.md",
+      "text": "# Démarrer votre business e-commerce\n\nCe dossier est un modèle de travail réutilisable. Il ne contient aucune boutique existante,\naucun compte, aucun client et aucun résultat. Tout ce qui y figure est à remplir.\n\n## Première session\n\nOuvrez ce dossier avec votre agent et demandez-lui de lire `AGENTS.md`. Répondez ensuite à\ncette question, qui suffit à démarrer :\n\n> Dans quel marché et quelle langue voulez-vous vendre, quel type de produit vous intéresse,\n> quel budget de test acceptez-vous de perdre, quels outils et comptes possédez-vous déjà,\n> et quelles actions exigent votre accord explicite ?\n\nLa réponse va dans `Business.md`. Ce qui reste inconnu reste `TODO` : rien n'est inventé.\nLe rôle Director écrit ensuite le premier plan dans `NOW.md`.\n\n## Comment travailler ensuite\n\nLe business avance en dix étapes, décrites dans `Source map.md` : recherche produit,\nconcurrents, sourcing, offre, marque, boutique, créatives, acquisition, rétention,\nopérations. Chaque tâche et chaque livrable porte une de ces étapes.\n\nNe lancez pas les dix en parallèle. Une étape produit un livrable vérifiable, puis la\nsuivante s'appuie dessus. La séquence bloquante est : **un produit dont l'économie tient**\navant toute construction de boutique, et **une boutique dont le parcours d'achat est testé**\navant toute dépense publicitaire.\n\n## Où sont les données\n\nQuand ce pack est installé depuis BizOS local, le cockpit e-commerce détient l'état\ncanonique : profil, produits, concurrents, fournisseurs, boutiques, créatives, campagnes,\ntâches, livrables et relevés. Les agents l'écrivent avec les outils `commerce_*`. Les notes\nMarkdown de ce coffre complètent cet enregistrement — elles ne le remplacent pas.\n\nSans ces outils, écrivez le livrable dans le dossier concerné de ce coffre et indiquez\nexplicitement ce qui reste à importer. Ne dites jamais qu'une donnée est enregistrée dans le\ncockpit si aucun outil ne l'y a écrite.\n\n## Ce que ce pack ne fait pas\n\nIl ne crée pas de boutique, ne publie rien, ne lance aucune campagne, n'envoie aucun email\net ne dépense rien. Les comptes Shopify, publicitaires, email et de paiement sont les vôtres,\net chaque action externe demande votre autorisation explicite (`Autonomy.md`).\n\nLes skills du pack (`skills/` dans le coffre installé) décrivent des procédures. Lire un skill ne connecte aucun\noutil et n'installe aucun CLI.\n"
+    },
+    {
+      "path": "Store/README.md",
+      "text": "# Store\n\nConservez ici les fichiers et preuves de cette étape. Les fiches, tâches et livrables métier se mettent à jour dans le dashboard et avec les outils commerce_* ; notez leurs identifiants pour relier les fichiers au produit concerné.\n"
+    },
+    {
+      "path": "Suppliers/Fiche fournisseur.md",
+      "text": "# Fiche fournisseur — modèle\n\n- Nom de l'entreprise :\n- Plateforme ou origine du contact :\n- Localisation :\n- Produit concerné :\n\n## Vérifications\n\n| Point | Constaté | Date |\n|---|---|---|\n| Statut vérifié par la plateforme | | |\n| Protection des paiements disponible | | |\n| Certifications pertinentes pour le marché de vente | | |\n| Ancienneté et taille déclarées | | |\n| Cohérence du catalogue avec la catégorie | | |\n\n## Conditions\n\n| Élément | Valeur | Source / date |\n|---|---|---|\n| Coût unitaire | | |\n| Frais d'expédition | | |\n| Délai annoncé | | |\n| Quantité minimale | | |\n| Personnalisation possible | | |\n| Conditions de paiement | | |\n\n## Échantillon\n\n- Commandé le / reçu le :\n- Délai réel constaté :\n- Qualité constatée :\n- Écart avec la fiche produit :\n\n## Statut\n\n- Autorisation de contact obtenue le :\n- Décision : à retenir / à écarter, et motif.\n"
+    },
+    {
+      "path": "Team.md",
+      "text": "# L'équipe\n\nSix rôles réutilisables. Votre exécution peut créer six agents, ou un seul assistant peut les\ntenir successivement. Écrire une fiche de rôle ne crée aucun agent.\n\n| Rôle | Possède | Passe la main avec |\n|---|---|---|\n| Director | Brief du propriétaire, priorités, arbitrages, qualité, décision GO/KILL | Une étape cadrée et son critère d'acceptation |\n| Product Research | Niches, demande observée, shortlist, concurrents, sourcing, économie unitaire | Un produit avec sa marge et son CPA plafond |\n| Store Builder | Offre affichée, fiche produit, pages, parcours d'achat, paiement, conformité | Une boutique en aperçu et sa checklist prouvée |\n| Creative | Angles, hooks, scripts, visuels, textes publicitaires | Un lot de créatives par angle, prêt à tester |\n| Acquisition | Structure de campagne, budget, seuils de décision, plan de mesure | Un plan de lancement en attente d'autorisation |\n| Operations | Rétention, service client, logistique, relevés, revue et décisions | Une revue datée et une décision par période |\n\nChaque rôle lit `AGENTS.md`, sa fiche dans `Agents/<Rôle>/`, puis seulement le produit et\nl'étape concernés. `Processes/Handoffs.md` décrit le format de passage de relais.\n\nDans BizOS local, l’installation du template crée les six agents et leur équipe. Dans un autre assistant, les fichiers restent des rôles à exécuter avec ses propres outils. Vérifier les messages et tâches réellement persistés pour chaque passage de relais.\n"
+    }
+  ],
+  "bots": [
+    {
+      "slug": "director",
+      "name": "Director",
+      "title": "Direction et priorités",
+      "description": "Direction et priorités",
+      "instructions": "Read ../../AGENTS.md and Director.md in your role folder, then only the assigned product and current stage. Read the relevant installed skill with commerce_read_skill. Use commerce_* tools to save actual records and deliverables in Apps; verify their returned IDs. Follow the owner’s current authorization and record evidence, unknowns and the next handoff.",
+      "welcome": "Je suis Director. Décris ton activité et la prochaine étape à préparer pour que je puisse travailler sur ton dossier."
+    },
+    {
+      "slug": "product-research",
+      "name": "Product Research",
+      "title": "Produits et preuves",
+      "description": "Produits et preuves",
+      "instructions": "Read ../../AGENTS.md and Product Research.md in your role folder, then only the assigned product and current stage. Read the relevant installed skill with commerce_read_skill. Use commerce_* tools to save actual records and deliverables in Apps; verify their returned IDs. Follow the owner’s current authorization and record evidence, unknowns and the next handoff.",
+      "welcome": "Je suis Product Research. Décris ton activité et la prochaine étape à préparer pour que je puisse travailler sur ton dossier."
+    },
+    {
+      "slug": "store-builder",
+      "name": "Store Builder",
+      "title": "Construction et recette Shopify",
+      "description": "Construction et recette Shopify",
+      "instructions": "Read ../../AGENTS.md and Store Builder.md in your role folder, then only the assigned product and current stage. Read the relevant installed skill with commerce_read_skill. Use commerce_* tools to save actual records and deliverables in Apps; verify their returned IDs. Follow the owner’s current authorization and record evidence, unknowns and the next handoff.",
+      "welcome": "Je suis Store Builder. Décris ton activité et la prochaine étape à préparer pour que je puisse travailler sur ton dossier."
+    },
+    {
+      "slug": "creative",
+      "name": "Creative",
+      "title": "Créatives et contenus",
+      "description": "Créatives et contenus",
+      "instructions": "Read ../../AGENTS.md and Creative.md in your role folder, then only the assigned product and current stage. Read the relevant installed skill with commerce_read_skill. Use commerce_* tools to save actual records and deliverables in Apps; verify their returned IDs. Follow the owner’s current authorization and record evidence, unknowns and the next handoff.",
+      "welcome": "Je suis Creative. Décris ton activité et la prochaine étape à préparer pour que je puisse travailler sur ton dossier."
+    },
+    {
+      "slug": "acquisition",
+      "name": "Acquisition",
+      "title": "Lancement et mesure",
+      "description": "Lancement et mesure",
+      "instructions": "Read ../../AGENTS.md and Acquisition.md in your role folder, then only the assigned product and current stage. Read the relevant installed skill with commerce_read_skill. Use commerce_* tools to save actual records and deliverables in Apps; verify their returned IDs. Follow the owner’s current authorization and record evidence, unknowns and the next handoff.",
+      "welcome": "Je suis Acquisition. Décris ton activité et la prochaine étape à préparer pour que je puisse travailler sur ton dossier."
+    },
+    {
+      "slug": "operations",
+      "name": "Operations",
+      "title": "Commandes, service et rétention",
+      "description": "Commandes, service et rétention",
+      "instructions": "Read ../../AGENTS.md and Operations.md in your role folder, then only the assigned product and current stage. Read the relevant installed skill with commerce_read_skill. Use commerce_* tools to save actual records and deliverables in Apps; verify their returned IDs. Follow the owner’s current authorization and record evidence, unknowns and the next handoff.",
+      "welcome": "Je suis Operations. Décris ton activité et la prochaine étape à préparer pour que je puisse travailler sur ton dossier."
+    }
+  ],
+  "team": {
+    "name": "E-commerce"
+  },
+  "routines": []
+}

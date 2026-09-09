@@ -1,8 +1,8 @@
 {
   "name": "leadfactory-oss",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Outil local de gestion d'agence lead gen (zéro dépendance)",
+  "description": "Templates métier locaux Agency et E-commerce : dashboards, skills et intégration BizOS",
   "type": "module",
   "engines": {
     "node": ">=22"

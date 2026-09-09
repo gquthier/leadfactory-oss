@@ -86,7 +86,7 @@ export interface AccessSettings {
  *
  * `folderId` is what the renderer sends back to `access.grantKnown`: the MAIN
  * process resolves the id to a path with `app.getPath`, so tapping "Documents"
- * cannot become "share `/Users/ada`" by editing one string in a compromised
+ * cannot become "share `<home>`" by editing one string in a compromised
  * page. */
 export interface FolderSuggestion {
   folderId: string;

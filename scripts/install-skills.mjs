@@ -2,7 +2,7 @@
 // Installe les dossiers de skills de ./skills vers un dossier cible (Codex, Claude Code, autre agent).
 // Zéro dépendance. Refuse toute collision avant d'écrire quoi que ce soit. Ne modifie aucune config globale.
 //
-//   node scripts/install-skills.mjs --target <dossier> [--only a,b] [--dry-run]
+//   node scripts/install-skills.mjs --target <dossier> [--pack agency|ecommerce] [--only a,b] [--dry-run]
 //
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -12,17 +12,19 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SKILLS_ROOT = path.resolve(HERE, '..', 'skills');
 
 function parseArgs(argv) {
-  const out = { target: null, only: null, dryRun: false, help: false };
+  const out = { target: null, only: null, dryRun: false, help: false, pack: "agency" };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--target') out.target = argv[++i];
     else if (a.startsWith('--target=')) out.target = a.slice('--target='.length);
+    else if (a === '--pack') out.pack = argv[++i];
     else if (a === '--only') out.only = argv[++i];
     else if (a.startsWith('--only=')) out.only = a.slice('--only='.length);
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '-h' || a === '--help') out.help = true;
     else throw new Error(`option inconnue : ${a}`);
   }
+  if (!["agency", "ecommerce"].includes(out.pack)) throw new Error("--pack doit être agency ou ecommerce");
   if (out.only) out.only = out.only.split(',').map((s) => s.trim()).filter(Boolean);
   return out;
 }
@@ -93,10 +95,11 @@ if (isMain) {
   try {
     const args = parseArgs(process.argv.slice(2));
     if (args.help || !args.target) {
-      console.log('Usage : node scripts/install-skills.mjs --target <dossier> [--only a,b] [--dry-run]');
+      console.log('Usage : node scripts/install-skills.mjs --target <dossier> [--pack agency|ecommerce] [--only a,b] [--dry-run]');
       process.exit(args.help ? 0 : 2);
     }
-    const res = await installSkills({ ...args, log: console.log });
+    const root = args.pack === "ecommerce" ? path.resolve(HERE, "..", "ecommerce", "skills") : SKILLS_ROOT;
+    const res = await installSkills({ ...args, root, log: console.log });
     if (!args.dryRun) console.log(`${res.installed.length} skill(s) installé(s) dans ${res.target}. Relancez votre agent pour les charger.`);
   } catch (err) {
     console.error(`Erreur : ${err.message}`);

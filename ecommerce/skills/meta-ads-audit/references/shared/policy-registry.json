@@ -1,0 +1,260 @@
+{
+  "$schema": "policy-registry/v1",
+  "description": "Versioned registry of Meta Ads (Facebook + Instagram) policy and behavior assumptions used across toprank meta-ads skills. Each entry tracks a specific assumption, its volatility, verification source, and when it should be re-verified.",
+  "last_full_review": "2026-05-01",
+  "entries": [
+    {
+      "id": "meta-object-hierarchy",
+      "category": "campaign-structure",
+      "rule": "Meta Ads object hierarchy: Ad Account > Campaign > Ad Set > Ad. Objective and budget (when CBO is on) live at the campaign level; budget (when ABO), audience, placements, optimization event, and schedule live at the ad set level; creative lives at the ad level.",
+      "volatility": "stable",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/613846972027099",
+      "notes": "The hierarchy has been stable for years. Advantage+ Shopping flattens some of this (no manual ad set targeting) but the underlying objects still exist.",
+      "stale_after_days": 365
+    },
+    {
+      "id": "meta-metric-definitions",
+      "category": "benchmarks",
+      "rule": "CPM = (Spend / Impressions) × 1000. CTR (link) = Link Clicks / Impressions × 100. CPC (link) = Spend / Link Clicks. CPA = Spend / Results. ROAS = Purchase Conversion Value / Spend. Frequency = Impressions / Reach.",
+      "volatility": "stable",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/235811013522940",
+      "notes": "Meta surfaces both 'clicks (all)' and 'inline_link_clicks'. Toprank skills always use link clicks for CTR/CPC because all-clicks include profile/like/see-more clicks that aren't optimization-relevant.",
+      "stale_after_days": 365
+    },
+    {
+      "id": "meta-graph-api-stability",
+      "category": "campaign-structure",
+      "rule": "Meta Marketing API uses the Graph API surface — REST-style endpoints under /act_<account_id>/{campaigns,adsets,ads,insights}, plus per-object endpoints. Field selection is via the `fields` query parameter; insights breakdown via the `breakdowns` parameter.",
+      "volatility": "stable",
+      "last_verified": "2026-05-01",
+      "source": "Meta Marketing API docs",
+      "source_url": "https://developers.facebook.com/docs/marketing-apis/",
+      "notes": "API versions are released regularly; field availability and naming can shift between versions. The `runScript` sandbox abstracts version selection but new fields require new versions.",
+      "stale_after_days": 365
+    },
+    {
+      "id": "ad-creative-character-limits",
+      "category": "ad-creative",
+      "rule": "Ad creative recommended limits: Primary text 125 chars before truncation (max 2200), Headline 27 chars before truncation (max 40), Description 27 chars (max 30 in feed, used in Audience Network), URL display path optional. Single image ratio 1:1 or 4:5. Reels / Stories video 9:16. Image min 1080x1080.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/ads-guide/",
+      "notes": "The hard maximums are stable; the truncation thresholds (visible-without-See-More) shift with placement-layout changes. Always verify current truncation per surface before promising 'fully visible'.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-learning-phase",
+      "category": "delivery",
+      "rule": "An ad set enters Learning when newly created or significantly edited. It exits Learning after ~50 optimization events within ~7 days (the '50 in 7' rule of thumb). Performance during Learning is unstable — do not judge results or stack edits during this period. Significant edits include: targeting change, optimization event change, budget change > ~20%, schedule change, and creative replacement.",
+      "volatility": "high",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/112167992830700",
+      "notes": "The '50 conversions per ad set in 7 days' threshold is a published Meta heuristic; the underlying delivery system has changed materially with each iteration of Meta's bidding model. A 'Learning Limited' status can also stick after the 7-day window if conversion volume is too low.",
+      "stale_after_days": 90
+    },
+    {
+      "id": "meta-attribution-default",
+      "category": "attribution",
+      "rule": "Default attribution setting is 7-day click + 1-day view (7DC1DV). Available options: 1-day click, 7-day click, 1-day click + 1-day view, 7-day click + 1-day view. Attribution is set at the ad set level. View-through windows ≥ 1 day are no longer offered for new ad sets in some objectives.",
+      "volatility": "high",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/458681590974355",
+      "notes": "Post-iOS 14 the default narrowed from 28-day click + 1-day view down to 7-day click + 1-day view. Reported ROAS shifted accordingly; longer-window comparisons against pre-2021 numbers are not apples-to-apples.",
+      "stale_after_days": 90
+    },
+    {
+      "id": "meta-cbo-vs-abo",
+      "category": "campaign-structure",
+      "rule": "Campaign Budget Optimization (CBO / Advantage Campaign Budget): budget is set at campaign level and Meta distributes across ad sets in real time, optimizing for total events. Ad Set Budget Optimization (ABO): budget is set per ad set, giving the manager direct control. Meta increasingly defaults to CBO; ABO remains available for testing isolated audiences.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/153514848493595",
+      "notes": "CBO is the recommended default for prospecting at scale because it lets Meta's bidding LLM allocate dynamically. ABO is preferred for clean A/B audience tests and for retargeting where you want guaranteed spend per audience.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-advantage-plus-shopping",
+      "category": "campaign-structure",
+      "rule": "Advantage+ Shopping Campaigns (ASC) consolidate prospecting and retargeting into a single campaign with broad targeting. Existing-customer cap (default 15%) controls how much budget can flow to existing customers. ASC tends to outperform manual prospecting at scale but reduces granular control.",
+      "volatility": "high",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/3419259681456023",
+      "notes": "ASC is rapidly evolving — placements, audience controls, and creative requirements have all changed within the last 12 months. Verify current capabilities before recommending a structure migration.",
+      "stale_after_days": 90
+    },
+    {
+      "id": "meta-frequency-fatigue",
+      "category": "delivery",
+      "rule": "Cold prospecting frequency above ~2.0/week and warm retargeting frequency above ~3.5/week correlate with creative fatigue: rising CPM, falling CTR, falling CVR. The fix is creative refresh or audience rotation — not budget changes.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "industry reports",
+      "source_url": null,
+      "notes": "Specific thresholds vary by audience size, vertical, and creative format. Video creative fatigues differently from static; UGC fatigues slower than studio. Use the trend (week-over-week CPM rise) more than the absolute number.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-audience-overlap-significance",
+      "category": "audience",
+      "rule": "Audience overlap above ~25% between active ad sets in the same campaign causes the same user to be eligible for multiple bids — Meta self-arbitrates but signal density is split, slowing learning. The Audience Overlap tool reports this. Overlap above ~50% is structurally problematic.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/213871055521091",
+      "notes": "Within a campaign, Meta's auction de-duplicates so the user only sees one ad — but the inefficiency is in the LLM's signal allocation, not in waste. Across campaigns, overlap can cause genuine duplicate impressions.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-bid-strategies",
+      "category": "bidding",
+      "rule": "Available bid strategies: Highest Volume (default, no cap), Highest Value (auction value optimization, requires Conversions optimization with value), Cost per Result Goal (formerly Cost Cap — soft target), Bid Cap (hard ceiling — manual only), Minimum ROAS (Target ROAS equivalent for Sales objective).",
+      "volatility": "high",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/1619591734742116",
+      "notes": "Names and exact behaviors shift with each platform iteration. Cost-per-Result Goal was renamed from Cost Cap; Minimum ROAS replaced Target ROAS in the Sales objective. Verify current naming before guiding a strategy switch.",
+      "stale_after_days": 90
+    },
+    {
+      "id": "meta-ios-att-impact",
+      "category": "attribution",
+      "rule": "Apple's App Tracking Transparency (ATT) limits Meta's ability to attribute conversions on iOS users who decline tracking. Reported conversion volume is supplemented with modeled conversions; modeled conversions can introduce 15–30% variance vs. ground truth. Aggregated Event Measurement (AEM) is the post-ATT measurement framework.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/331612538028890",
+      "notes": "Modeling improves over time but the gap to deterministic attribution remains. Always cross-check Meta-reported ROAS against an off-platform truth (Shopify, GA4, internal MMM) before scaling decisions.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-pixel-capi-required",
+      "category": "tracking",
+      "rule": "Meta Pixel + Conversions API (CAPI) deduplicated server-side events are the post-iOS-14 standard. Pixel-only setups lose ~15–25% of events relative to a Pixel + CAPI deployment. Without CAPI, Smart Bidding and lookalikes degrade.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/2861400507613887",
+      "notes": "Event Match Quality (EMQ) score in Events Manager indicates how well Meta can match events to users — score below 7.0 means weak signal. Stripe, Shopify, and major CMSes have native CAPI integrations.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-creative-volume-recommendation",
+      "category": "ad-creative",
+      "rule": "Meta's published guidance is to refresh creative every 2–4 weeks for active ad sets, with at least 4–6 distinct creative concepts running concurrently per campaign for the algorithm to optimize. Same creative across multiple aspect ratios (1:1, 4:5, 9:16) counts as one concept, not three.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": null,
+      "notes": "The pace varies by spend velocity — a $50/day account can run the same creative for 6+ weeks; a $5,000/day account fatigues a hero ad in 5–7 days. Use frequency trend, not calendar age, as the trigger.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-industry-cpm-cpc-benchmarks",
+      "category": "benchmarks",
+      "rule": "Industry benchmarks (2024–2025 vintage): Ecommerce CPM $9–14 / link CTR 1.0–1.6% / CPA $25–45, DTC subscription CPM $11–16 / CTR 0.9–1.4% / CPA $35–65, Lead-gen B2C CPM $7–11 / CTR 1.2–2.0% / CPA $12–28, B2B SaaS CPM $14–22 / CTR 0.6–1.0% / CPA $80–180. Q4 (Oct–Dec) inflates CPM 30–60%.",
+      "volatility": "high",
+      "last_verified": "2026-05-01",
+      "source": "industry reports",
+      "source_url": null,
+      "notes": "Based on third-party reports (Varos, Madgicx, Common Thread). CPMs trend upward 8–15% YoY. Q4 inflation is the most reliable seasonal pattern. Adjust 2024–2025 figures upward 10–15% for 2026.",
+      "stale_after_days": 90
+    },
+    {
+      "id": "meta-creative-asset-ratios",
+      "category": "ad-creative",
+      "rule": "Creative aspect ratios — Feed: 1:1 or 4:5 (4:5 dominates mobile feed). Reels / Stories: 9:16 (full-bleed vertical). In-stream video: 16:9. Marketplace: 1:1. Right column (desktop): 1.91:1. Always upload all relevant ratios — Meta serves only the best fit per placement.",
+      "volatility": "stable",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/ads-guide/image/facebook-feed",
+      "notes": "Placement-by-placement ratio guidance is stable. The mix of placements served can shift with platform redesigns (e.g., Marketplace expansion), but the per-placement ratio doesn't change.",
+      "stale_after_days": 365
+    },
+    {
+      "id": "meta-significant-edit-relearn",
+      "category": "delivery",
+      "rule": "Significant edits trigger a Learning Phase reset: changing the optimization event, audience targeting, attribution window, ad creative, or budget by more than ~20%. Stacking edits within Learning compounds delivery instability — change one variable at a time and wait 3–5 days between edits.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/2331789754920189",
+      "notes": "The ~20% budget threshold is a Meta-published heuristic; the actual trigger is opaque. Anecdotally, identical creative re-uploaded under a new ad ID also triggers re-learning. Optimization-event change is the most aggressive reset.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-policy-banned-content",
+      "category": "policy",
+      "rule": "Meta ad policies prohibit before/after imagery for body/health, sensational health claims, attribute targeting that implies a personal characteristic ('Are you struggling with X?'), unrealistic income claims, and most cryptocurrency / financial-product promotion without prior approval. Restricted categories (alcohol, dating, weight-loss) require additional approvals.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Advertising Standards",
+      "source_url": "https://transparency.fb.com/policies/ad-standards/",
+      "notes": "Personal-attribute policy is the most-violated and most-misunderstood — copy can describe the offering ('a diet plan') but cannot imply you know something about the viewer ('you struggle with weight'). Always cite the specific policy section when flagging a violation.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-special-ad-categories",
+      "category": "policy",
+      "rule": "Special Ad Categories (Credit, Employment, Housing, Social Issues / Elections / Politics) restrict targeting — no age / gender / detailed demographic targeting, geographic targeting limited to ≥15-mile radius. Misclassification or omission of a Special Ad Category is a takedown trigger.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/298000447747885",
+      "notes": "If the user's vertical is in a Special Ad Category and they're running standard ads, that's a high-priority audit finding. The set of categories has expanded over time; Social Issues was the most recent addition.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-broad-targeting-recommendation",
+      "category": "audience",
+      "rule": "Meta's current published guidance favors broad targeting (no detailed-targeting layers, age 18–65+, both genders, country-level geo) for prospecting on Sales / Conversions objectives, letting the algorithm find buyers. Detailed targeting interest layers are increasingly redundant with the bidding LLM.",
+      "volatility": "high",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": null,
+      "notes": "This is a meaningful shift from pre-2022 best practice (narrow lookalikes + interest stacks). Newer accounts under $100/day still benefit from lookalike seeding; mature accounts > $1k/day usually outperform with broad targeting.",
+      "stale_after_days": 90
+    },
+    {
+      "id": "meta-creative-fatigue-signals",
+      "category": "ad-creative",
+      "rule": "Creative fatigue signals (in priority order): (1) link CTR drop ≥30% week-over-week, (2) CPM rise ≥30% week-over-week, (3) frequency > 3.0 with negative trend on (1) or (2), (4) hook rate (3-sec views / impressions) drop on video. The earliest signal usually leads the others by ~3–5 days.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "industry reports",
+      "source_url": null,
+      "notes": "Watch hook rate first on video creative — it leads CTR by roughly a week. For static, CTR is the primary leading indicator. CPM is a lagging indicator and confirms what CTR / hook already showed.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-ab-testing-min-volume",
+      "category": "experiments",
+      "rule": "Meta's A/B Test tool requires sufficient volume to declare a winner — practically, ≥ ~50 conversions per cell across the test window. Below that volume, prefer a structured creative round-robin (4–6 ads in one ad set, judged by ad-level CTR/CPA after 50+ events each) over a formal A/B test.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "Meta Business Help",
+      "source_url": "https://www.facebook.com/business/help/433563588396484",
+      "notes": "The platform's confidence calculation requires both volume and a meaningful effect size. The 50/50 traffic split also doubles the time-to-significance vs. running one well-tuned ad set.",
+      "stale_after_days": 180
+    },
+    {
+      "id": "meta-cpm-q4-seasonality",
+      "category": "benchmarks",
+      "rule": "Q4 CPM inflation: November (Black Friday week / Cyber Monday) is the single most expensive impression cohort of the year, typically 60–100% above September baseline. December tapers but stays 30–50% elevated until ~Dec 26. January CPMs collapse 20–30% below September baseline as ecom advertisers pull back.",
+      "volatility": "moderate",
+      "last_verified": "2026-05-01",
+      "source": "industry reports",
+      "source_url": null,
+      "notes": "Pattern holds across most consumer verticals. B2B and SaaS see milder Q4 inflation (15–30%). DTC ecom should plan creative refresh and budget ramps accordingly — entering Black Friday with fatigued creative is a margin disaster.",
+      "stale_after_days": 90
+    }
+  ]
+}

@@ -233,7 +233,7 @@ function assertNotDenied(path: string, policy: AccessPolicy): void {
   }
 }
 
-/** `/Users/ada/Documents` → `~/Documents`, the way the Finder says it. */
+/** `<home>/Documents` → `~/Documents`, the way the Finder says it. */
 export function displayPath(path: string, home: string): string {
   return path === home ? "~" : within(path, home) ? `~${path.slice(home.length)}` : path;
 }

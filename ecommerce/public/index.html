@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cockpit e-commerce — pilotage local</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">EC</span>
+          <div>
+            <strong>E-commerce</strong>
+            <small>cockpit local</small>
+          </div>
+        </div>
+        <nav id="nav" class="nav"></nav>
+        <div class="sidebar-foot">
+          <span id="save-state" class="save-state">Prêt</span>
+          <small id="host-label">données locales</small>
+        </div>
+      </aside>
+      <main class="main">
+        <div id="view" class="view"></div>
+      </main>
+    </div>
+    <div id="live-bar" class="live-bar" hidden>
+      <span id="live-text" class="live-text"></span>
+      <button id="live-action" class="btn small" type="button">Recharger</button>
+    </div>
+    <div id="toast" class="toast" hidden></div>
+    <dialog id="dialog" class="dialog"></dialog>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

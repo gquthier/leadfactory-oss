@@ -127,9 +127,9 @@ export class ThreadStore {
       botId?: string;
       runId?: string;
       replyToMessageId?: string;
-      /** A caller-chosen id, for a message that must exist at most once
-       * (a template greeting written again after a crash). The log stays
-       * append-only; a second line with the same id collapses on read. */
+      /** An id the caller wrote down before appending (a template's journal),
+       * so a crash right after the append leaves a message it can find and
+       * never a second copy. */
       id?: string;
     },
   ): ThreadMessage {

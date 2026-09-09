@@ -1,10 +1,12 @@
-// Types for the embedded LeadFactory OSS cockpit (`src/agency-kit/lib/app.mjs`,
-// mirrored to `dist/agency-kit/` at build time).
+// Types for the embedded cockpits (`src/agency-kit/lib/app.mjs` and
+// `src/agency-kit/ecommerce/lib/app.mjs`, mirrored to `dist/agency-kit/` at
+// build time by `scripts/copy-agency-kit.mjs`).
 //
-// The kit is plain JavaScript shipped verbatim under its MIT licence; this
-// declaration is the only TypeScript view of it. Pattern-matched so that the
-// same literal relative import resolves from `src/harness` (vitest) and from
-// `dist/harness` (the sidecar) alike.
+// The kits are plain JavaScript shipped verbatim under their MIT licence;
+// this declaration is the only TypeScript view of them. Pattern-matched so
+// that the same literal relative import resolves from `src/harness` (vitest)
+// and from `dist/harness` (the sidecar) alike. Both cockpits honour the SAME
+// `createApp` contract (`CONTRACT.md`).
 declare module "*/agency-kit/lib/app.mjs" {
   import type { Server } from "node:http";
 
@@ -31,5 +33,25 @@ declare module "*/agency-kit/lib/app.mjs" {
      * session cookie. `null` keeps the standalone, unauthenticated cockpit. */
     accessToken?: string | null;
     fetchImpl?: typeof fetch;
+    onMutation?: () => Promise<void>;
   }): Promise<AgencyKitApp>;
+}
+
+declare module "*/agency-kit/ecommerce/lib/app.mjs" {
+  import type { Server } from "node:http";
+
+  export interface EcommerceKitApp {
+    server: Server;
+    close(): Promise<void>;
+    issueDashboardTicket(): string;
+  }
+
+  export function createApp(options?: {
+    dataDir?: string;
+    publicDir?: string;
+    hostedBy?: "bizos-local" | null;
+    accessToken?: string | null;
+    fetchImpl?: typeof fetch;
+    onMutation?: () => Promise<void>;
+  }): Promise<EcommerceKitApp>;
 }

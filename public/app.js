@@ -44,7 +44,7 @@ const SKILLS_CATALOG_URL = 'https://github.com/gquthier/leadfactory-oss/blob/mai
 const OPENROUTER_KEYS_URL = 'https://openrouter.ai/keys';
 
 const state = {
-  db: { agency: {}, clients: [], campaigns: [], tasks: [], deliverables: [] },
+  db: { agency: {}, dashboard: null, clients: [], campaigns: [], tasks: [], deliverables: [] },
   connections: { openrouter: { configured: false, model: '', status: 'unconfigured', verifiedAt: null, lastError: null } },
   schema: null,
   hostedBy: null,
@@ -1230,12 +1230,31 @@ function onboardingCard(client) {
   ]);
 }
 
-function viewDashboard() {
-  const db = state.db;
-  const isEmpty =
-    db.clients.length === 0 && db.campaigns.length === 0 && db.tasks.length === 0 && db.deliverables.length === 0;
-  const openTasks = db.tasks.filter((t) => !t.done).length;
+// --- Tableau de bord configurable ------------------------------------------
+//
+// Le serveur stocke {title, intro, sections} ; l'interface ne fait qu'y lire du
+// texte (posé via textContent) et des noms de sections connues. Une section
+// inconnue est ignorée, jamais évaluée. Les autres écrans (Start Here, clients,
+// campagnes…) ne dépendent pas de cette configuration.
 
+const DASHBOARD_DEFAULTS = {
+  title: 'Tableau de bord',
+  intro: 'Compteurs calculés à partir de vos saisies uniquement.',
+  sections: ['metrics', 'tasks']
+};
+
+function dashboardConfig() {
+  const cfg = state.db.dashboard;
+  const title = typeof cfg?.title === 'string' && cfg.title.trim() !== '' ? cfg.title : DASHBOARD_DEFAULTS.title;
+  const intro = typeof cfg?.intro === 'string' ? cfg.intro : DASHBOARD_DEFAULTS.intro;
+  const sections = Array.isArray(cfg?.sections)
+    ? cfg.sections.filter((name) => DASHBOARD_DEFAULTS.sections.includes(name))
+    : DASHBOARD_DEFAULTS.sections;
+  return { title, intro, sections };
+}
+
+function dashboardMetrics(db) {
+  const openTasks = db.tasks.filter((t) => !t.done).length;
   const kpis = [
     ['Clients', db.clients.length],
     ['Clients actifs', db.clients.filter((c) => c.status === 'actif').length],
@@ -1245,65 +1264,79 @@ function viewDashboard() {
     ['Tâches terminées', db.tasks.length - openTasks],
     ['Livrables', db.deliverables.length]
   ];
+  return el(
+    'div',
+    { class: 'grid' },
+    kpis.map(([label, value]) => el('div', { class: 'kpi' }, [el('b', { text: String(value) }), el('span', { text: label })]))
+  );
+}
+
+function dashboardTasks(db) {
+  const recent = [...db.tasks].filter((t) => !t.done).slice(0, 8);
+  return el('div', { class: 'card' }, [
+    el('h2', { text: 'Tâches en cours' }),
+    recent.length === 0
+      ? emptyState('Aucune tâche ouverte.')
+      : el(
+          'ul',
+          { class: 'checklist' },
+          recent.map((task) => {
+            const client = db.clients.find((c) => c.id === task.clientId);
+            return el('li', {}, [
+              el('input', {
+                type: 'checkbox',
+                checked: false,
+                'aria-label': `Marquer « ${task.title} » comme terminée`,
+                onchange: () => toggleTask(task, true)
+              }),
+              el('span', {}, [task.title, ' ', el('span', { class: 'badge', text: client?.company ?? 'client inconnu' })])
+            ]);
+          })
+        )
+  ]);
+}
+
+/** Reste affichée quelle que soit la configuration : sans elle une base vide n'offre aucune porte d'entrée. */
+function dashboardEmptyBase() {
+  return el('div', { class: 'card stack' }, [
+    el('h2', { text: 'Base vide' }),
+    el('p', {
+      class: 'subtitle',
+      text: 'Créez un client, ou chargez un jeu de démonstration fictif (entreprise « Atelier Démo », domaine example.com) pour explorer l’outil.'
+    }),
+    el('div', { class: 'actions' }, [
+      el('button', { class: 'btn primary', text: 'Nouveau client', onclick: newClient }),
+      el('button', {
+        class: 'btn',
+        text: 'Charger la démo',
+        onclick: async () => {
+          const ok = await openConfirm({
+            title: 'Charger les données de démonstration ?',
+            message: 'Un client fictif « Atelier Démo » et sa campagne seront ajoutés. Vous pourrez les supprimer ensuite.',
+            confirmLabel: 'Charger la démo'
+          });
+          if (ok) await run(() => api('/api/demo', { method: 'POST' }), 'Démo chargée (données fictives).');
+        }
+      })
+    ])
+  ]);
+}
+
+function viewDashboard() {
+  const db = state.db;
+  const isEmpty =
+    db.clients.length === 0 && db.campaigns.length === 0 && db.tasks.length === 0 && db.deliverables.length === 0;
+  const cfg = dashboardConfig();
 
   const nodes = [
-    pageHead('Tableau de bord', 'Compteurs calculés à partir de vos saisies uniquement.', [
-      el('button', { class: 'btn primary', text: 'Nouveau client', onclick: newClient })
-    ]),
-    el('div', { class: 'grid' }, kpis.map(([label, value]) => el('div', { class: 'kpi' }, [el('b', { text: String(value) }), el('span', { text: label })])))
+    pageHead(cfg.title, cfg.intro, [el('button', { class: 'btn primary', text: 'Nouveau client', onclick: newClient })])
   ];
-
-  if (isEmpty) {
-    nodes.push(
-      el('div', { class: 'card stack' }, [
-        el('h2', { text: 'Base vide' }),
-        el('p', {
-          class: 'subtitle',
-          text: 'Créez un client, ou chargez un jeu de démonstration fictif (entreprise « Atelier Démo », domaine example.com) pour explorer l’outil.'
-        }),
-        el('div', { class: 'actions' }, [
-          el('button', { class: 'btn primary', text: 'Nouveau client', onclick: newClient }),
-          el('button', {
-            class: 'btn',
-            text: 'Charger la démo',
-            onclick: async () => {
-              const ok = await openConfirm({
-                title: 'Charger les données de démonstration ?',
-                message: 'Un client fictif « Atelier Démo » et sa campagne seront ajoutés. Vous pourrez les supprimer ensuite.',
-                confirmLabel: 'Charger la démo'
-              });
-              if (ok) await run(() => api('/api/demo', { method: 'POST' }), 'Démo chargée (données fictives).');
-            }
-          })
-        ])
-      ])
-    );
-  } else {
-    const recent = [...db.tasks].filter((t) => !t.done).slice(0, 8);
-    nodes.push(
-      el('div', { class: 'card' }, [
-        el('h2', { text: 'Tâches en cours' }),
-        recent.length === 0
-          ? emptyState('Aucune tâche ouverte.')
-          : el(
-              'ul',
-              { class: 'checklist' },
-              recent.map((task) => {
-                const client = db.clients.find((c) => c.id === task.clientId);
-                return el('li', {}, [
-                  el('input', {
-                    type: 'checkbox',
-                    checked: false,
-                    'aria-label': `Marquer « ${task.title} » comme terminée`,
-                    onchange: () => toggleTask(task, true)
-                  }),
-                  el('span', {}, [task.title, ' ', el('span', { class: 'badge', text: client?.company ?? 'client inconnu' })])
-                ]);
-              })
-            )
-      ])
-    );
+  for (const section of cfg.sections) {
+    if (section === 'metrics') nodes.push(dashboardMetrics(db));
+    // Sur une base vide, la carte ci-dessous dit déjà quoi faire : pas de liste vide en plus.
+    else if (section === 'tasks' && !isEmpty) nodes.push(dashboardTasks(db));
   }
+  if (isEmpty) nodes.push(dashboardEmptyBase());
   return nodes;
 }
 

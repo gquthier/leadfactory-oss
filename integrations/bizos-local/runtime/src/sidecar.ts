@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
+import { isTemplateId } from "./harness/templates.js";
 import {
   targetForThreadId,
   threadIdForTarget,
@@ -44,8 +45,12 @@ import {
 } from "./sidecar-contract.js";
 import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-state.js";
 import { LOCAL_TEAM_TOOL_SPECS } from "./local-team-mcp.js";
-import { AgencyError, AgencyService, hostFromHarness, type AgencyState } from "./harness/agency.js";
+import { AgencyService } from "./harness/agency.js";
+import { EcommerceService } from "./harness/ecommerce.js";
+import { PackError, type PackService, type PackState } from "./harness/pack.js";
 import { isAgencyToolName } from "./harness/agency-tools.js";
+import { isCommerceToolName } from "./harness/commerce-tools.js";
+import type { PackHost } from "./harness/pack.js";
 import { publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, type PublicRoutine, type PublicRoutineRun } from "./routines-public.js";
 import { pairingAdminRoute } from "./mobile/admin-routes.js";
 import { createMobileBackend } from "./mobile/backend.js";
@@ -380,8 +385,9 @@ interface TeamCapability {
   expiresAt: number;
 }
 
-/** `GET /api/local/agency` — the desktop contract for the agency pack. */
-export interface AgencyStatus {
+/** `GET /api/local/agency` and `GET /api/local/ecommerce` — the desktop
+ * contract for a pack: the public agency shape, plus the bound vault. */
+export interface PackStatus {
   installed: boolean;
   status: "not-installed" | "installing" | "ready" | "error";
   template: { id: string; name: string; version: number };
@@ -389,7 +395,16 @@ export interface AgencyStatus {
   bots: Array<{ id: string; name: string; slug: string; threadId: string }>;
   teamThreadId: string | null;
   skillsCount: number;
+  rootId: string | null;
+  vaultPath: string | null;
+  boundTemplateId: string | null;
   error?: string;
+}
+
+/** The two packs the sidecar hosts, by the route that names them. */
+export interface Packs {
+  agency: PackService;
+  ecommerce: PackService;
 }
 
 export class LocalTeamBroker {
@@ -437,7 +452,7 @@ export class CollaborationFacade {
     readonly instanceId: string,
     private readonly teamBroker: LocalTeamBroker,
     private readonly index: DurableIndex = durableIndex(),
-    private readonly agency: AgencyService | null = null,
+    private readonly packs: Packs | null = null,
   ) {
     this.handlers = buildHandlers(harness);
     this.userId = `local:${instanceId}:user`;
@@ -1087,29 +1102,44 @@ export class CollaborationFacade {
     ]);
   }
   trashBrainEntry(rootId: string, path: string) { return this.brainCall("lbz:brain:trash", [rootId, path]); }
-  openBrainEntry(raw: unknown) {
-    const input = objectBody(raw, ["root", "path", "mode"]);
-    const mode = requiredString(input.mode, "mode", 20);
-    if (!BRAIN_OPEN_MODES.includes(mode)) {
-      throw new HttpError(400, "invalid_payload", `mode must be one of ${BRAIN_OPEN_MODES.join(", ")}.`);
-    }
-    return this.brainCall("lbz:brain:open", [
-      requiredString(input.root, "root", 64),
-      requiredString(input.path, "path", 1024),
-      mode,
-    ]);
+  // The template catalogue and its one write. An id that is not in the
+  // built-in catalogue is 404 here, the way a note that is not in the vault
+  // is; a payload that is not even an id stays 400. Applying goes through
+  // the workspace binding (`rootId` optional: the bound root, else `new`),
+  // and is serialised with the other roster writes (`recruit`,
+  // `manageAgent`): both create agents, and neither should see the other's
+  // half-written roster.
+  brainTemplates() { return this.brainCall("lbz:brain:templates", []); }
+  async applyBrainTemplate(raw: unknown) {
+    const input = objectBody(raw, ["id", "rootId"]);
+    const id = requiredString(input.id, "id", 64);
+    if (!isTemplateId(id)) throw new HttpError(404, "not_found", "That template is not in the catalogue.");
+    const rootId = input.rootId === undefined || input.rootId === null ? undefined : requiredString(input.rootId, "rootId", 64);
+    return this.exclusive(() => this.brainCall("lbz:brain:applyTemplate", rootId ? [id, rootId] : [id]));
+  }
+  /** The workspace's template and vault: the catalogue, the candidate
+   * vaults, the binding. `bind` is the one write; the same request twice is
+   * one binding, a different one is 409. */
+  workspaceTemplate() { return this.brainCall("lbz:brain:workspaceTemplate", []); }
+  async bindWorkspaceTemplate(raw: unknown) {
+    const input = objectBody(raw, ["templateId", "rootId"]);
+    const templateId = requiredString(input.templateId, "templateId", 64);
+    if (!isTemplateId(templateId)) throw new HttpError(404, "not_found", "That template is not in the catalogue.");
+    const rootId = requiredString(input.rootId, "rootId", 64);
+    return this.exclusive(() => this.brainCall("lbz:brain:bindTemplate", [{ templateId, rootId }]));
   }
 
-  // The agency pack: its state for the desktop, its install, its dashboard,
-  // and the one door its agents' tools come through. Ids are the public
-  // collaboration ids (`local:<instance>:agent:…`, `local:<instance>:thread:…`)
-  // so the desktop can open a chat from the list; no path and no secret.
-  private requireAgency(): AgencyService {
-    if (!this.agency) throw new HttpError(503, "agency_unavailable", "The agency pack is not available in this runtime.");
-    return this.agency;
+  // The packs: their state for the desktop, their install (through the
+  // binding), their dashboard, and the one door their agents' tools come
+  // through. Ids are the public collaboration ids (`local:<instance>:agent:…`,
+  // `local:<instance>:thread:…`) so the desktop can open a chat from the
+  // list; no path a renderer sent, and no secret.
+  private requirePack(name: keyof Packs): PackService {
+    if (!this.packs) throw new HttpError(503, "pack_unavailable", "Business packs are not available in this runtime.");
+    return this.packs[name];
   }
 
-  private publicAgency(state: AgencyState): AgencyStatus {
+  private publicPack(state: PackState): PackStatus {
     return {
       installed: state.installed,
       status: state.status,
@@ -1123,43 +1153,72 @@ export class CollaborationFacade {
       })),
       teamThreadId: state.groupId ? this.publicThreadId({ groupId: state.groupId }) : null,
       skillsCount: state.skillsCount,
+      rootId: state.rootId,
+      vaultPath: state.vaultPath,
+      boundTemplateId: state.boundTemplateId,
       ...(state.error ? { error: state.error } : {}),
     };
   }
 
-  private async agencyCall<T>(work: () => Promise<T>): Promise<T> {
+  private async packCall<T>(work: () => Promise<T>): Promise<T> {
     try {
       return await work();
     } catch (error) {
-      if (error instanceof AgencyError) throw new HttpError(error.status, error.code, error.message);
+      if (error instanceof PackError) throw new HttpError(error.status, error.code, error.message);
+      if (error instanceof HttpError) throw error;
+      // The installer's refusals (`BrainError`): the same statuses the brain routes answer.
+      const code = error && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "";
+      const status = BRAIN_ERROR_STATUS[code];
+      if (status) throw new HttpError(status, code, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
 
-  agencyStatus(): Promise<AgencyStatus> {
-    return this.agencyCall(async () => this.publicAgency(await this.requireAgency().status()));
+  packStatus(name: keyof Packs): Promise<PackStatus> {
+    return this.packCall(async () => this.publicPack(await this.requirePack(name).status()));
   }
 
-  agencyInstall(): Promise<AgencyStatus> {
-    return this.agencyCall(async () => this.publicAgency(await this.requireAgency().install()));
+  /** `POST install {}` or `{ rootId }`: bind the workspace to this pack
+   * (`new` unless a vault is named), then install; serialised with the
+   * roster writes like the catalogue's apply. */
+  packInstall(name: keyof Packs, raw: unknown): Promise<PackStatus> {
+    return this.packCall(async () => {
+      const input = objectBody(raw, ["rootId"]);
+      const rootId = input.rootId === undefined || input.rootId === null ? undefined : requiredString(input.rootId, "rootId", 64);
+      return this.publicPack(await this.exclusive(() => this.requirePack(name).install(rootId)));
+    });
   }
 
-  agencyOpen(): Promise<AgencyStatus> {
-    return this.agencyCall(async () => this.publicAgency(await this.requireAgency().open()));
+  packOpen(name: keyof Packs): Promise<PackStatus> {
+    return this.packCall(async () => this.publicPack(await this.requirePack(name).open()));
   }
 
-  /** An agency tool call from the MCP twin: `{ tool, arguments }`, under the
-   * run's capability — the same check the dynamic tools make. */
-  agencyTool(capability: TeamCapability, raw: unknown): Promise<unknown> {
-    return this.agencyCall(async () => {
+  /** A pack tool call from the MCP twin: `{ tool, arguments }`, under the
+   * run's capability — the same check the dynamic tools make. The tool's
+   * prefix names the pack; the pack refuses a bot that is not its own. */
+  packTool(capability: TeamCapability, raw: unknown): Promise<unknown> {
+    return this.packCall(async () => {
       const input = objectBody(raw, ["tool", "arguments"]);
-      if (!isAgencyToolName(input.tool)) throw new HttpError(404, "unknown_tool", "Unknown agency tool.");
-      return this.requireAgency().callTool(
+      const pack = isAgencyToolName(input.tool) ? "agency" : isCommerceToolName(input.tool) ? "ecommerce" : null;
+      if (!pack) throw new HttpError(404, "unknown_tool", "Unknown pack tool.");
+      return this.requirePack(pack).callTool(
         { botId: capability.botId, threadId: capability.threadId, runId: capability.runId },
-        input.tool,
+        input.tool as string,
         input.arguments ?? {},
       );
     });
+  }
+  openBrainEntry(raw: unknown) {
+    const input = objectBody(raw, ["root", "path", "mode"]);
+    const mode = requiredString(input.mode, "mode", 20);
+    if (!BRAIN_OPEN_MODES.includes(mode)) {
+      throw new HttpError(400, "invalid_payload", `mode must be one of ${BRAIN_OPEN_MODES.join(", ")}.`);
+    }
+    return this.brainCall("lbz:brain:open", [
+      requiredString(input.root, "root", 64),
+      requiredString(input.path, "path", 1024),
+      mode,
+    ]);
   }
 
   async recruit(capability: TeamCapability, raw: unknown): Promise<RecruitmentResult> {
@@ -1381,7 +1440,9 @@ async function serve(): Promise<void> {
   const teamBroker = new LocalTeamBroker();
   let facade: CollaborationFacade | null = null;
   let connector: RelayConnector | null = null;
-  let agency: AgencyService | null = null;
+  let packs: Packs | null = null;
+  const packOf = (botId: string): PackService | null =>
+    packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
   let origin = "";
   const server = createServer(async (request, response) => {
     try {
@@ -1414,20 +1475,26 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/internal/local-team/checkpoint") {
         return sendJson(response, 200, facade.checkpointTask(teamBroker.authorize(bearer), await bodyOf(request)));
       }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/agency") {
-        return sendJson(response, 200, await facade.agencyTool(teamBroker.authorize(bearer), await bodyOf(request)));
+      if (method === "POST" && (url.pathname === "/api/internal/local-team/agency" || url.pathname === "/api/internal/local-team/pack")) {
+        return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
-      // The agency pack, for the desktop: state, install, dashboard URL. The
-      // UI opens the URL itself; nothing is launched from here.
-      if (method === "GET" && url.pathname === "/api/local/agency") return sendJson(response, 200, await facade.agencyStatus());
-      if (method === "POST" && url.pathname === "/api/local/agency/install") {
-        objectBody(await bodyOf(request), []);
-        return sendJson(response, 200, await facade.agencyInstall());
+      // The packs, for the desktop: state, install, dashboard URL. The desktop
+      // MAIN process fetches `open` and embeds the page in an isolated view;
+      // nothing is launched from here and no browser is opened.
+      for (const pack of ["agency", "ecommerce"] as const) {
+        if (method === "GET" && url.pathname === `/api/local/${pack}`) return sendJson(response, 200, await facade.packStatus(pack));
+        if (method === "POST" && url.pathname === `/api/local/${pack}/install`) {
+          return sendJson(response, 200, await facade.packInstall(pack, await bodyOf(request)));
+        }
+        if (method === "POST" && url.pathname === `/api/local/${pack}/open`) {
+          objectBody(await bodyOf(request), []);
+          return sendJson(response, 200, await facade.packOpen(pack));
+        }
       }
-      if (method === "POST" && url.pathname === "/api/local/agency/open") {
-        objectBody(await bodyOf(request), []);
-        return sendJson(response, 200, await facade.agencyOpen());
+      if (method === "GET" && url.pathname === "/api/local/workspace-template") return sendJson(response, 200, await facade.workspaceTemplate());
+      if (method === "POST" && url.pathname === "/api/local/workspace-template/bind") {
+        return sendJson(response, 200, await facade.bindWorkspaceTemplate(await bodyOf(request)));
       }
       if (method === "GET" && url.pathname === "/api/local/health") {
         return sendJson(response, 200, { ok: true, mode: "local-harness", contractVersion: 1, instanceId: id });
@@ -1511,6 +1578,12 @@ async function serve(): Promise<void> {
       if (loginAppId && method === "POST") return sendJson(response, 200, await facade.loginApp(loginAppId));
       if (method === "GET" && url.pathname === "/api/local/brain") {
         return sendJson(response, 200, await facade.brain(url.searchParams.get("root")));
+      }
+      if (method === "GET" && url.pathname === "/api/local/brain/templates") {
+        return sendJson(response, 200, await facade.brainTemplates());
+      }
+      if (method === "POST" && url.pathname === "/api/local/brain/templates/apply") {
+        return sendJson(response, 200, await facade.applyBrainTemplate(await bodyOf(request)));
       }
       if (method === "GET" && url.pathname === "/api/local/brain/note") {
         const rootId = url.searchParams.get("root") ?? "";
@@ -1612,15 +1685,16 @@ async function serve(): Promise<void> {
           return facade.manageAgent(capability, argumentsValue);
         },
       }));
-      // The agency tools, for the pack's own agents only, under the SAME
+      // The pack's tools, for the pack's own agents only, under the SAME
       // capability: STOP or the end of the run revokes them with the rest.
-      const agencyTools = agency?.isAgencyBot(bot.id)
-        ? agency.dynamicTools(() => {
+      const pack = packOf(bot.id);
+      const packTools = pack
+        ? pack.dynamicTools(() => {
           const capability = teamBroker.authorize(session);
           return { botId: capability.botId, threadId: capability.threadId, runId: capability.runId };
         })
         : [];
-      return [...teamTools, ...agencyTools];
+      return [...teamTools, ...packTools];
     },
     // The same tools for Claude Code, which has no dynamic-tool slot:
     // a stdio MCP server, one per turn, holding a one-shot ticket that only
@@ -1630,20 +1704,23 @@ async function serve(): Promise<void> {
       command: process.execPath,
       args: [
         join(dirname(fileURLToPath(import.meta.url)), "local-team-mcp.js"),
-        `--toolset=${agency?.isAgencyBot(bot.id) ? "team,agency" : "team"}`,
+        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId }) },
       preApproved: true,
     }),
+    // STOP: the capability dies now and every request it has in flight with
+    // it — before the CLI has settled. What a cockpit already accepted stays.
     onLocalRunStopped: (runId) => {
       teamBroker.revoke(runId);
-      agency?.abortRun(runId);
+      packs?.agency.abortRun(runId);
+      packs?.ecommerce.abortRun(runId);
     },
     onLocalRunSettled: (runId) => {
       teamBroker.revoke(runId);
-      // The pack's tools: requests still in flight for this run are abandoned.
-      agency?.abortRun(runId);
+      packs?.agency.abortRun(runId);
+      packs?.ecommerce.abortRun(runId);
     },
     localArchitecture: ({ bot, threadId, workspaceDir, sandbox, peers }) => ({
         mode: "local",
@@ -1658,15 +1735,23 @@ async function serve(): Promise<void> {
         recruitment: "autonomous-codex",
       }),
   });
-  // The agency pack shares this harness: its agents are roster bots, its
-  // cockpit is one instance under `runtime/agency/`, started on demand and
-  // closed with the sidecar.
-  agency = new AgencyService({
+  // The packs share this harness: their agents are roster bots the generic
+  // installer made, their cockpits run on demand in the bound vault and
+  // close with the sidecar.
+  const packHost: PackHost = {
     rootDir: harnessRoot,
-    host: hostFromHarness(harness),
-    log: (line) => process.stderr.write(`[localbizos] ${line}\n`),
-  });
-  const localFacade = new CollaborationFacade(harness, id, teamBroker, durableIndex(), agency);
+    binding: () => harness.workspaceTemplate.current(),
+    installation: (templateId) => harness.workspaceTemplate.installation(templateId),
+    install: (templateId, rootId) => harness.workspaceTemplate.install(templateId, rootId),
+    listBots: () => harness.bots.list(),
+    run: (runId) => harness.runs.get(runId),
+  };
+  const log = (line: string) => process.stderr.write(`[localbizos] ${line}\n`);
+  packs = {
+    agency: new AgencyService({ host: packHost, log }),
+    ecommerce: new EcommerceService({ host: packHost, log }),
+  };
+  const localFacade = new CollaborationFacade(harness, id, teamBroker, durableIndex(), packs);
   await startLocalHarness(harness, existsSync(join(harnessRoot, "settings.json")), () => {
     facade = localFacade;
   });
@@ -1698,11 +1783,13 @@ async function serve(): Promise<void> {
     // until the CLI/MCP groups have exited (including SIGKILL escalation).
     server.close();
     server.closeAllConnections();
-    // The cockpit goes with the sidecar: its port closes and `db.lock` is
-    // released, so the next start does not find a live lock of its own.
-    await agency?.close().catch((error: unknown) => {
-      process.stderr.write(`[localbizos] agency cockpit close: ${error instanceof Error ? error.message : String(error)}\n`);
-    });
+    // The cockpits go with the sidecar: their ports close and each `db.lock`
+    // is released, so the next start does not find a live lock of its own.
+    for (const pack of packs ? [packs.agency, packs.ecommerce] : []) {
+      await pack.close().catch((error: unknown) => {
+        process.stderr.write(`[localbizos] ${pack.templateId} cockpit close: ${error instanceof Error ? error.message : String(error)}\n`);
+      });
+    }
     const childrenStopped = await waitForCliShutdown();
     stateLock.release();
     process.exit(childrenStopped ? 0 : 1);

@@ -23,6 +23,7 @@
 import type { LocalBizosHarness } from "./harness/harness.js";
 import { MAX_EXTERNAL_URL_CHARS } from "./policy.js";
 import { PLAN_PROVIDERS } from "./harness/settings.js";
+import { TEMPLATE_IDS } from "./harness/templates.js";
 import type {
   AccessGrantRequest,
   AccessGrantPatch,
@@ -416,7 +417,7 @@ export function asAccessScope(value: unknown, field: string): AccessScope {
  *
  * The channel used to take one, on the theory that the renderer would only ever
  * echo back something the main process handed it. Nothing enforced that: a
- * compromised page could call `grant({path:"/Users/a", mode:"read-write"})` and
+ * compromised page could call `grant({path:"<home>", mode:"read-write"})` and
  * hold a durable permission it was never granted, with no dialog and no click.
  *
  * So a grant names one of two things the MAIN process owns: the single-use
@@ -788,6 +789,23 @@ export function buildHandlers(
         asString(at(args, 1), "path", 1024),
         asEnum(at(args, 2), "mode", BRAIN_OPEN_MODES),
       ),
+    // The template catalogue. An id is one of the built-in ones and nothing
+    // else: there is no path, no pack and no name in the payload, so a
+    // renderer cannot make the harness write anything it does not ship.
+    "lbz:brain:templates": () => harness.templates.list(),
+    // `rootId` is an id the harness resolves (`new`, or one of the vaults it
+    // offers) — never a path.
+    "lbz:brain:applyTemplate": (args) =>
+      harness.templates.apply(asEnum(at(args, 0), "id", TEMPLATE_IDS), asOptionalString(at(args, 1), "rootId", 64)),
+    // The workspace's template and vault: chosen once, then pinned.
+    "lbz:brain:workspaceTemplate": () => harness.workspaceTemplate.get(),
+    "lbz:brain:bindTemplate": (args) => {
+      const input = asStrictRecord(at(args, 0), "binding", ["templateId", "rootId"]);
+      return harness.workspaceTemplate.bind({
+        templateId: asEnum(input.templateId, "templateId", TEMPLATE_IDS),
+        rootId: asString(input.rootId, "rootId", 64),
+      });
+    },
 
     // The agent's computer. Every channel names a BOT and nothing else: the
     // machine, its partition and its window are resolved in the main process,
