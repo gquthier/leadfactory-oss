@@ -153,17 +153,44 @@ export function collectKitFiles(source) {
   return { files: files.sort(), ecommercePresent };
 }
 
-/** The kit's own commit, read from `.git` without running git (no hooks). */
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** A branch-like ref that stays inside the Git directory. */
+function safeRef(ref) {
+  return ref.startsWith("refs/") && !ref.includes("\\") && ref.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+/** The HEAD directory and the shared refs directory: the same for a clone,
+ * split by `.git` file + `commondir` for a linked worktree. */
+function gitDirs(source) {
+  const dotGit = join(source, ".git");
+  if (lstatSync(dotGit).isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
+  const pointer = readFileSync(dotGit, "utf8").trim();
+  if (!pointer.startsWith("gitdir: ")) return null;
+  const gitDir = resolve(source, pointer.slice("gitdir: ".length).trim());
+  const commondir = join(gitDir, "commondir");
+  const commonDir = existsSync(commondir) ? resolve(gitDir, readFileSync(commondir, "utf8").trim()) : gitDir;
+  return { gitDir, commonDir };
+}
+
+/** The kit's own commit, read from Git metadata files without running git (no
+ * hooks): clone or linked worktree, detached HEAD, loose or packed ref. */
 function sourceCommit(source) {
   try {
-    const head = readFileSync(join(source, ".git", "HEAD"), "utf8").trim();
-    if (!head.startsWith("ref: ")) return head;
-    const ref = head.slice(5);
-    const direct = join(source, ".git", ref);
-    if (existsSync(direct)) return readFileSync(direct, "utf8").trim();
-    const packed = readFileSync(join(source, ".git", "packed-refs"), "utf8");
-    const line = packed.split("\n").find((row) => row.endsWith(` ${ref}`));
-    return line ? line.split(" ")[0] : null;
+    const dirs = gitDirs(source);
+    if (!dirs) return null;
+    const head = readFileSync(join(dirs.gitDir, "HEAD"), "utf8").trim();
+    if (!head.startsWith("ref: ")) return OBJECT_ID.test(head) ? head : null;
+    const ref = head.slice("ref: ".length).trim();
+    if (!safeRef(ref)) return null;
+    const loose = join(dirs.commonDir, ref);
+    if (existsSync(loose)) {
+      const id = readFileSync(loose, "utf8").trim();
+      return OBJECT_ID.test(id) ? id : null;
+    }
+    const packed = readFileSync(join(dirs.commonDir, "packed-refs"), "utf8");
+    const row = packed.split("\n").map((line) => line.trim().split(" ")).find((parts) => parts.length === 2 && parts[1] === ref);
+    return row && OBJECT_ID.test(row[0]) ? row[0] : null;
   } catch {
     return null;
   }

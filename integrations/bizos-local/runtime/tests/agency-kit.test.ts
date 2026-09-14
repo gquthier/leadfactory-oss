@@ -14,6 +14,9 @@ import { ECOMMERCE_TEMPLATE_FILE, ecommerceKitRoot } from "../src/harness/templa
 let source: string;
 let target: string;
 
+const COMMIT = "3b4f3770019b29b25181542fdbaae21770728aa1";
+const OTHER = "9249985aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 function write(path: string, text: string): void {
   mkdirSync(join(source, path, ".."), { recursive: true });
   writeFileSync(join(source, path), text);
@@ -36,7 +39,7 @@ function fakeKit(): void {
   write("data/db.json", "{}");
   write(".env", "SECRET=1");
   write(".git/HEAD", "ref: refs/heads/main");
-  write(".git/refs/heads/main", "abc123");
+  write(".git/refs/heads/main", `${COMMIT}\n`);
   write("server.mjs", "// entry");
   write("README.md", "# readme");
   write("test/api.test.mjs", "// tests");
@@ -109,7 +112,7 @@ describe("sync-agency-kit", () => {
 
   it("writes the files, the manifest with hashes and the source commit, and nothing else", () => {
     const result = sync({ source, target }) as { files: string[]; manifest: { files: Record<string, string>; sourceCommit: string | null; template: { id: string }; ecommerce: unknown } };
-    expect(result.manifest.sourceCommit).toBe("abc123");
+    expect(result.manifest.sourceCommit).toBe(COMMIT);
     expect(result.manifest.template.id).toBe("lead-gen-agency");
     // A checkout made before the e-commerce kit existed still syncs.
     expect(result.manifest.ecommerce).toBeNull();
@@ -131,6 +134,56 @@ describe("sync-agency-kit", () => {
     rmSync(join(source, "vault", "link.md"));
     write("vault/Paths.md", "See /Users/someone/dev/private");
     expect(() => sync({ source, target, dryRun: true })).toThrow(/machine-specific absolute path/);
+  });
+
+  describe("source commit, read from Git metadata files only", () => {
+    const commitOf = (): string | null => (sync({ source, target, dryRun: true }) as { manifest: { sourceCommit: string | null } }).manifest.sourceCommit;
+
+    /** Replaces the fixture's `.git` directory with a linked-worktree `.git` file. */
+    function linkedWorktree(gitdirLine: string, head: string): void {
+      rmSync(join(source, ".git"), { recursive: true, force: true });
+      write("main/.git/worktrees/kit/HEAD", `${head}\n`);
+      write("main/.git/worktrees/kit/commondir", "../..\n");
+      write(".git", `gitdir: ${gitdirLine}\n`);
+    }
+
+    it("reads a packed branch ref when the loose ref is absent", () => {
+      rmSync(join(source, ".git", "refs"), { recursive: true, force: true });
+      write(".git/packed-refs", `# pack-refs with: peeled fully-peeled sorted\n${OTHER} refs/heads/other\n${COMMIT} refs/heads/main\n^${OTHER}\n`);
+      expect(commitOf()).toBe(COMMIT);
+    });
+
+    it("reads a detached HEAD", () => {
+      write(".git/HEAD", `${COMMIT}\n`);
+      expect(commitOf()).toBe(COMMIT);
+    });
+
+    it("follows a linked worktree's `.git` file to a detached HEAD", () => {
+      linkedWorktree(join(source, "main/.git/worktrees/kit"), COMMIT);
+      expect(commitOf()).toBe(COMMIT);
+    });
+
+    it("resolves a relative gitdir and the branch refs of the common dir, loose then packed", () => {
+      linkedWorktree("main/.git/worktrees/kit", "ref: refs/heads/feature");
+      write("main/.git/packed-refs", `${OTHER} refs/heads/feature\n`);
+      expect(commitOf()).toBe(OTHER);
+      write("main/.git/refs/heads/feature", `${COMMIT}\n`);
+      expect(commitOf()).toBe(COMMIT);
+    });
+
+    it("stays null without Git metadata, or with metadata it cannot trust", () => {
+      rmSync(join(source, ".git"), { recursive: true, force: true });
+      expect(commitOf()).toBeNull();
+      write(".git", "not a gitdir line\n");
+      expect(commitOf()).toBeNull();
+      rmSync(join(source, ".git"));
+      write(".git/HEAD", "ref: refs/heads/main");
+      write(".git/refs/heads/main", "not-a-sha");
+      expect(commitOf()).toBeNull();
+      write(".git/HEAD", "ref: refs/../../outside");
+      write("outside", `${COMMIT}\n`);
+      expect(commitOf()).toBeNull();
+    });
   });
 
   it("refuses a symlinked e-commerce subtree rather than following it", () => {
