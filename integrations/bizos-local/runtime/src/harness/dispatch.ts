@@ -620,8 +620,17 @@ export class Dispatcher {
       this.deps.onRunStopped?.(turn.runId);
       // The window is going away, so no card will ever be answered: everything
       // waiting on one is refused now rather than left hanging on a promise
-      // whose thread has stopped existing.
-      for (const local of turn.localAsks.values()) local.settle(false);
+      // whose thread has stopped existing. The cards close HERE, the way
+      // `finish()` closes them: a CLI that never answers this stop (the app
+      // is quitting) would otherwise leave `pending` blocks behind a run the
+      // store reports as cancelled on the next start — and a card that still
+      // looks actionable for a run that has ended.
+      for (const askId of [...turn.asks.keys()]) this.markAskAnswered(turn, askId, "expired");
+      turn.asks.clear();
+      for (const [askId, local] of turn.localAsks) {
+        this.markAskAnswered(turn, askId, "expired");
+        local.settle(false);
+      }
       turn.localAsks.clear();
       turn.handle.stop();
     }

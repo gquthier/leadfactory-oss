@@ -820,6 +820,10 @@ export class CollaborationFacade {
     const runId = this.internalRunId(publicRunId);
     const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
+    // A stale stop for an ended run must not stop a newer run on this thread.
+    if (publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued") {
+      return this.getRun(publicRunId);
+    }
     const target = targetForThreadId(run.threadId);
     if (!target) throw new HttpError(500, "invalid_local_run", "Run thread is invalid.");
     await this.invoke<void>("lbz:threads:stop", [target]);
@@ -838,6 +842,7 @@ export class CollaborationFacade {
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
     const target = targetForThreadId(run.threadId);
     if (!target) throw new HttpError(500, "invalid_local_run", "Run thread is invalid.");
+    const terminal = publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued";
     const snapshot = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
     const approvals = snapshot.messages.flatMap((message) => message.blocks.flatMap((block) => {
       if (block.kind !== "ask" || block.runId !== runId) return [];
@@ -848,7 +853,7 @@ export class CollaborationFacade {
         summary: block.summary,
         ...(block.detailText ? { detailText: block.detailText } : {}),
         ...(block.choices ? { choices: block.choices } : {}),
-        status: block.status,
+        status: terminal && block.status === "pending" ? "expired" : block.status,
         ...(block.answered ? { answered: block.answered } : {}),
       }];
     }));
@@ -857,6 +862,11 @@ export class CollaborationFacade {
 
   async answer(publicRunId: string, raw: unknown) {
     const runId = this.internalRunId(publicRunId);
+    const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
+    if (!run) throw new HttpError(404, "not_found", "Run not found.");
+    if (publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued") {
+      throw new HttpError(409, "run_finished", "This run has ended; its requests can no longer be answered.");
+    }
     const input = objectBody(raw, ["askId", "answer"]);
     const askId = requiredString(input.askId, "askId", 64);
     const answer = input.answer as AskAnswer;
