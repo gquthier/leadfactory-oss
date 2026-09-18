@@ -87,7 +87,7 @@ interface CollaborationMessage {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
-  senderType: "human" | "agent";
+  senderType: "human" | "agent" | "assistant";
   senderUserId: string | null;
   senderAgentId: string | null;
   senderName: string;
@@ -549,10 +549,10 @@ export class CollaborationFacade {
       content: textOf(publicBlocks),
       ...(message.deliveryState === "complete" ? { deliveryState: "complete" as const } : {}),
       createdAt: message.createdAt,
-      senderType: message.role === "user" ? "human" : "agent",
+      senderType: message.role === "user" ? "human" : "chatId" in target ? "assistant" : "agent",
       senderUserId: message.role === "user" ? this.userId : null,
-      senderAgentId: message.role === "bot" && botId ? this.agentId(botId) : null,
-      senderName: message.role === "user" ? "Local owner" : bot?.name ?? "Local agent",
+      senderAgentId: message.role === "bot" && botId && !("chatId" in target) ? this.agentId(botId) : null,
+      senderName: message.role === "user" ? "Local owner" : "chatId" in target ? "Assistant" : bot?.name ?? "Local agent",
       clientMessageId: this.clientIdForMessage(message.id),
       runId: message.runId ? this.runId(message.runId) : null,
       replyToMessageId: message.replyToMessageId ? this.messageId(message.replyToMessageId) : null,
@@ -567,6 +567,12 @@ export class CollaborationFacade {
       const page = await this.invoke<{ messages: ThreadMessage[]; olderCursor: string | null }>("lbz:threads:messages", [target, cursor]);
       messages = page.messages.map(message => this.message(message, target, bots)).filter((value): value is CollaborationMessage => value !== null);
       cursor = page.olderCursor;
+    }
+    if ("chatId" in target) {
+      const snapshot = await this.harness.quickChats.get(target.chatId);
+      return { id: this.publicThreadId(target), kind: "chat" as const, name: snapshot.chat.title,
+        updatedAt: snapshot.chat.updatedAt, humanUserIds: [this.userId], agentIds: [],
+        canPost: true, canManage: false, lastMessage: messages.at(-1) ?? null };
     }
     if ("botId" in target) {
       const bot = bots.find((candidate) => candidate.id === target.botId);
@@ -587,15 +593,17 @@ export class CollaborationFacade {
   }
 
   async bootstrap() {
-    const [bots, groups, plans, settings] = await Promise.all([
+    const [bots, groups, plans, settings, quickChats] = await Promise.all([
       this.invoke<Bot[]>("lbz:bots:list"),
       this.invoke<Group[]>("lbz:groups:list"),
       this.invoke<PublicPlan[]>("lbz:plans:list"),
       this.invoke<RuntimeSettings>("lbz:runtime:getSettings"),
+      this.harness.quickChats.list(),
     ]);
     const visibleBots = bots.filter((bot) => !bot.archived);
     const visibleGroups = groups.filter((group) => !group.archived);
     const threads = await Promise.all([
+      ...quickChats.chats.map(chat => this.thread({ chatId: chat.id }, visibleBots, visibleGroups)),
       ...visibleBots.map((bot) => this.thread({ botId: bot.id }, visibleBots, visibleGroups)),
       ...visibleGroups.map((group) => this.thread({ groupId: group.id }, visibleBots, visibleGroups)),
     ]);
@@ -726,7 +734,7 @@ export class CollaborationFacade {
     return {
       runId: this.runId(run.id),
       threadId: this.publicThreadId(targetForThreadId(run.threadId) ?? (() => { throw new HttpError(500, "invalid_local_run", "Run thread is invalid."); })()),
-      agentId: this.agentId(run.botId),
+      agentId: run.threadId.startsWith("chat:") ? null : this.agentId(run.botId),
       triggerMessageId: this.messageId(triggerOverride ?? this.index.runTriggers[run.id] ?? run.messageId ?? `trigger-${run.id}`),
       state,
       error: run.error ?? (run.state === "cancelled" ? "cancelled" : null),
@@ -743,7 +751,7 @@ export class CollaborationFacade {
       const content = requiredString(input.content, "content", 20_000);
       const mentionAgentIds = stringList(input.mentionAgentIds ?? [], "mentionAgentIds", 32);
       const requestedBotIds = mentionAgentIds.map((id) => this.internalAgentId(id));
-      const allowedBotIds = "botId" in target
+      const allowedBotIds = "chatId" in target ? [] : "botId" in target
         ? [target.botId]
         : (await this.invoke<Group[]>("lbz:groups:list")).find((group) => group.id === target.groupId)?.memberIds;
       if (!allowedBotIds || requestedBotIds.some((id) => !allowedBotIds.includes(id))) {
@@ -773,7 +781,9 @@ export class CollaborationFacade {
       saveIndex(this.index);
       const before = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
       const known = new Set(before.messages.map((message) => message.id));
-      const sent = await this.invoke<{ runIds: string[] }>("lbz:threads:send", [target, { text: content, mentionBotIds }]);
+      const sent = "chatId" in target
+        ? await this.harness.quickChats.send(target.chatId, content, clientMessageId)
+        : await this.invoke<{ runIds: string[] }>("lbz:threads:send", [target, { text: content, mentionBotIds }]);
       const after = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
       const userMessage = [...after.messages].reverse().find((message) => message.role === "user" && !known.has(message.id));
       if (!userMessage) throw new HttpError(500, "message_not_persisted", "The local message was not persisted.");
@@ -906,6 +916,15 @@ export class CollaborationFacade {
   removeInferenceProvider(id: string) { return this.invoke("lbz:inference:remove", [id]); }
   testInferenceProvider(id: string) { return this.invoke("lbz:inference:test", [id]); }
   disconnectPlan(id: string) { return this.invoke("lbz:plans:disconnect", [id]); }
+
+  async createQuickChat(raw: unknown) {
+    const chat = await this.invoke<{ id: string; title: string; createdAt: string; updatedAt: string }>("lbz:quickChats:create", [raw]);
+    return { ...chat, thread: await this.thread({ chatId: chat.id }, [], []) };
+  }
+
+  quickChats(action: "list" | "create" | "get" | "messages" | "send" | "stop" | "answer", args: unknown[] = []) {
+    return this.invoke(`lbz:quickChats:${action}`, args);
+  }
 
   bots() { return this.invoke<Bot[]>("lbz:bots:list"); }
   async createBot(raw: unknown) {
@@ -1489,6 +1508,16 @@ async function serve(): Promise<void> {
         return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      if (url.pathname === "/api/local/quick-chats" && method === "GET") return sendJson(response, 200, await facade.quickChats("list"));
+      if (url.pathname === "/api/local/quick-chats" && method === "POST") return sendJson(response, 201, await facade.createQuickChat(await bodyOf(request)));
+      const quickChat = /^\/api\/local\/quick-chats\/(qchat_[a-f0-9]{32})(?:\/(messages|stop|answer))?$/.exec(url.pathname);
+      if (quickChat) {
+        const chatId = quickChat[1];
+        const action = quickChat[2];
+        if (!action && method === "GET") return sendJson(response, 200, await facade.quickChats("get", [chatId]));
+        if (action === "messages" && method === "GET") return sendJson(response, 200, await facade.quickChats("messages", [chatId, url.searchParams.get("before")]));
+        if (method === "POST" && action) return sendJson(response, 200, await facade.quickChats(action === "messages" ? "send" : action as "stop" | "answer", [chatId, await bodyOf(request)]));
+      }
       // The packs, for the desktop: state, install, dashboard URL. The desktop
       // MAIN process fetches `open` and embeds the page in an isolated view;
       // nothing is launched from here and no browser is opened.

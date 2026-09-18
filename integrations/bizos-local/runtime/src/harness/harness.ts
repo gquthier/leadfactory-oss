@@ -1,3 +1,4 @@
+import { QuickChatStore, quickMessageId } from "./quick-chats.js";
 // Composition root for the local runtime. Everything Electron-specific is
 // injected, so the whole harness runs under vitest with no Electron at all.
 import { randomBytes } from "node:crypto";
@@ -359,6 +360,7 @@ export interface ModelsResponse {
 }
 
 export class LocalBizosHarness {
+  private readonly quickChatStore: QuickChatStore;
   readonly storage: Storage;
   readonly events = new EventBus();
   private readonly clock: Clock;
@@ -413,6 +415,7 @@ export class LocalBizosHarness {
         options.deniedDirs ?? [],
       ),
     );
+    this.quickChatStore = new QuickChatStore(this.storage, this.clock);
     this.botStore = new BotStore(this.storage, this.clock);
     this.botStore.resetTransient();
     this.groupStore = new GroupStore(this.storage, this.clock);
@@ -443,6 +446,7 @@ export class LocalBizosHarness {
 
     this.dispatcher = new Dispatcher({
       bots: this.botStore,
+      chatExecutor: id => this.quickChatStore.executor(id),
       groups: this.groupStore,
       threads: this.threadStore,
       runs: this.runStore,
@@ -509,23 +513,23 @@ export class LocalBizosHarness {
           autoApproveReads: this.settingsStore.get().local.autoApproveReads,
           // One token per spawn, bound to THIS bot. There is nothing in the
           // child's environment that could name another agent's machine.
-          ...(this.computerBroker && options.computerHost
+          ...(this.computerBroker && options.computerHost && !bot.id.startsWith("qchat_")
             ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue(bot.id) } }
             : {}),
         });
-        const localTeam = options.localTeamMcp?.({ bot, ...context });
+        const localTeam = bot.id.startsWith("qchat_") ? undefined : options.localTeamMcp?.({ bot, ...context });
         // The user's own apps go first so a harness server always wins the
         // key on a collision (the store refuses reserved names anyway).
         const apps = this.appsStore.mountedServers({ sharedDirs: this.accessStore.readableRootsFor(bot.id) });
         return { ...apps, ...cloudTools, ...(localTeam ? { local_team_actions: localTeam } : {}) };
       },
       ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: { threadId: string; runId: string }) =>
-        options.localTeamTools!({ bot, ...context }) } : {}),
+        bot.id.startsWith("qchat_") ? [] : options.localTeamTools!({ bot, ...context }) } : {}),
       ...(options.onLocalRunSettled ? { onRunSettled: (runId: string) => options.onLocalRunSettled!(runId) } : {}),
       ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       workspaceFor: (bot) => this.workspaceFor(bot),
       // Only a build with a machine tells its bots they have one.
-      hasComputer: () => Boolean(options.computerHost),
+      hasComputer: bot => !bot.id.startsWith("qchat_") && Boolean(options.computerHost),
       sharedAccess: (bot) => ({
         folders: this.accessStore
           .forBot(bot.id)
@@ -648,6 +652,15 @@ export class LocalBizosHarness {
    * not exist answers ENOENT, which used to be reported as "codex isn't
    * installed" — a setup error for a perfectly good installation. */
   private workspaceFor(bot: Bot): string {
+    if (bot.id.startsWith("qchat_")) {
+      this.quickChatStore.get(bot.id);
+      const binding = this.bindingOf();
+      const path = binding?.path ?? join(this.storage.layout.workspacesDir, "shared");
+      refuseSymlink(path, "workspace");
+      if (!binding) mkdirSync(path, { recursive: true, mode: DIRECTORY_MODE });
+      if (!existsSync(path) || !lstatSync(path).isDirectory()) throw new Error("The workspace folder is unavailable");
+      return path;
+    }
     // The bot's own folder (Agent settings) wins over the global working
     // directory; the folder was checked when it was chosen, and the spawn
     // failure names it if it has gone since.
@@ -2779,6 +2792,42 @@ export class LocalBizosHarness {
       this.dispatcher.clearThread({ groupId: id });
       this.groupStore.remove(id);
       this.threadStore.clear({ groupId: id });
+    },
+  };
+
+  readonly quickChats = {
+    list: async () => ({ chats: this.quickChatStore.list(), workspace: this.bindingOf()?.label ?? this.options.orgName() }),
+    create: async (requestId: string) => {
+      const chat = this.quickChatStore.create(requestId);
+      this.workspaceFor(this.quickChatStore.executor(chat.id)!);
+      return chat;
+    },
+    get: async (id: string) => {
+      const chat = this.quickChatStore.get(id);
+      const threadId = `chat:${id}`;
+      return { chat, ...this.threadStore.snapshot({ chatId: id }, this.dispatcher.activeRunIds(threadId)),
+        runs: this.runStore.list(200).filter(run => run.threadId === threadId) };
+    },
+    messages: async (id: string, before?: string) => { this.quickChatStore.get(id); return this.threadStore.page({ chatId: id }, before); },
+    send: async (id: string, text: string, requestId: string) => {
+      this.quickChatStore.get(id);
+      this.workspaceFor(this.quickChatStore.executor(id)!);
+      await this.refreshSessionCookie();
+      const threadId = `chat:${id}`;
+      const messageId = quickMessageId(requestId);
+      const previous = this.threadStore.get(threadId, messageId);
+      if (previous) {
+        if (previous.blocks.length !== 1 || previous.blocks[0]?.kind !== "text" || previous.blocks[0].text !== text.trim()) throw new Error("This request id was already used for a different message");
+        return { messageId, runIds: [], replayed: true };
+      }
+      this.quickChatStore.touch(id, text);
+      return { messageId, ...this.dispatcher.send({ chatId: id }, { text, messageId }), replayed: false };
+    },
+    stop: async (id: string) => { this.quickChatStore.get(id); this.dispatcher.stop({ chatId: id }); return { stopped: true }; },
+    answer: async (id: string, input: { runId: string; askId: string; answer: AskAnswer }) => {
+      this.quickChatStore.get(id);
+      if (this.runStore.get(input.runId)?.threadId !== `chat:${id}`) throw new Error("Run does not belong to this chat");
+      this.dispatcher.answer(input); return { answered: true };
     },
   };
 

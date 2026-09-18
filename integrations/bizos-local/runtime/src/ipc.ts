@@ -161,7 +161,11 @@ export function asPlanId(value: unknown, field: string): string {
  * it. The allowlist was applied at the top level of every channel and stopped
  * at the first nested object. */
 export function asThreadTarget(value: unknown): ThreadTarget {
-  const record = asStrictRecord(value, "target", ["botId", "groupId"] as const);
+  const record = asStrictRecord(value, "target", ["botId", "groupId", "chatId"] as const);
+  if (record.chatId !== undefined) {
+    if (record.botId !== undefined || record.groupId !== undefined) throw new PayloadError("target must name exactly one thread");
+    return { chatId: asString(record.chatId, "target.chatId", 64) };
+  }
   const botId = record.botId;
   const groupId = record.groupId;
   if (typeof botId === "string" && botId.trim()) return { botId: asString(botId, "target.botId", 64) };
@@ -895,6 +899,23 @@ export function buildHandlers(
       });
     },
     "lbz:groups:remove": (args) => harness.groups.remove(asString(at(args, 0), "id", 64)),
+
+    "lbz:quickChats:list": () => harness.quickChats.list(),
+    "lbz:quickChats:create": (args) => {
+      const input = asStrictRecord(at(args, 0), "input", ["requestId"] as const);
+      return harness.quickChats.create(asString(input.requestId, "requestId", 128));
+    },
+    "lbz:quickChats:get": args => harness.quickChats.get(asString(at(args, 0), "id", 64)),
+    "lbz:quickChats:messages": args => harness.quickChats.messages(asString(at(args, 0), "id", 64), asOptionalString(at(args, 1), "before", 64)),
+    "lbz:quickChats:send": args => {
+      const input = asStrictRecord(at(args, 1), "input", ["text", "requestId"] as const);
+      return harness.quickChats.send(asString(at(args, 0), "id", 64), asString(input.text, "text", 20_000), asString(input.requestId, "requestId", 128));
+    },
+    "lbz:quickChats:stop": args => { asStrictRecord(at(args, 1), "input", []); return harness.quickChats.stop(asString(at(args, 0), "id", 64)); },
+    "lbz:quickChats:answer": args => {
+      const input = asStrictRecord(at(args, 1), "input", ["runId", "askId", "answer"] as const);
+      return harness.quickChats.answer(asString(at(args, 0), "id", 64), { runId: asString(input.runId, "runId", 64), askId: asString(input.askId, "askId", 64), answer: asAskAnswer(input.answer) });
+    },
 
     "lbz:threads:get": (args) => harness.threads.get(asThreadTarget(at(args, 0))),
     "lbz:threads:messages": (args) =>

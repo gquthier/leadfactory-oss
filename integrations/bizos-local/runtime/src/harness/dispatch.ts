@@ -53,7 +53,7 @@ import { resolveGroupTargets } from "./mentions.js";
 import { findMentionedBotIds } from "./mentions.js";
 import type { CodexModelProvider } from "./inference.js";
 import type { ConnectedPlan, PlanProvider } from "./plan-types.js";
-import { buildPersonaPrompt, type LocalArchitectureManifest } from "./prompt.js";
+import { buildQuickChatPrompt, buildPersonaPrompt, type LocalArchitectureManifest } from "./prompt.js";
 import { redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
 import { approvalTitle, labelForTool } from "./style.js";
@@ -130,6 +130,7 @@ export const PROVIDER_LABEL: Record<PlanProvider, string> = {
 
 export interface DispatchDependencies {
   bots: BotStore;
+  chatExecutor?(chatId: string): Bot | undefined;
   groups: GroupStore;
   threads: ThreadStore;
   runs: RunStore;
@@ -340,6 +341,7 @@ export class Dispatcher {
     target: ThreadTarget,
     input: {
       text: string;
+      messageId?: string;
       mentionBotIds?: string[];
       attachments?: Attachment[];
       replyToMessageId?: string;
@@ -368,6 +370,7 @@ export class Dispatcher {
       );
     }
     const message = this.deps.threads.append(threadId, {
+      ...(input.messageId ? { id: input.messageId } : {}),
       role: input.role === "system" ? "system" : "user",
       blocks,
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
@@ -639,6 +642,7 @@ export class Dispatcher {
   // ── internals ─────────────────────────────────────────────────────────
 
   private resolveTargets(target: ThreadTarget, text: string, explicit?: string[]): string[] {
+    if ("chatId" in target) return this.deps.chatExecutor?.(target.chatId) ? [target.chatId] : [];
     if ("botId" in target) return this.deps.bots.get(target.botId) ? [target.botId] : [];
     const group = this.deps.groups.get(target.groupId);
     if (!group) return [];
@@ -745,7 +749,9 @@ export class Dispatcher {
     const next = queue.shift();
     this.queues.set(threadId, queue);
     if (!next) return;
-    const bot = this.deps.bots.get(next.botId);
+    const bot = threadId === `chat:${next.botId}`
+      ? this.deps.chatExecutor?.(next.botId)
+      : this.deps.bots.get(next.botId);
     if (!bot) {
       this.releaseChain(next.chainId);
       this.deps.runs.update(next.runId, { state: "failed", error: "bot deleted" });
@@ -1155,6 +1161,11 @@ export class Dispatcher {
   }
 
   private personaFor(bot: Bot, threadId: string, runtime: { replayHistory: boolean; provider: string; tools: string[]; excludeMessageId: string }): string {
+    if (threadId.startsWith("chat:")) {
+      const messages = this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages
+        .filter(row => row.id !== runtime.excludeMessageId);
+      return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings() });
+    }
     const target: ThreadTarget = threadId.startsWith("group:")
       ? { groupId: threadId.slice(6) }
       : { botId: bot.id };

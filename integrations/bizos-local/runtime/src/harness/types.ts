@@ -230,7 +230,7 @@ export interface Group {
   createdAt: string;
 }
 
-export type ThreadTarget = { botId: string } | { groupId: string };
+export type ThreadTarget = { botId: string } | { groupId: string } | { chatId: string };
 
 export interface Attachment {
   id: string;
@@ -403,10 +403,12 @@ export interface BridgeError {
 }
 
 export function threadIdForTarget(target: ThreadTarget): string {
+  if ("chatId" in target) return `chat:${target.chatId}`;
   return "botId" in target ? `bot:${target.botId}` : `group:${target.groupId}`;
 }
 
 export function targetForThreadId(threadId: string): ThreadTarget | null {
+  if (threadId.startsWith("chat:")) return { chatId: threadId.slice(5) };
   if (threadId.startsWith("bot:")) return { botId: threadId.slice(4) };
   if (threadId.startsWith("group:")) return { groupId: threadId.slice(6) };
   return null;
