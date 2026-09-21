@@ -39,3 +39,29 @@ when verifying archive and checkout builds.
 real-sidecar-process tests, with temporary profiles and scripted model drivers.
 Build first so the sidecar-process test is exercised. These tests do not call a
 paid model, test real user credentials or validate a signed desktop installer.
+
+## Native CLI permissions in local BizOS
+
+The harness adds workspace context, agent coordination and tools to the user's
+personal Codex app-server / Claude Code CLI. Built-in CLI tools remain enabled;
+Claude receives BizOS instructions through `--append-system-prompt`. This is not
+a promise that every interactive CLI feature is exposed in the desktop UI.
+
+The workspace setting `local.permissions = skip-all` explicitly selects native
+unrestricted execution: Codex uses `never` approvals and `dangerFullAccess`, and
+Claude uses `bypassPermissions` / `--dangerously-skip-permissions`. In this mode,
+Claude merges BizOS MCP configuration with its native account/project MCP sources
+instead of restricting it with `--strict-mcp-config`. Personal profile selection
+and cloud/local credential isolation remain unchanged.
+
+The default remains `ask`; protected mode retains MCP isolation and the selected
+file sandbox. Each Codex turn sends an explicit approval policy, including resumed
+threads, so disabling bypass restores `on-request` on the next turn. Changing the
+setting does not approve an already pending action. macOS permissions and Jev's
+separate action confirmations are unaffected.
+
+`tests/native-capabilities.test.ts` exercises both permission modes for new and
+resumed Codex turns with a fake app-server transport, plus Claude's native tool,
+context and connector arguments. It makes no model call. See the official
+[Codex app-server contract](https://learn.chatgpt.com/docs/app-server) and
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference).

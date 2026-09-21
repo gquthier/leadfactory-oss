@@ -152,10 +152,13 @@ export function buildClaudeArgs(input: {
   if (input.system) args.push("--append-system-prompt", input.system);
   if (input.resumeCursor) args.push("--resume", input.resumeCursor);
   if (input.effort) args.push("--effort", input.effort);
-  // Only the harness's servers: without `--strict-mcp-config` the CLI also
-  // loads the account's own connectors (claude.ai integrations, ~/.claude
-  // servers), which the person never granted to a BizOS agent.
-  if (input.mcpConfigPath) args.push("--mcp-config", input.mcpConfigPath, "--strict-mcp-config");
+  // In the explicitly selected native bypass mode, BizOS augments the CLI:
+  // retain the account/project MCP sources as well as the harness's servers.
+  // Protected mode keeps the existing connector isolation.
+  if (input.mcpConfigPath) {
+    args.push("--mcp-config", input.mcpConfigPath);
+    if (!input.skipPermissions) args.push("--strict-mcp-config");
+  }
   if (input.allowedTools?.length) args.push("--allowedTools", input.allowedTools.join(","));
   return args;
 }

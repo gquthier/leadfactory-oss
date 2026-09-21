@@ -980,11 +980,10 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
           // indistinguishable from an absent key — both leave the thread's
           // current effort alone.
           ...(input.effort ? { effort: input.effort } : {}),
-          // `TurnStartParams.approvalPolicy` overrides the thread's "for this
-          // turn and subsequent turns". Sent only in `skip-all`, because a
-          // RESUMED thread never sees `thread/start` again and would otherwise
-          // keep asking under a policy the user has since turned off.
-          ...(input.skipPermissions ? { approvalPolicy: "never" } : {}),
+          // Overrides persist across resumed turns. Apply both directions so
+          // turning bypass off restores native approval prompts immediately
+          // on the next turn, rather than keeping a previous `never` policy.
+          approvalPolicy: input.skipPermissions ? "never" : "on-request",
           sandboxPolicy,
         });
       } catch (caught) {
