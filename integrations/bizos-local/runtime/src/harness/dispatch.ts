@@ -1077,6 +1077,7 @@ export class Dispatcher {
       const start = this.deps.startClaudeTurn ?? defaultStartClaudeTurn;
       handle = start({
         ...common,
+        ...(writableRoots.length ? { additionalDirectories: writableRoots } : {}),
         ...(plan?.configDir ? { configDir: plan.configDir } : {}),
         // Same servers and exact stored approvals as Codex; any unmatched
         // permission is surfaced by Claude's bidirectional host protocol.

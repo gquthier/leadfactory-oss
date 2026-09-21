@@ -1,6 +1,8 @@
-# Agency et E-commerce dans BizOS local
+# Templates d’entreprise dans BizOS local
 
-État au **9 septembre 2026** : parcours vérifié sur **macOS Apple Silicon**, dans une application BizOS empaquetée et un profil de test isolé. Les deux templates sont couverts par les tests du runtime. Le parcours e-commerce empaqueté a aussi été exercé avec Claude : lecture du skill, modification d’un produit, création d’un livrable et personnalisation du dashboard dans la même base. Le parcours client et onboarding Agency possède ses tests métier et une preuve agent de la preview précédente. Cette distribution est une **preview locale**, signée ad hoc et non notarisée.
+État au **21 septembre 2026** : le runtime source propose exactement trois choix pour une nouvelle entreprise : **Lead Gen Agency** (`lead-gen-agency`), **Service-based Business** (`service-based-business`) et **Software** (`software`). Les identifiants historiques **Company OS** et **E-commerce** restent reconnus uniquement pour rouvrir sans migration les espaces locaux qui y sont déjà liés.
+
+La release publique v0.3.0-preview.2 décrite ci-dessous est plus ancienne : son application empaquetée expose encore Agency et E-commerce. Elle ne prouve pas le parcours empaqueté des trois choix actuels. Le runtime courant possède ses tests TypeScript ; une validation de l’application empaquetée reste une preuve séparée.
 
 ## Télécharger BizOS ou compiler ses sources
 
@@ -26,19 +28,25 @@ Pendant une tâche, **Stop remplace le bouton emoji** dans la zone de message. I
 
 ## Choisir son template et son coffre
 
-Les sources actuelles proposent **Agence LeadFactory** et **E-commerce**. Dans **Apps**, choisissez le modèle puis un nouveau coffre ou un dossier déjà partagé. La liaison est enregistrée avant l’installation et reste fixe pour cet espace ; un autre modèle ou coffre est refusé, y compris via l’API. Un coffre déplacé ou indisponible ne provoque pas la création silencieuse d’un espace vide.
+Pour une nouvelle entreprise, les sources actuelles proposent, dans cet ordre, **Lead Gen Agency**, **Service-based Business** et **Software**. Dans **Apps**, choisissez le modèle puis un nouveau coffre ou un dossier déjà partagé. La liaison est enregistrée avant le premier effet de l’installation et reste fixe pour cet espace ; un autre modèle ou coffre est refusé, y compris via l’API. Après une interruption entre la liaison et le journal d’installation, le redémarrage reprend le même modèle dans le même coffre. Un coffre déplacé, illisible ou remplacé par un lien symbolique ne provoque ni repli vers un autre dossier ni autorisation plus large.
 
-L’installation place dans le coffre les notes, les processus, six rôles, leur équipe et les skills : **23 pour Agency**, **24 pour E-commerce**. Les fichiers sont visibles dans **Second cerveau → Dossier**, notamment `Agents/`, `Processes/`, `skills/`, `Clients/` ou `Products/`. Une reprise ajoute les fichiers manquants et conserve les éditions de l’utilisateur.
+Lead Gen Agency installe ses six rôles et ses 23 skills. Service-based Business installe six agents persistants — Business Director, Sales, Client Success, Delivery, Quality et Operations — leur équipe, les processus de qualification à facturation et un coffre partagé, sans routine ni connexion externe préconfigurée. Software fournit son propre ensemble de rôles et de notes. Les fichiers sont visibles dans **Second cerveau → Dossier**, notamment `Agents/`, `Processes/`, `Clients/`, `Projects/`, `Deliverables/`, `knowledge/`, `scripts/` ou les dossiers propres au modèle. Une reprise ajoute les fichiers manquants et conserve les éditions de l’utilisateur.
+
+Les anciens espaces liés à Company OS ou E-commerce conservent leur identifiant, leur coffre, leurs agents et leurs données. Ils restent ouvrables mais ne sont ni renommés, ni convertis, ni proposés comme choix de création d’une nouvelle entreprise.
 
 ## Dashboard intégré et agents
 
-Le dashboard de chaque modèle s’affiche directement dans Apps. **Start Here** permet de renseigner son activité et guide les premières connexions. Configurez votre modèle personnel dans les réglages BizOS puis donnez une mission au directeur de l’équipe dans Discussions.
+Lead Gen Agency conserve son cockpit métier intégré ; les anciens espaces E-commerce conservent le leur. Service-based Business et Software fonctionnent avec leurs agents, leur chat d’équipe et **Second cerveau → Dossier** ; ce lot ne leur invente pas de CRM ou de dashboard métier. Leur note **Start here** recueille les faits de l’activité. Configurez votre modèle personnel dans les réglages BizOS puis donnez une mission au directeur de l’équipe dans Discussions.
+
+Dans un coffre lié, chaque agent démarre dans `Agents/<Nom>` et reçoit le chemin vérifié du coffre commun comme racine de travail partagée. Un agent recruté rejoint ce même coffre même si un ancien dossier de travail global est configuré. Cette autorisation concerne uniquement le coffre explicitement lié à cet OS local ; aucun autre coffre historique ni la racine d’état du runtime n’est ajouté.
+
+Les outils `recruit_agent` et `manage_agent` sont réellement disponibles aux runs Codex et Claude lorsque leur transport local est monté. Cursor ne reçoit pas ces outils injectés. Un transfert `@Nom` déclenche un agent seulement dans le groupe courant : depuis un DM au directeur, il faut ouvrir le chat d’équipe, pas prétendre qu’un message a été envoyé au groupe. Une chaîne est bornée à quatre sauts et douze tours sans revisiter un agent. Les checkpoints peuvent ajouter au plus trois continuations ; un run interrompu n’est pas repris automatiquement après redémarrage.
 
 Les formulaires et les outils des agents partagent la même base. Agency dispose des outils `agency_*` pour les clients, campagnes, tâches, livrables et onboarding ; E-commerce dispose de `commerce_*` pour les produits, concurrents, fournisseurs, boutiques, créatives, campagnes, tâches, livrables et relevés. Les agents peuvent aussi adapter la configuration du dashboard : titre, introduction et sections prises en charge. Les checklists et sections métier e-commerce sont configurables ; aucun code arbitraire n’est exécuté depuis ces champs.
 
 Les changements apparaissent sans rechargement manuel. Un formulaire en cours de saisie conserve son brouillon et signale les nouvelles données. Les vues `Clients/<id>/Dossier.md` ou `Products/<id>/Dossier.md` sont générées depuis la base ; ajoutez vos notes humaines à côté, et modifiez les fiches métier dans le dashboard ou via les agents.
 
-Les skills locaux peuvent être adaptés dans `skills/` : les agents lisent cette version du coffre. Les comptes publicitaires, Shopify, email et médias appartiennent à l’utilisateur. L’installation ne les connecte pas automatiquement et n’active aucune routine. Le [guide E-commerce](../ecommerce/README.md) décrit le parcours complet et les dépendances.
+Les skills locaux peuvent être adaptés dans `skills/` : les agents lisent cette version du coffre. Les comptes CRM, paiement, publicité, Shopify, email et médias appartiennent à l’utilisateur. L’installation ne les connecte pas automatiquement et n’active aucune routine. Une routine créée explicitement avec le mécanisme natif exige que le runtime fonctionne et que le Mac soit réveillé à l’heure prévue. Le [guide E-commerce](../ecommerce/README.md) reste la documentation des anciens espaces E-commerce.
 
 Les données embarquées se trouvent sous `<coffre>/Apps/LeadFactory/data` ou `<coffre>/Apps/Ecommerce/data`. Pour sauvegarder, utilisez l’export JSON du dashboard ; pour copier manuellement l’ensemble du coffre, fermez d’abord BizOS et son runtime. Conservez la copie hors des dépôts publics.
 

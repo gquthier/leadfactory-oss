@@ -124,7 +124,7 @@ async function fixture(options: { stopDelayMs?: number } = {}): Promise<Fixture>
       sandbox,
       supportedProviders: ["codex", "claude"],
       peers: peers.map((peer) => ({ agentId: `local:${INSTANCE}:agent:${peer.id}`, name: peer.name })),
-      recruitment: "autonomous-codex",
+      recruitment: "autonomous-codex-claude",
     }),
     startTurn: (input): CodexTurnHandle => {
       turns.push(input);

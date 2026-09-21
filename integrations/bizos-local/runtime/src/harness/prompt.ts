@@ -59,10 +59,12 @@ export interface LocalArchitectureManifest {
   agentId: string;
   threadId: string;
   workspaceDir: string;
+  /** The verified bound company vault shared by this local workspace. */
+  sharedBrainPath?: string;
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   supportedProviders: Array<"codex" | "claude" | "cursor">;
   peers: Array<{ agentId: string; name: string }>;
-  recruitment: "autonomous-codex" | "unavailable";
+  recruitment: "autonomous-codex-claude" | "unavailable";
   host?: { platform: string; home: string; provider: string; permissions: string; tools: string[] };
 }
 
@@ -244,6 +246,7 @@ export function buildPersonaPrompt(input: PersonaInput): string {
       `- agent: ${manifest.agentId}`,
       `- thread: ${manifest.threadId}`,
       `- agent workspace: ${manifest.workspaceDir}`,
+      ...(manifest.sharedBrainPath ? [`- shared second brain: ${manifest.sharedBrainPath}`] : []),
       `- sandbox: ${manifest.sandbox}`,
       ...(manifest.host ? [
         `- host: ${singleLine(manifest.host.platform)}; home: ${singleLine(manifest.host.home, 1000)}`,

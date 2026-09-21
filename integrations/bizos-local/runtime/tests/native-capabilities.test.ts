@@ -59,9 +59,10 @@ describe('local native CLI capabilities', () => {
     expect(args).not.toContain('--tools');
   });
   it('keeps configured MCP isolation and normal permissions when bypass is off', () => {
-    const args = buildClaudeArgs({ text: 'test', cwd: '/test', sandbox: 'workspace-write', skipPermissions: false, mcpConfigPath: '/test/mcp.json' });
+    const args = buildClaudeArgs({ text: 'test', cwd: '/test', additionalDirectories: ['/company', '/company'], sandbox: 'workspace-write', skipPermissions: false, mcpConfigPath: '/test/mcp.json' });
     expect(args).toContain('--strict-mcp-config');
     expect(args).toContain('acceptEdits');
+    expect(args.filter((value) => value === '/company')).toHaveLength(1);
     expect(args).not.toContain('--dangerously-skip-permissions');
     expect(args).not.toContain('bypassPermissions');
   });

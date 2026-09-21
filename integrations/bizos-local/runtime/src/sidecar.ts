@@ -2008,17 +2008,18 @@ async function serve(): Promise<void> {
       packs?.agency.abortRun(runId);
       packs?.ecommerce.abortRun(runId);
     },
-    localArchitecture: ({ bot, threadId, workspaceDir, sandbox, peers }) => ({
+    localArchitecture: ({ bot, threadId, workspaceDir, sharedBrainPath, sandbox, peers }) => ({
         mode: "local",
         instanceId: id,
         workspaceId: `local:${id}:workspace`,
         agentId: `local:${id}:agent:${bot.id}`,
         threadId: `local:${id}:thread:${threadId}`,
         workspaceDir,
+        ...(sharedBrainPath ? { sharedBrainPath } : {}),
         sandbox,
         supportedProviders: ["codex", "claude", "cursor"],
         peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name })),
-        recruitment: "autonomous-codex",
+        recruitment: "autonomous-codex-claude",
       }),
   });
   // The packs share this harness: their agents are roster bots the generic

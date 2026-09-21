@@ -31,6 +31,8 @@ import type { ReasoningEffort, SandboxMode } from "./types.js";
 export interface ClaudeTurnInput {
   cli: string;
   cwd: string;
+  /** Additional user-authorized roots visible to this turn. */
+  additionalDirectories?: string[];
   text: string;
   system?: string;
   model?: string;
@@ -115,6 +117,7 @@ export function buildClaudeArgs(input: {
   system?: string;
   resumeCursor?: string | null;
   cwd: string;
+  additionalDirectories?: string[];
   effort?: ReasoningEffort;
   sandbox: SandboxMode;
   mcpConfigPath?: string;
@@ -145,8 +148,7 @@ export function buildClaudeArgs(input: {
     "--permission-mode",
     input.skipPermissions ? "bypassPermissions" : permissionModeFor(input.sandbox),
     ...(input.skipPermissions ? ["--dangerously-skip-permissions"] : []),
-    "--add-dir",
-    input.cwd,
+    ...[...new Set([input.cwd, ...(input.additionalDirectories ?? [])])].flatMap((directory) => ["--add-dir", directory]),
   ];
   if (input.model) args.push("--model", input.model);
   if (input.system) args.push("--append-system-prompt", input.system);
@@ -277,6 +279,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
     const args = buildClaudeArgs({
       text: input.text,
       cwd: input.cwd,
+      ...(input.additionalDirectories?.length ? { additionalDirectories: input.additionalDirectories } : {}),
       sandbox: input.sandbox,
       ...(input.model ? { model: input.model } : {}),
       ...(input.system ? { system: input.system } : {}),

@@ -5,9 +5,10 @@
 // into a MANAGED VAULT of its own, `<stateRoot>/vaults/<templateId>/`, never
 // into a folder that already holds something. The person's existing brain,
 // its notes and their roster are never touched: a template adds a vault, its
-// agents and their first words, and that is all. The catalogue is built in —
-// two packs, both flat TypeScript modules so the packaged app ships them —
-// and nothing on disk can add a third.
+// agents and their first words, and that is all. The catalogue is built in as
+// flat TypeScript modules so the packaged app ships it; nothing on disk can
+// add an id. New companies see three ordered choices while two legacy ids
+// remain readable so existing workspaces keep opening unchanged.
 //
 // `templates.json` is the registry. It holds two things:
 //   - `installations`: templates that were applied whole, one per id, with
@@ -61,25 +62,46 @@ import { COMPANY_OS, segmentsOf, TEMPLATE_FILE, type CompanyTemplate, type Templ
 import { FILE_MODE, type Storage } from "./storage.js";
 import { ECOMMERCE_FALLBACK, ecommerceTemplate } from "./template-ecommerce.js";
 import { LEAD_GEN_AGENCY } from "./template-lead-gen-agency.js";
+import { SERVICE_BASED_BUSINESS } from "./template-service-based-business.js";
+import { SOFTWARE } from "./template-software.js";
 import type { Bot } from "./types.js";
 import { DEFAULT_KIT_ROOT, kitPresent, loadKit } from "./pack-kit.js";
 
-/** The built-in catalogue, in the order the desktop lists it. */
-export const TEMPLATE_IDS = ["company-os", "lead-gen-agency", "ecommerce"] as const;
-export type TemplateId = (typeof TEMPLATE_IDS)[number];
+/** Every id this runtime must continue to understand on disk. Company OS and
+ * E-commerce are legacy creation choices: existing bindings/installations
+ * still open unchanged, but a new company is offered only the three ids in
+ * `CREATION_TEMPLATE_IDS`. `TEMPLATE_IDS` remains the known-id alias for old
+ * imports that use it as a registry/workspace whitelist. */
+export const KNOWN_TEMPLATE_IDS = ["company-os", "lead-gen-agency", "ecommerce", "service-based-business", "software"] as const;
+export const TEMPLATE_IDS = KNOWN_TEMPLATE_IDS;
+export type TemplateId = (typeof KNOWN_TEMPLATE_IDS)[number];
 
-/** The two flat packs, plus the e-commerce pack read from the embedded kit
- * (`agency-kit/ecommerce/template.json`) when it is staged, or the shipped
- * fallback (`template-ecommerce.ts`) when it is not. Resolved per call so a
- * kit staged after boot is seen; the kit read is cached by its module. */
+/** The exact, ordered choices for creating a new company. */
+export const CREATION_TEMPLATE_IDS = ["lead-gen-agency", "service-based-business", "software"] as const;
+export type CreationTemplateId = (typeof CREATION_TEMPLATE_IDS)[number];
+
+/** Built-in packs. E-commerce is read from the embedded kit
+ * (`agency-kit/ecommerce/template.json`) when staged, or its shipped fallback
+ * when not. Lead Gen likewise prefers the staged kit. Resolved per call so a
+ * kit staged after boot is seen; kit reads are cached by their modules. */
 export function templateOf(id: TemplateId): CompanyTemplate {
-  if (id === "company-os") return COMPANY_OS;
-  if (id === "lead-gen-agency") {
-    const file = "templates/lead-gen-agency.company-template.json";
-    const template = kitPresent(DEFAULT_KIT_ROOT, file) ? loadKit(DEFAULT_KIT_ROOT, file, "agency").template : LEAD_GEN_AGENCY;
-    return { ...template, description: template.description || LEAD_GEN_AGENCY.description, team: template.team ?? { name: "LeadFactory Agency" } };
+  switch (id) {
+    case "company-os":
+      return COMPANY_OS;
+    case "lead-gen-agency": {
+      const file = "templates/lead-gen-agency.company-template.json";
+      const template = kitPresent(DEFAULT_KIT_ROOT, file) ? loadKit(DEFAULT_KIT_ROOT, file, "agency").template : LEAD_GEN_AGENCY;
+      return { ...template, description: template.description || LEAD_GEN_AGENCY.description, team: template.team ?? { name: "LeadFactory Agency" } };
+    }
+    case "ecommerce":
+      return ecommerceTemplate();
+    case "service-based-business":
+      return SERVICE_BASED_BUSINESS;
+    case "software":
+      return SOFTWARE;
+    default:
+      throw new BrainError(`template ${JSON.stringify(id)} is not in the catalogue`, "not_found");
   }
-  return ecommerceTemplate();
 }
 
 /** The catalogue as a record — the fallback e-commerce pack, for callers
@@ -88,10 +110,12 @@ export const TEMPLATE_CATALOG: Readonly<Record<TemplateId, CompanyTemplate>> = {
   "company-os": COMPANY_OS,
   "lead-gen-agency": LEAD_GEN_AGENCY,
   ecommerce: ECOMMERCE_FALLBACK,
+  "service-based-business": SERVICE_BASED_BUSINESS,
+  software: SOFTWARE,
 };
 
 export function isTemplateId(value: unknown): value is TemplateId {
-  return typeof value === "string" && (TEMPLATE_IDS as readonly string[]).includes(value);
+  return typeof value === "string" && (KNOWN_TEMPLATE_IDS as readonly string[]).includes(value);
 }
 
 /** The registry file, next to `bots.json`. */

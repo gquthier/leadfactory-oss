@@ -4,7 +4,7 @@ import { QuickChatStore, quickMessageId } from "./quick-chats.js";
 import { randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import {
   AccessError,
   AccessStore,
@@ -110,7 +110,7 @@ import {
   readWorkspaceBinding,
   refuseSymlink,
   summarize,
-  TEMPLATE_IDS,
+  CREATION_TEMPLATE_IDS,
   templateOf,
   vaultPathOf,
   vaultRootId,
@@ -318,6 +318,8 @@ export interface HarnessOptions {
     bot: Bot;
     threadId: string;
     workspaceDir: string;
+    /** Verified bound company vault for this turn, when available. */
+    sharedBrainPath?: string;
     sandbox: RuntimeSettings["local"]["sandbox"];
     peers: Bot[];
   }): LocalArchitectureManifest;
@@ -451,6 +453,8 @@ export class LocalBizosHarness {
   private writeSheetOpen = false;
   private readonly writeSheetsAsked: number[] = [];
   private readonly homeDir: string;
+  /** Canonical identity captured before a later filesystem swap can occur. */
+  private readonly storageRootRealPath: string;
   private readonly dispatcher: Dispatcher;
   private readonly scheduler: Scheduler;
   private readonly launcher: McpLauncher | null;
@@ -478,6 +482,7 @@ export class LocalBizosHarness {
   constructor(private readonly options: HarnessOptions) {
     this.clock = options.clock ?? systemClock;
     this.storage = new Storage(options.rootDir);
+    this.storageRootRealPath = realpathSync(this.storage.layout.root);
     this.settingsStore = new SettingsStore(
       this.storage,
       defaultSettingsPolicy(
@@ -578,13 +583,14 @@ export class LocalBizosHarness {
       },
       mcpServers: (bot, context) => {
         const access = this.settingsStore.get().access;
+        const sharedDirs = this.effectiveReadableRoots(bot);
         const cloudTools = buildMcpServers({
           launcher: this.launcher,
           baseUrl: options.baseUrl,
           sessionCookie: this.sessionCookie,
           broker: this.broker,
           workspaceDir: this.workspaceFor(bot),
-          sharedDirs: this.accessStore.readableRootsFor(bot.id),
+          sharedDirs,
           ...(access.fullDiskRead ? { fullDiskReadRoot: this.homeDir } : {}),
           deniedDirs: deniedDirectories(this.homeDir, this.options.deniedDirs ?? []),
           autoApproveReads: this.settingsStore.get().local.autoApproveReads,
@@ -599,7 +605,7 @@ export class LocalBizosHarness {
           : options.localTeamMcp?.({ bot, threadId: context.threadId, runId: context.runId });
         // The user's own apps go first so a harness server always wins the
         // key on a collision (the store refuses reserved names anyway).
-        const apps = this.appsStore.mountedServers({ sharedDirs: this.accessStore.readableRootsFor(bot.id) });
+        const apps = this.appsStore.mountedServers({ sharedDirs });
         return { ...apps, ...cloudTools, ...(localTeam ? { local_team_actions: localTeam } : {}) };
       },
       ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: TurnContext) =>
@@ -612,9 +618,7 @@ export class LocalBizosHarness {
       // Only a build with a machine tells its bots they have one.
       hasComputer: bot => !bot.id.startsWith("qchat_") && Boolean(options.computerHost),
       sharedAccess: (bot) => ({
-        folders: this.accessStore
-          .forBot(bot.id)
-          .map((grant) => ({ path: grant.path, mode: grant.mode })),
+        folders: this.effectiveSharedFolders(bot),
         fullDiskRead: this.settingsStore.get().access.fullDiskRead,
       }),
       ...(options.localArchitecture ? {
@@ -623,10 +627,12 @@ export class LocalBizosHarness {
           threadId: string;
           executionPolicy?: TurnExecutionPolicy;
         }) => {
+          const sharedBrainPath = this.verifiedBoundVaultPath(bot);
           const manifest = options.localArchitecture!({
             bot,
             threadId,
             workspaceDir: this.workspaceFor(bot),
+            ...(sharedBrainPath ? { sharedBrainPath } : {}),
             sandbox: this.settingsStore.get().local.sandbox,
             peers: this.botStore.list().filter((candidate) => !candidate.archived && candidate.id !== bot.id),
           });
@@ -747,7 +753,8 @@ export class LocalBizosHarness {
     if (bot.id.startsWith("qchat_")) {
       this.quickChatStore.get(bot.id);
       const binding = this.bindingOf();
-      const path = binding?.path ?? join(this.storage.layout.workspacesDir, "shared");
+      const path = binding ? this.verifiedBoundVaultPath() : join(this.storage.layout.workspacesDir, "shared");
+      if (!path) throw new SettingsError("the bound company vault is unavailable");
       refuseSymlink(path, "workspace");
       if (!binding) mkdirSync(path, { recursive: true, mode: DIRECTORY_MODE });
       if (!existsSync(path) || !lstatSync(path).isDirectory()) throw new Error("The workspace folder is unavailable");
@@ -756,7 +763,17 @@ export class LocalBizosHarness {
     // The bot's own folder (Agent settings) wins over the global working
     // directory; the folder was checked when it was chosen, and the spawn
     // failure names it if it has gone since.
-    if (bot.workspacePath) return bot.workspacePath;
+    if (bot.workspacePath) {
+        const binding = this.bindingOrNull();
+      if (binding) {
+        const fromVault = relative(binding.path, bot.workspacePath);
+        const belongsToBoundVault = fromVault === "" || (!fromVault.startsWith(`..${sep}`) && !isAbsolute(fromVault));
+        if (belongsToBoundVault && !this.verifiedBoundVaultPath(bot)) {
+          throw new SettingsError("the bound company vault is unavailable");
+        }
+      }
+      return bot.workspacePath;
+    }
     const configured = this.settingsStore.get().local.workingDir;
     if (!configured) return this.storage.workspacePath(bot.id);
     const path = join(configured, bot.id);
@@ -1424,6 +1441,64 @@ export class LocalBizosHarness {
     }
   }
 
+  /** The one company vault this workspace is bound to, re-validated for the
+   * current turn. A missing folder, link at the vault itself (or at the
+   * managed `vaults/` parent), or a changed real path returns no capability.
+   * No other installed/historical vault is considered. */
+  private verifiedBoundVaultPath(bot?: Bot): string | undefined {
+    if (bot?.id.startsWith("qchat_")) return undefined;
+    const binding = this.bindingOrNull();
+    if (!binding) return undefined;
+    try {
+      const managed = LocalBizosHarness.managedBinding(binding);
+      if (managed) {
+        refuseSymlink(this.vaultsDir(), `${VAULTS_DIRECTORY}/`);
+        refuseSymlink(binding.path, binding.label);
+        if (!lstatSync(this.vaultsDir()).isDirectory() || !lstatSync(binding.path).isDirectory()) return undefined;
+      } else {
+        const stats = lstatSync(binding.path);
+        if (!stats.isDirectory() || stats.isSymbolicLink()) return undefined;
+      }
+      // A managed binding is intentionally stored under the caller-visible
+      // state path (which may use macOS's stable /var -> /private/var alias).
+      // Compare it with the canonical state identity captured at startup;
+      // external bindings were canonicalized when selected.
+      const canonicalVault = managed
+        ? join(this.storageRootRealPath, VAULTS_DIRECTORY, binding.templateId)
+        : binding.path;
+      if (realpathSync(binding.path) !== canonicalVault) return undefined;
+      if (bot) {
+        const workspace = bot.workspacePath;
+        if (!workspace) return undefined;
+        const fromAgents = relative(join(binding.path, AGENTS_DIRECTORY), workspace);
+        if (!fromAgents || fromAgents.startsWith(`..${sep}`) || isAbsolute(fromAgents)) return undefined;
+        const workspaceStats = lstatSync(workspace);
+        if (!workspaceStats.isDirectory() || workspaceStats.isSymbolicLink()) return undefined;
+        // This also rejects a replaced `Agents/` or any linked ancestor of
+        // the individual agent directory.
+        const canonicalWorkspace = join(canonicalVault, relative(binding.path, workspace));
+        if (realpathSync(workspace) !== canonicalWorkspace) return undefined;
+      }
+      return binding.path;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Settings grants plus the one user-selected company vault. */
+  private effectiveSharedFolders(bot: Bot): Array<{ path: string; mode: "read" | "read-write" }> {
+    const folders = this.accessStore.forBot(bot.id).map((grant) => ({ path: grant.path, mode: grant.mode }));
+    const sharedBrainPath = this.verifiedBoundVaultPath(bot);
+    if (sharedBrainPath && !folders.some((folder) => folder.path === sharedBrainPath)) {
+      folders.push({ path: sharedBrainPath, mode: "read-write" });
+    }
+    return folders;
+  }
+
+  private effectiveReadableRoots(bot: Bot): string[] {
+    return [...new Set(this.effectiveSharedFolders(bot).map((folder) => folder.path))];
+  }
+
   /** A managed binding is one whose vault this app made: `vault:<templateId>`. */
   private static managedBinding(binding: WorkspaceBinding): boolean {
     return binding.rootId === vaultRootId(binding.templateId);
@@ -1847,6 +1922,9 @@ export class LocalBizosHarness {
   /** Bind (or confirm the binding) and install (or resume) — the one door. */
   private async bindAndApply(templateId: TemplateId, rootId: string): Promise<TemplateApplyResult> {
     return this.serialized(async () => {
+      // A malformed built-in pack must fail before the durable one-way
+      // binding exists. `applyTemplate` validates again at its own boundary.
+      validateTemplate(templateOf(templateId));
       let binding = this.bindingOf();
       if (binding) {
         if (!LocalBizosHarness.sameBinding(binding, templateId, rootId)) throw bindingConflict(binding, templateId, rootId);
@@ -1905,7 +1983,7 @@ export class LocalBizosHarness {
       const binding = this.bindingOf();
       return {
         binding: binding ? { templateId: binding.templateId, rootId: binding.rootId, label: binding.label, path: binding.path } : null,
-        templates: TEMPLATE_IDS.map((id) => {
+        templates: CREATION_TEMPLATE_IDS.map((id) => {
           const template = templateOf(id);
           return { id, name: template.name, description: template.description ?? "" };
         }),
@@ -1972,7 +2050,20 @@ export class LocalBizosHarness {
       const binding = this.bindingOf();
       if (binding) {
         const registry = readTemplateRegistry(this.storage, binding);
-        if (registry.pending[binding.templateId]) await this.bindAndApply(binding.templateId, binding.rootId);
+        const legacyState = binding.templateId === "company-os" && binding.rootId === "brain"
+          ? this.storage.readJson<TemplateState | null>(TEMPLATE_FILE, null)
+          : null;
+        const completedLegacyBinding = legacyState?.id === "company-os"
+          && (legacyState.vault === "seeded" || legacyState.vault === "upgraded");
+        // The binding is journaled before the installer's first effect. A
+        // crash in that window leaves neither installation nor pending row;
+        // startup must treat it as work to resume, not as an empty success.
+        // A legacy Company OS `template.json` remains completion evidence even
+        // when its last agent was intentionally removed; never recreate it.
+        if (registry.pending[binding.templateId]
+          || (!this.installationOf(registry, binding.templateId) && !completedLegacyBinding)) {
+          await this.bindAndApply(binding.templateId, binding.rootId);
+        }
         const installation = this.workspaceTemplate.installation(binding.templateId);
         return { id: binding.templateId, vault: "kept", bots: Object.keys(installation.bots).length, applied: false };
       }
@@ -2053,8 +2144,14 @@ export class LocalBizosHarness {
       const binding = this.bindingOf();
       const registry = readTemplateRegistry(this.storage, binding);
       const roster = this.botStore.list();
+      const ids: TemplateId[] = [...CREATION_TEMPLATE_IDS];
+      // Old Company OS / E-commerce workspaces remain inspectable and
+      // reopenable, but neither appears as a fresh-company choice.
+      for (const legacy of ["company-os", "ecommerce"] as const) {
+        if (this.installationOf(registry, legacy)) ids.push(legacy);
+      }
       return {
-        templates: TEMPLATE_IDS.map((id) => ({
+        templates: ids.map((id) => ({
           ...summarize(this.storage, templateOf(id), this.installationOf(registry, id), roster),
           ...(binding?.templateId === id ? { bound: true } : {}),
         })),
@@ -2841,21 +2938,25 @@ export class LocalBizosHarness {
     let workspacePath = input.workspacePath?.trim();
     if (workspacePath) {
       this.requireFolder(workspacePath);
+    } else if (this.bindingOf()) {
+      // A bound company is an explicit user choice of shared vault. A peer
+      // recruited into this local workspace belongs in that vault even when
+      // an older global working-directory preference still exists.
+      const vaultDir = this.verifiedBoundVaultPath();
+      if (!vaultDir) throw new SettingsError("the bound company vault is unavailable");
+      workspacePath = ensureAgentFolder(vaultDir, {
+        name: input.name,
+        ...(input.title ? { title: input.title } : {}),
+        ...(input.description ? { description: input.description } : {}),
+      }).path;
     } else if (this.settingsStore.get().local.workingDir) {
       // The person chose a working directory for every agent in Settings:
       // that choice stands, and `workspaceFor` puts the bot under it.
       workspacePath = undefined;
     } else {
-      // A bound workspace: the agent's folder goes in the pinned vault, so a
-      // peer recruited during a pack's mission works from the same vault as
-      // the pack. Unbound: the legacy brain, seeded if it is not there yet.
-      const binding = this.bindingOf();
-      const vaultDir = binding ? binding.path : this.brainDir();
-      if (binding) {
-        this.requireFolder(vaultDir);
-      } else {
-        seedTemplateVault(vaultDir, COMPANY_OS);
-      }
+      // Unbound bots retain the legacy brain workspace, seeded if needed.
+      const vaultDir = this.brainDir();
+      seedTemplateVault(vaultDir, COMPANY_OS);
       workspacePath = ensureAgentFolder(vaultDir, {
         name: input.name,
         ...(input.title ? { title: input.title } : {}),

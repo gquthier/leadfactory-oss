@@ -23,10 +23,9 @@
 // honest — a path that could leave the vault is refused here, whatever pack
 // it came from, and a folder that already exists is never rewritten.
 //
-// The Company OS is also the first row of the CATALOGUE (`templates.ts`):
-// the same pack, created on demand into a managed vault of its own when the
-// brain is already the person's. The second row, the Lead Gen Agency, is
-// `template-lead-gen-agency.ts`.
+// Company OS remains a known legacy template (`templates.ts`) so an existing
+// binding keeps opening unchanged. New-company creation offers the three
+// current business choices instead.
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { BrainError, STARTER_NOTES } from "./brain.js";
