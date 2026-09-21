@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -10,10 +11,12 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scanVault } from "../src/harness/brain.js";
 import { seedTemplateVault, validateTemplate } from "../src/harness/company-os.js";
@@ -64,6 +67,36 @@ function runConcurrent(args: string[]): Promise<{ code: number | null; stdout: s
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
     child.on("close", (code) => resolve({ code, stdout, stderr }));
   });
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started >= timeoutMs) throw new Error("timed out waiting for test condition");
+    await delay(2);
+  }
+}
+
+function writeVerification(
+  name: string,
+  outcome: "accepted" | "rejected" | "pending",
+  accepted: boolean,
+  artifactContents = "observed test output\n",
+): { artifact: string; report: string } {
+  const artifact = `reports/proofs/${name}.txt`;
+  const report = `reports/proofs/${name}.json`;
+  writeFileSync(join(vault, artifact), artifactContents);
+  writeFileSync(join(vault, report), JSON.stringify({
+    version: 1,
+    outcome,
+    accepted,
+    summary: `${name} verification`,
+    artifacts: [{
+      path: artifact,
+      sha256: createHash("sha256").update(artifactContents).digest("hex"),
+    }],
+  }, null, 2) + "\n");
+  return { artifact, report };
 }
 
 describe("the Software company template", () => {
@@ -133,6 +166,7 @@ describe("the Software company template", () => {
     expect(corpus).not.toMatch(/GPT-|Claude Opus|Fable|Sonnet|OpenRouter|service_role/i);
     expect(corpus).not.toMatch(/https?:\/\/(?!example\.invalid)/i);
     expect(OPS_SCRIPT).not.toMatch(/\b(fetch|curl|git|https?)\b/i);
+    expect(OPS_SCRIPT).not.toContain("bus/inbox/ceo");
     const imports = [...OPS_SCRIPT.matchAll(/from\s+["']([^"']+)["']/g)].map((match) => match[1]);
     expect(imports.length).toBeGreaterThan(0);
     expect(imports.every((specifier) => specifier.startsWith("node:"))).toBe(true);
@@ -164,6 +198,9 @@ describe("the Software company template", () => {
     expect(text("routines/README.md")).toMatch(/schedule_routine/);
     expect(text("routines/README.md")).toMatch(/offline|asleep/i);
     expect(text("routines/README.md")).toMatch(/not 24\/7/i);
+    expect(text("scripts/README.md")).toMatch(/verification report/i);
+    expect(text("scripts/README.md")).toMatch(/--outcome passed/);
+    expect(text("scripts/README.md")).toMatch(/knowledge propose.*--expected-revision/is);
     for (const path of ["routines/ceo-sweep.md", "routines/bugwatch.md", "routines/sre.md", "routines/usage.md", "routines/product-radar.md"]) {
       for (const heading of ["GOAL", "ITERATION", "VERIFY", "STATE", "STOP", "COST"]) expect(text(path)).toContain(`## ${heading}`);
     }
@@ -196,6 +233,40 @@ describe("scripts/ops.mjs", () => {
     expect(reclaimed.claim).toMatchObject({ normalizedScope: "billing api", owner: "replacement", run: "run-new" });
     expect(readFileSync(join(vault, "bus", "claims.md"), "utf8")).toContain("billing api");
     expect(readFileSync(join(vault, "state", "claims.jsonl"), "utf8").trim().split("\n").length).toBe(3);
+  });
+
+  it("never steals an old lock and leaves explicit orphan recovery to the operator", () => {
+    ok(["bootstrap"]);
+    const lock = join(vault, "state", ".ops-lock");
+    mkdirSync(lock);
+    const owner = join(lock, "owner.json");
+    const originalOwner = JSON.stringify({ token: "still-owned", pid: process.pid, at: "2000-01-01T00:00:00.000Z" }) + "\n";
+    writeFileSync(owner, originalOwner);
+    const old = new Date("2000-01-01T00:00:00.000Z");
+    utimesSync(lock, old, old);
+
+    const started = Date.now();
+    const result = cli(["claim", "take", "--scope", "locked work", "--owner", "product", "--run", "lock-test"]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/timed out.*preserved|orphan.*manual|recovery/i);
+    expect(Date.now() - started).toBeLessThan(4000);
+    expect(readFileSync(owner, "utf8")).toBe(originalOwner);
+  });
+
+  it("does not remove a lock whose ownership token changes before cleanup", async () => {
+    ok(["bootstrap"]);
+    writeFileSync(join(vault, "state", "claims.jsonl"), JSON.stringify({ payload: "x".repeat(32 * 1024 * 1024) }) + "\n");
+    const lock = join(vault, "state", ".ops-lock");
+    const owner = join(lock, "owner.json");
+    const running = runConcurrent(["bootstrap"]);
+    await waitFor(() => existsSync(owner));
+    const replacement = JSON.stringify({ token: "replacement-owner", pid: 999999, at: new Date().toISOString() }) + "\n";
+    writeFileSync(owner, replacement);
+    const result = await running;
+
+    expect(result.code).not.toBe(0);
+    expect(existsSync(lock)).toBe(true);
+    expect(readFileSync(owner, "utf8")).toBe(replacement);
   });
 
   it("uses revision CAS for decisions and fails closed on stale writers", () => {
@@ -251,55 +322,139 @@ describe("scripts/ops.mjs", () => {
     symlinkSync(external, join(vault, "bus", "inbox", "sre"));
     fails(["inbox", "send", "--to", "sre", "--from", "ceo", "--subject", "health", "--body", "check", "--run", "r"], /symbolic link|symlink|link/i);
     expect(readdirSync(external)).toEqual([]);
+
+    const dynamic = ok([
+      "inbox", "send", "--id", "msg-dynamic", "--to", "reviewer", "--from", "product", "--subject", "Review", "--body", "Please inspect.", "--run", "r-3",
+    ]);
+    expect(dynamic.message).toMatchObject({ id: "msg-dynamic", to: "reviewer" });
+    expect(existsSync(join(vault, "bus", "inbox", "reviewer", "done"))).toBe(true);
   });
 
-  it("will not close work from a passed flag or empty file, but accepts verified proof tied to a run log", () => {
+  it("requires coherent verification reports and a latest passed run before DONE", () => {
     ok(["bootstrap"]);
     const taken = ok(["claim", "take", "--scope", "repair signup", "--owner", "bugwatch", "--run", "incident-1"]).claim as { id: string };
     ok(["claim", "set", "--id", taken.id, "--status", "IN-PROGRESS", "--owner", "bugwatch", "--run", "incident-1"]);
     fails([
       "claim", "set", "--id", taken.id, "--status", "DONE", "--owner", "bugwatch", "--run", "incident-1", "--passed", "true",
     ], /proof|unknown option/i);
-    const proof = join(vault, "reports", "proofs", "signup-fix.md");
-    writeFileSync(proof, "");
-    fails(["proof", "check", "--path", "reports/proofs/signup-fix.md"], /empty/i);
-    writeFileSync(proof, "# Proof\n\nRed failed. Green passed. UI replay: not applicable, backend-only.\n");
-    const checked = ok(["proof", "check", "--path", "reports/proofs/signup-fix.md"]);
-    expect(checked.proof).toMatchObject({ path: "reports/proofs/signup-fix.md", bytes: expect.any(Number), sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    const incomplete = join(vault, "reports", "proofs", "incomplete.json");
+    writeFileSync(incomplete, JSON.stringify({ passed: false }) + "\n");
+    fails(["proof", "check", "--path", "reports/proofs/incomplete.json"], /verification|schema|version|outcome/i);
+
+    const rejected = writeVerification("signup-rejected", "rejected", false, "tests failed\n");
+    const rejectedCheck = ok(["proof", "check", "--path", rejected.report]);
+    expect(rejectedCheck.verification).toMatchObject({ outcome: "rejected", accepted: false });
+
+    const incoherent = writeVerification("signup-incoherent", "rejected", true, "tests failed\n");
+    fails(["proof", "check", "--path", incoherent.report], /incoherent|accepted|outcome/i);
+
+    const pending = writeVerification("signup-pending", "pending", false, "tests not run\n");
+    expect(ok(["proof", "check", "--path", pending.report]).verification).toMatchObject({ outcome: "pending", accepted: false });
+
     ok([
       "run", "log", "--claim", taken.id, "--agent", "bugwatch", "--run", "incident-1", "--trigger", "reported failure",
-      "--actions", "reproduced; changed; tested", "--result", "green", "--evidence", "reports/proofs/signup-fix.md",
+      "--actions", "reproduced; tested", "--outcome", "failed", "--result", "FAILED", "--evidence", rejected.report,
+      "--cost", "unknown", "--next", "close claim",
+    ]);
+    fails([
+      "claim", "set", "--id", taken.id, "--status", "DONE", "--owner", "bugwatch", "--run", "incident-1", "--proof", rejected.report,
+    ], /accepted|passed|negative|DONE/i);
+
+    const accepted = writeVerification("signup-accepted", "accepted", true, "red failed; green passed\n");
+    const checked = ok(["proof", "check", "--path", accepted.report]);
+    expect(checked.proof).toMatchObject({ path: accepted.report, bytes: expect.any(Number), sha256: expect.stringMatching(/^[a-f0-9]{64}$/) });
+    expect(checked.verification).toMatchObject({ outcome: "accepted", accepted: true });
+    ok([
+      "run", "log", "--claim", taken.id, "--agent", "bugwatch", "--run", "incident-1", "--trigger", "repair verified",
+      "--actions", "changed; tested", "--outcome", "passed", "--result", "green", "--evidence", accepted.report,
+      "--cost", "unknown", "--next", "close claim",
+    ]);
+    writeFileSync(join(vault, accepted.artifact), "changed after verification\n");
+    fails([
+      "claim", "set", "--id", taken.id, "--status", "DONE", "--owner", "bugwatch", "--run", "incident-1", "--proof", accepted.report,
+    ], /artifact hash mismatch|fingerprint/i);
+    writeFileSync(join(vault, accepted.artifact), "red failed; green passed\n");
+    ok([
+      "run", "log", "--claim", taken.id, "--agent", "bugwatch", "--run", "incident-1", "--trigger", "regression rerun",
+      "--actions", "reran tests", "--outcome", "failed", "--result", "FAILED", "--evidence", rejected.report,
+      "--cost", "unknown", "--next", "repair regression",
+    ]);
+    fails([
+      "claim", "set", "--id", taken.id, "--status", "DONE", "--owner", "bugwatch", "--run", "incident-1", "--proof", accepted.report,
+    ], /latest run|passed|DONE/i);
+    ok([
+      "run", "log", "--claim", taken.id, "--agent", "bugwatch", "--run", "incident-1", "--trigger", "regression repaired",
+      "--actions", "fixed regression; reran tests", "--outcome", "passed", "--result", "green", "--evidence", accepted.report,
       "--cost", "unknown", "--next", "close claim",
     ]);
     const closed = ok([
-      "claim", "set", "--id", taken.id, "--status", "DONE", "--owner", "bugwatch", "--run", "incident-1", "--proof", "reports/proofs/signup-fix.md",
+      "claim", "set", "--id", taken.id, "--status", "DONE", "--owner", "bugwatch", "--run", "incident-1", "--proof", accepted.report,
     ]);
     expect(closed.claim).toMatchObject({ id: taken.id, status: "DONE", scope: "repair signup" });
     fails(["proof", "check", "--path", "../outside.md"], /path|escape|relative/i);
   });
 
-  it("promotes knowledge only after an explicit matching decision and adds review metadata", () => {
+  it("reproposes edited knowledge with revision CAS and promotes only the latest approved proposal", () => {
     ok(["bootstrap"]);
     const draft = join(vault, "knowledge", "draft", "product", "search.md");
-    writeFileSync(draft, "# Search\n\nObserved behavior and sources.\n");
-    const proposed = ok([
+    writeFileSync(draft, "# Search v1\n\nInitial observation.\n");
+    const initial = ok([
       "knowledge", "propose", "--draft", "knowledge/draft/product/search.md", "--target", "knowledge/trusted/product/search.md",
       "--owner", "product", "--last-reviewed", "2026-09-21", "--by", "product",
     ]).proposal as { decisionSubject: string; decisionRevision: number };
-    expect(proposed.decisionRevision).toBe(1);
+    expect(initial.decisionRevision).toBe(1);
+    ok([
+      "decision", "set", "--subject", initial.decisionSubject, "--value", "REJECT", "--status", "REJECTED", "--by", "owner", "--expected-revision", "1",
+    ]);
+    writeFileSync(draft, "# Search v2\n\nCorrected observation and sources.\n");
+    const reproposed = ok([
+      "knowledge", "propose", "--draft", "knowledge/draft/product/search.md", "--target", "knowledge/trusted/product/search.md",
+      "--owner", "product", "--last-reviewed", "2026-09-21", "--by", "product", "--expected-revision", "2",
+    ]).proposal as { decisionSubject: string; decisionRevision: number };
+    expect(reproposed).toMatchObject({ decisionSubject: initial.decisionSubject, decisionRevision: 3 });
+    ok([
+      "decision", "set", "--subject", reproposed.decisionSubject, "--value", "APPROVE", "--status", "DECIDED", "--by", "owner", "--expected-revision", "3",
+    ]);
     fails([
       "knowledge", "promote", "--draft", "knowledge/draft/product/search.md", "--target", "knowledge/trusted/product/search.md",
-      "--owner", "product", "--last-reviewed", "2026-09-21", "--decision-subject", proposed.decisionSubject, "--decision-revision", "1",
-    ], /explicit|approve|decision/i);
-    ok([
-      "decision", "set", "--subject", proposed.decisionSubject, "--value", "APPROVE", "--status", "DECIDED", "--by", "owner", "--expected-revision", "1",
-    ]);
+      "--owner", "product", "--last-reviewed", "2026-09-21", "--decision-subject", reproposed.decisionSubject, "--decision-revision", "2",
+    ], /current|revision|approve/i);
     const promoted = ok([
       "knowledge", "promote", "--draft", "knowledge/draft/product/search.md", "--target", "knowledge/trusted/product/search.md",
-      "--owner", "product", "--last-reviewed", "2026-09-21", "--decision-subject", proposed.decisionSubject, "--decision-revision", "2",
+      "--owner", "product", "--last-reviewed", "2026-09-21", "--decision-subject", reproposed.decisionSubject, "--decision-revision", "4",
     ]);
     expect(promoted).toMatchObject({ ok: true, command: "knowledge promote" });
     expect(readFileSync(join(vault, "knowledge", "trusted", "product", "search.md"), "utf8")).toMatch(/^---\nowner: product\nlast-reviewed: 2026-09-21\n---\n/);
+    expect(readFileSync(join(vault, "knowledge", "trusted", "product", "search.md"), "utf8")).toContain("Search v2");
+  });
+
+  it("reads and fingerprints one draft buffer only after acquiring the promotion lock", async () => {
+    ok(["bootstrap"]);
+    const draft = join(vault, "knowledge", "draft", "product", "locked.md");
+    writeFileSync(draft, "# Approved bytes\n");
+    const proposed = ok([
+      "knowledge", "propose", "--draft", "knowledge/draft/product/locked.md", "--target", "knowledge/trusted/product/locked.md",
+      "--owner", "product", "--last-reviewed", "2026-09-21", "--by", "product",
+    ]).proposal as { decisionSubject: string };
+    ok([
+      "decision", "set", "--subject", proposed.decisionSubject, "--value", "APPROVE", "--status", "DECIDED", "--by", "owner", "--expected-revision", "1",
+    ]);
+
+    const lock = join(vault, "state", ".ops-lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({ token: "blocker", pid: process.pid, at: new Date().toISOString() }) + "\n");
+    const running = runConcurrent([
+      "knowledge", "promote", "--draft", "knowledge/draft/product/locked.md", "--target", "knowledge/trusted/product/locked.md",
+      "--owner", "product", "--last-reviewed", "2026-09-21", "--decision-subject", proposed.decisionSubject, "--decision-revision", "2",
+    ]);
+    await delay(150);
+    writeFileSync(draft, "# Concurrent unapproved bytes\n");
+    rmSync(lock, { recursive: true });
+    const result = await running;
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/draft changed|hash|proposal/i);
+    expect(existsSync(join(vault, "knowledge", "trusted", "product", "locked.md"))).toBe(false);
   });
 
   it("fails closed on corrupt canonical state without replacing it", () => {

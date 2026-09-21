@@ -9,7 +9,7 @@ import {
   readdirSync,
   realpathSync,
   renameSync,
-  rmSync,
+  rmdirSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -20,11 +20,12 @@ const SCRIPT_FILE = fileURLToPath(import.meta.url);
 if (lstatSync(SCRIPT_FILE).isSymbolicLink()) throw new Error("the operations script cannot be a symbolic link");
 const ROOT = realpathSync(resolve(dirname(SCRIPT_FILE), ".."));
 const LOCK_RELATIVE = "state/.ops-lock";
-const LOCK_TIMEOUT_MS = 5000;
-const LOCK_STALE_MS = 30000;
+const LOCK_TIMEOUT_MS = 2000;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const CLAIM_STATUSES = new Set(["CLAIMED", "IN-PROGRESS", "PR-REVIEW", "PUSHED-PROD", "DONE", "RELEASED"]);
 const DECISION_STATUSES = new Set(["PENDING", "DECIDED", "IN-PROGRESS", "DONE", "WAITING", "REJECTED"]);
+const VERIFICATION_OUTCOMES = new Set(["accepted", "rejected", "pending"]);
+const RUN_OUTCOMES = new Set(["PASSED", "FAILED", "INCOMPLETE"]);
 const TRANSITIONS = new Map([
   ["CLAIMED", new Set(["IN-PROGRESS", "RELEASED"])],
   ["IN-PROGRESS", new Set(["PR-REVIEW", "PUSHED-PROD", "DONE", "RELEASED"])],
@@ -120,13 +121,20 @@ function regularFile(relativePath, label, prefix) {
 }
 
 function fingerprint(relativePath, label, prefix) {
+  return readRegularFile(relativePath, label, prefix).fingerprint;
+}
+
+function readRegularFile(relativePath, label, prefix) {
   const file = regularFile(relativePath, label, prefix);
   const content = readFileSync(file.absolute);
-  return {
+  if (content.byteLength <= 0) fail(label + " is empty");
+  if (content.byteLength > MAX_FILE_BYTES) fail(label + " is too large");
+  const fingerprint = {
     path: file.relative,
-    bytes: file.bytes,
+    bytes: content.byteLength,
     sha256: createHash("sha256").update(content).digest("hex"),
   };
+  return { fingerprint, content };
 }
 
 function ensureDirectory(relativePath) {
@@ -197,6 +205,7 @@ function sleep(milliseconds) {
 function withLock(callback) {
   ensureDirectory("state");
   const lock = vaultPath(LOCK_RELATIVE, "state lock");
+  const token = randomBytes(24).toString("hex");
   const started = Date.now();
   while (true) {
     try {
@@ -204,21 +213,41 @@ function withLock(callback) {
       break;
     } catch (error) {
       if (!error || error.code !== "EEXIST") throw error;
-      const stats = lstatSync(lock.absolute);
-      if (stats.isSymbolicLink() || !stats.isDirectory()) fail("state lock is not a safe directory");
-      if (Date.now() - stats.mtimeMs > LOCK_STALE_MS) {
-        rmSync(lock.absolute, { recursive: true, force: false });
-        continue;
+      let stats;
+      try {
+        stats = lstatSync(lock.absolute);
+      } catch (inspectionError) {
+        if (inspectionError && inspectionError.code === "ENOENT") continue;
+        throw inspectionError;
       }
-      if (Date.now() - started >= LOCK_TIMEOUT_MS) fail("state lock timed out");
+      if (stats.isSymbolicLink() || !stats.isDirectory()) fail("state lock is not a safe directory");
+      if (Date.now() - started >= LOCK_TIMEOUT_MS) {
+        fail("state lock timed out and was preserved; inspect state/.ops-lock/owner.json and remove an orphan lock manually only after verifying no owner is active");
+      }
       sleep(20);
     }
   }
   try {
-    writeFileSync(join(lock.absolute, "owner.json"), JSON.stringify({ pid: process.pid, at: now() }) + "\n", { mode: 0o600, flag: "wx" });
+    const owner = vaultPath(LOCK_RELATIVE + "/owner.json", "state lock owner");
+    writeFileSync(owner.absolute, JSON.stringify({ token, pid: process.pid, at: now() }) + "\n", { mode: 0o600, flag: "wx" });
     return callback();
   } finally {
-    rmSync(lock.absolute, { recursive: true, force: true });
+    try {
+      const currentLock = vaultPath(LOCK_RELATIVE, "state lock cleanup", { mustExist: true });
+      const currentOwner = vaultPath(LOCK_RELATIVE + "/owner.json", "state lock owner cleanup", { mustExist: true });
+      const lockStats = lstatSync(currentLock.absolute);
+      const ownerStats = lstatSync(currentOwner.absolute);
+      if (lockStats.isDirectory() && !lockStats.isSymbolicLink() && ownerStats.isFile() && !ownerStats.isSymbolicLink()) {
+        let ownerRecord;
+        try { ownerRecord = JSON.parse(readFileSync(currentOwner.absolute, "utf8")); } catch { ownerRecord = null; }
+        if (ownerRecord && ownerRecord.token === token) {
+          unlinkSync(currentOwner.absolute);
+          rmdirSync(currentLock.absolute);
+        }
+      }
+    } catch {
+      // Preserve an unsafe, changed or concurrently disturbed lock for explicit recovery.
+    }
   }
 }
 
@@ -365,7 +394,8 @@ function appendDecisionLocked(input) {
 function validateRun(row) {
   if (row.kind !== "run" || typeof row.id !== "string" || typeof row.agent !== "string" || typeof row.run !== "string" ||
       typeof row.trigger !== "string" || !Array.isArray(row.actions) || row.actions.some((value) => typeof value !== "string") ||
-      typeof row.result !== "string" || !row.evidence || typeof row.evidence.path !== "string" || typeof row.evidence.sha256 !== "string" ||
+      typeof row.result !== "string" || !RUN_OUTCOMES.has(row.outcome) || !row.evidence ||
+      typeof row.evidence.path !== "string" || typeof row.evidence.sha256 !== "string" ||
       typeof row.cost !== "string" || typeof row.next !== "string" || typeof row.at !== "string") fail("state/runs.jsonl contains an invalid run event");
   return row;
 }
@@ -382,11 +412,8 @@ function bootstrap() {
     decisionEvents();
     runEvents();
     const directories = [
-      "state", "state/goals", "bus", "reports/daily", "reports/proofs",
+      "state", "state/goals", "bus", "bus/inbox", "reports/daily", "reports/proofs",
       "knowledge/draft", "knowledge/trusted",
-      "bus/inbox/ceo/done", "bus/inbox/cto/done", "bus/inbox/bugwatch/done", "bus/inbox/support/done",
-      "bus/inbox/customer-success/done", "bus/inbox/sre/done", "bus/inbox/product/done", "bus/inbox/marketing/done",
-      "bus/inbox/fundraising/done", "bus/inbox/usage/done", "bus/inbox/ux/done",
     ];
     for (const directory of directories) ensureDirectory(directory);
     if (!existing) atomicWrite("state/bootstrap.json", JSON.stringify({ version: 1 }, null, 2) + "\n");
@@ -449,11 +476,16 @@ function claimSet(parsed) {
     if (!TRANSITIONS.get(previous.status).has(status)) fail("invalid claim transition: " + previous.status + " to " + status);
     let proof;
     if (status === "DONE") {
-      if (!proofPath) fail("DONE requires --proof with existing nonempty evidence");
-      proof = fingerprint(proofPath, "proof", "reports/proofs");
-      const logged = runEvents().some((entry) => entry.claim === claimId && entry.agent === owner && entry.run === run &&
-        entry.evidence.path === proof.path && entry.evidence.sha256 === proof.sha256 && entry.evidence.bytes === proof.bytes);
-      if (!logged) fail("DONE requires a matching run log tied to the current proof");
+      if (!proofPath) fail("DONE requires --proof with an accepted verification report");
+      const checked = verificationReport(proofPath, "proof");
+      proof = checked.proof;
+      if (!checked.verification.accepted || checked.verification.outcome !== "accepted") fail("DONE requires an accepted verification report");
+      const logs = runEvents().filter((entry) => entry.claim === claimId && entry.agent === owner && entry.run === run);
+      const latestRun = logs[logs.length - 1];
+      if (!latestRun || latestRun.outcome !== "PASSED") fail("DONE requires the latest run for this claim, owner and run to be PASSED");
+      if (latestRun.evidence.path !== proof.path || latestRun.evidence.sha256 !== proof.sha256 || latestRun.evidence.bytes !== proof.bytes) {
+        fail("DONE requires the latest passed run to match the current verification report fingerprint");
+      }
     } else if (proofPath) {
       fail("--proof is accepted only when closing DONE");
     }
@@ -539,6 +571,7 @@ function inboxSend(parsed) {
   const messageId = safeName(option(parsed, "id", false) || id("message"), "id");
   const run = safeName(option(parsed, "run"), "run");
   return withLock(() => {
+    ensureDirectory("bus/inbox/" + recipient + "/done");
     const inbox = vaultPath("bus/inbox/" + recipient, "recipient inbox", { mustExist: true });
     const done = vaultPath("bus/inbox/" + recipient + "/done", "recipient archive", { mustExist: true });
     if (!lstatSync(inbox.absolute).isDirectory() || !lstatSync(done.absolute).isDirectory()) fail("recipient inbox is invalid");
@@ -599,29 +632,75 @@ function inboxList(parsed) {
   return { ok: true, command: "inbox list", messages };
 }
 
+function verificationReport(relativePath, label) {
+  const reportFile = readRegularFile(relativePath, label, "reports/proofs");
+  if (!reportFile.fingerprint.path.endsWith(".json")) fail(label + " must be a JSON verification report");
+  let report;
+  try { report = JSON.parse(reportFile.content.toString("utf8")); } catch { fail(label + " is not valid JSON"); }
+  if (!report || typeof report !== "object" || Array.isArray(report) || report.version !== 1 ||
+      !VERIFICATION_OUTCOMES.has(report.outcome) || typeof report.accepted !== "boolean" ||
+      typeof report.summary !== "string" || !Array.isArray(report.artifacts) || report.artifacts.length < 1 || report.artifacts.length > 100) {
+    fail(label + " does not match verification report schema version 1");
+  }
+  if (Object.keys(report).sort().join(",") !== "accepted,artifacts,outcome,summary,version") {
+    fail(label + " contains fields outside verification report schema version 1");
+  }
+  if (report.accepted !== (report.outcome === "accepted")) fail(label + " has an incoherent accepted flag and outcome");
+  const summary = text(report.summary, "verification summary", 4000);
+  const seen = new Set();
+  const artifacts = report.artifacts.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry) || Object.keys(entry).sort().join(",") !== "path,sha256" || typeof entry.path !== "string" ||
+        typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+      fail("verification artifact " + (index + 1) + " is invalid");
+    }
+    const expectedPath = text(entry.path, "verification artifact path", 1000);
+    if (expectedPath === reportFile.fingerprint.path) fail("verification report cannot reference itself as an artifact");
+    if (seen.has(expectedPath)) fail("verification report contains a duplicate artifact path");
+    seen.add(expectedPath);
+    const actual = fingerprint(expectedPath, "verification artifact", "reports/proofs");
+    if (actual.sha256 !== entry.sha256) fail("verification artifact hash mismatch: " + actual.path);
+    return actual;
+  });
+  return {
+    proof: reportFile.fingerprint,
+    verification: { version: 1, outcome: report.outcome, accepted: report.accepted, summary, artifacts },
+  };
+}
+
 function proofCheck(parsed) {
   allowOptions(parsed, ["path"]);
-  return { ok: true, command: "proof check", proof: fingerprint(option(parsed, "path"), "proof", "reports/proofs") };
+  const checked = verificationReport(option(parsed, "path"), "proof");
+  return { ok: true, command: "proof check", ...checked };
 }
 
 function runLog(parsed) {
-  allowOptions(parsed, ["claim", "agent", "run", "trigger", "actions", "result", "evidence", "cost", "next"]);
+  allowOptions(parsed, ["claim", "agent", "run", "trigger", "actions", "outcome", "result", "evidence", "cost", "next"]);
   const cost = text(option(parsed, "cost"), "cost", 500);
   if (cost !== "unknown" && !cost.startsWith("known:")) fail("cost must be unknown or start with known:");
   const actions = text(option(parsed, "actions"), "actions", 4000).split(";").map((value) => value.trim()).filter(Boolean);
   if (!actions.length) fail("actions must contain an observed action");
-  const event = {
-    kind: "run", id: id("runlog"), at: now(), claim: safeName(option(parsed, "claim"), "claim"),
-    agent: safeName(option(parsed, "agent"), "agent"), run: safeName(option(parsed, "run"), "run"),
-    trigger: text(option(parsed, "trigger"), "trigger", 2000), actions,
-    result: text(option(parsed, "result"), "result", 4000),
-    evidence: fingerprint(option(parsed, "evidence"), "evidence", "reports/proofs"),
+  const outcome = text(option(parsed, "outcome"), "outcome", 20).toUpperCase();
+  if (!RUN_OUTCOMES.has(outcome)) fail("outcome must be passed, failed or incomplete");
+  const base = {
+    claim: safeName(option(parsed, "claim"), "claim"), agent: safeName(option(parsed, "agent"), "agent"),
+    run: safeName(option(parsed, "run"), "run"), trigger: text(option(parsed, "trigger"), "trigger", 2000), actions,
+    outcome, result: text(option(parsed, "result"), "result", 4000), evidencePath: option(parsed, "evidence"),
     cost, next: text(option(parsed, "next"), "next", 2000),
   };
   return withLock(() => {
     const claims = latestBy(claimEvents(), "id");
-    const claim = claims.get(event.claim);
-    if (!claim || claim.owner !== event.agent || claim.run !== event.run) fail("run log must match an existing claim owner and run");
+    const claim = claims.get(base.claim);
+    if (!claim || claim.owner !== base.agent || claim.run !== base.run) fail("run log must match an existing claim owner and run");
+    const checked = verificationReport(base.evidencePath, "evidence");
+    const expectedVerification = outcome === "PASSED" ? "accepted" : outcome === "FAILED" ? "rejected" : "pending";
+    if (checked.verification.outcome !== expectedVerification) {
+      fail("run outcome " + outcome.toLowerCase() + " requires a " + expectedVerification + " verification report");
+    }
+    const event = {
+      kind: "run", id: id("runlog"), at: now(), claim: base.claim, agent: base.agent, run: base.run,
+      trigger: base.trigger, actions: base.actions, outcome, result: base.result, evidence: checked.proof,
+      cost: base.cost, next: base.next,
+    };
     const rows = runEvents();
     rows.push(event);
     writeJsonl("state/runs.jsonl", rows);
@@ -630,24 +709,30 @@ function runLog(parsed) {
 }
 
 function knowledgePropose(parsed) {
-  allowOptions(parsed, ["draft", "target", "owner", "last-reviewed", "by"]);
-  const draft = fingerprint(option(parsed, "draft"), "draft", "knowledge/draft");
+  allowOptions(parsed, ["draft", "target", "owner", "last-reviewed", "by", "expected-revision"]);
+  const draftPath = vaultPath(option(parsed, "draft"), "draft");
+  assertPrefix(draftPath.relative, "knowledge/draft", "draft");
   const target = vaultPath(option(parsed, "target"), "target");
   assertPrefix(target.relative, "knowledge/trusted", "target");
-  if (existsSync(target.absolute)) fail("promotion target already exists");
   const owner = safeName(option(parsed, "owner"), "owner");
   const lastReviewed = dateOnly(option(parsed, "last-reviewed"), "last-reviewed");
-  const subject = "knowledge-promotion:" + draft.path + "=>" + target.relative;
-  const value = { type: "knowledge-promotion", draft: draft.path, target: target.relative, owner, lastReviewed, draftSha256: draft.sha256 };
+  const expectedValue = option(parsed, "expected-revision", false);
+  const expectedRevision = expectedValue === undefined ? 0 : Number(expectedValue);
+  if (!Number.isInteger(expectedRevision) || expectedRevision < 0) fail("expected revision must be a non-negative integer");
+  const subject = "knowledge-promotion:" + draftPath.relative + "=>" + target.relative;
   return withLock(() => {
-    const decision = appendDecisionLocked({ subject, value, status: "PENDING", by: option(parsed, "by"), expectedRevision: 0 });
+    if (existsSync(target.absolute)) fail("promotion target already exists");
+    const draft = readRegularFile(draftPath.relative, "draft", "knowledge/draft").fingerprint;
+    const value = { type: "knowledge-promotion", draft: draft.path, target: target.relative, owner, lastReviewed, draftSha256: draft.sha256 };
+    const decision = appendDecisionLocked({ subject, value, status: "PENDING", by: option(parsed, "by"), expectedRevision });
     return { ok: true, command: "knowledge propose", proposal: { decisionSubject: subject, decisionRevision: decision.revision, ...value } };
   });
 }
 
 function knowledgePromote(parsed) {
   allowOptions(parsed, ["draft", "target", "owner", "last-reviewed", "decision-subject", "decision-revision"]);
-  const draft = fingerprint(option(parsed, "draft"), "draft", "knowledge/draft");
+  const draftPath = vaultPath(option(parsed, "draft"), "draft");
+  assertPrefix(draftPath.relative, "knowledge/draft", "draft");
   const target = vaultPath(option(parsed, "target"), "target");
   assertPrefix(target.relative, "knowledge/trusted", "target");
   const owner = safeName(option(parsed, "owner"), "owner");
@@ -660,13 +745,16 @@ function knowledgePromote(parsed) {
     const normalized = normalizeSubject(decisionSubject);
     const history = rows.filter((row) => row.normalizedSubject === normalized).sort((a, b) => a.revision - b.revision);
     const latest = history[history.length - 1];
-    const proposal = history.find((row) => row.value && typeof row.value === "object" && row.value.type === "knowledge-promotion");
     if (!latest || latest.revision !== decisionRevision || latest.status !== "DECIDED" || latest.value !== "APPROVE") fail("promotion needs the explicit current APPROVE decision");
+    const proposal = [...history].reverse().find((row) => row.revision < latest.revision && row.value &&
+      typeof row.value === "object" && row.value.type === "knowledge-promotion");
+    const draftRead = readRegularFile(draftPath.relative, "draft", "knowledge/draft");
+    const draft = draftRead.fingerprint;
     if (!proposal || proposal.value.draft !== draft.path || proposal.value.target !== target.relative || proposal.value.owner !== owner ||
         proposal.value.lastReviewed !== lastReviewed || proposal.value.draftSha256 !== draft.sha256) fail("promotion does not match its recorded proposal or the draft changed");
     if (existsSync(target.absolute)) fail("promotion target already exists");
-    const body = readFileSync(vaultPath(draft.path, "draft", { mustExist: true }).absolute, "utf8");
-    const promoted = "---\nowner: " + owner + "\nlast-reviewed: " + lastReviewed + "\n---\n" + body;
+    const header = Buffer.from("---\nowner: " + owner + "\nlast-reviewed: " + lastReviewed + "\n---\n", "utf8");
+    const promoted = Buffer.concat([header, draftRead.content]);
     atomicWrite(target.relative, promoted);
     return { ok: true, command: "knowledge promote", target: target.relative, decisionRevision };
   });

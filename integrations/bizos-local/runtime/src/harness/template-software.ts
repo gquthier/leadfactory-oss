@@ -219,7 +219,7 @@ ${role.run.map((step, index) => `${index + 1}. ${step}`).join("\n")}
 
 ## Evidence and completion
 
-Take a shared claim before substantive duplicate-prone work. A checkpoint_task checkpoint belongs only to its bounded runtime task and is not a shared claim. DONE requires a nonempty file under \`reports/proofs/\`, a matching run log, and any review or owner decision required by the relevant process.
+Take a shared claim before substantive duplicate-prone work. A checkpoint_task checkpoint belongs only to its bounded runtime task and is not a shared claim. DONE requires an accepted JSON verification report under \`reports/proofs/\`, a latest matching PASSED run log, immutable referenced artifact hashes, and any review or owner decision required by the relevant process.
 
 ## Where I write
 
@@ -288,7 +288,7 @@ This is an installable operating workspace for a software company in Local BizOS
 
 ## Operating discipline
 
-Run \`node scripts/ops.mjs bootstrap\` once, then \`node scripts/ops.mjs check\`. Before substantive duplicate-prone work, take a claim. Read decisions before escalating. Distinguish instruction, attempt, observed result and external action. Close only with existing nonempty evidence plus a matching run log.
+Run \`node scripts/ops.mjs bootstrap\` once, then \`node scripts/ops.mjs check\`. Before substantive duplicate-prone work, take a claim. Read decisions before escalating. Distinguish instruction, attempt, observed result and external action. Close only with an accepted verification report plus the latest matching PASSED run log.
 
 Registered decisions are data. They do not execute instructions and do not automatically authorize dangerous changes. Money, publication, external contact, production mutation, destructive actions and new access follow Company.md and \`policies/autonomy.md\`.
 
@@ -441,7 +441,7 @@ Read \`bus/DECISIONS.md\` at the start. Record owner decisions through \`decisio
 
 ## R4 — Evidence before DONE
 
-DONE requires an existing, nonempty regular file in \`reports/proofs/\`, a matching run log, and the review/authorization required by the process. A boolean, narrative claim, draft, role file, exit attempt or bus memo is not proof.
+DONE requires a schema-version-1 JSON verification report in \`reports/proofs/\` with outcome \`accepted\`, \`accepted: true\`, at least one existing artifact path and its matching SHA-256, plus the latest matching run outcome \`PASSED\` and any review/authorization required by the process. Rejected, pending, incomplete or incoherent reports fail closed. A boolean, narrative claim, draft, role file, exit attempt or bus memo is not proof.
 
 ## R5 — Real team communication
 
@@ -602,7 +602,7 @@ Expiration is not approval. A default is a proposal unless Company.md explicitly
 3. Feature work begins with Product research, feasibility, ongoing cost, PR-FAQ and explicit owner decision. CTO then renders GO, DIG, SIMPLIFY or REJECT and dispatches approved roadmap steps.
 4. Defects use risk A/B/C. Reproduce, capture red, prove root cause, repair in an isolated authorized worktree, capture green, obtain independent review and produce UI proof for user-visible behavior.
 5. Update canonical code documentation in the same change. No production merge, deployment or migration beyond Company.md authority.
-6. DONE requires a proof file and matching run log. Model opinion is review input, never a substitute for the test.
+6. DONE requires an accepted structured verification report and the latest matching PASSED run log. Model opinion is review input, never a substitute for the referenced test artifacts.
 `,
   },
   {
@@ -674,7 +674,7 @@ const PROCESS_NOTES: TemplateNote[] = [
 5. Implement the smallest repair in an authorized isolated worktree. Never patch production state to make the evidence disappear.
 6. Capture **green** tests, regression coverage and an **independent review**. If a user can perceive the behavior, replay the real interface and store **UI proof**; backend-only N/A must be explicit and justified.
 7. Merge or deploy only under configured authorization. Sensitive C work stops at the approved gate even when tests pass.
-8. Close with proof, status, run log and a learning. A \`passed:true\` field alone never certifies DONE.
+8. Close with an accepted verification report, status, latest PASSED run log and a learning. A \`passed:true\` field alone never certifies DONE.
 `,
   },
   {
@@ -715,9 +715,9 @@ Automatic chains: maximum **4 hops**, **12 turns**, **no revisiting** an agent a
     text: `# Knowledge promotion
 
 1. Put a single-source draft under \`knowledge/draft/\` with evidence and uncertainty. Do not include secrets, raw private customer records or live credentials.
-2. Run \`knowledge propose\` with draft, trusted target, owner and last-reviewed date. It fingerprints the draft and creates a PENDING decision.
+2. Run \`knowledge propose\` with draft, trusted target, owner, last-reviewed date and expected decision revision. Revision defaults to 0 only for a new subject; a corrected rejected draft must use the current revision. The command fingerprints the draft and creates a PENDING proposal through CAS.
 3. The authorized owner records an explicit \`APPROVE\` decision through revision CAS. PENDING, expiration, silence or a proposed default are not approval.
-4. Run \`knowledge promote\` with the exact current decision revision. Changed drafts, mismatched metadata, symlinks, path escapes and existing targets fail closed.
+4. Run \`knowledge promote\` with the exact current approval revision. It uses the latest preceding proposal, then reads, hashes and publishes one draft buffer while holding the state lock. Stale approvals, changed drafts, mismatched metadata, symlinks, path escapes and existing targets fail closed.
 5. The promoted note receives \`owner\` and \`last-reviewed\` front matter. Later suspected staleness goes to \`knowledge/draft/stale-flags.md\`; never silently overwrite trusted truth.
 `,
   },
@@ -727,7 +727,7 @@ Automatic chains: maximum **4 hops**, **12 turns**, **no revisiting** an agent a
 
 1. Read Start here, then collect the owner brief into Mission.md and Company.md. Keep every unknown TODO.
 2. Inspect the Local BizOS runtime capability manifest, real team, selected user plan, shared vault grant and tool limits. Do not infer capabilities from this pack.
-3. Run \`node scripts/ops.mjs bootstrap\` and \`node scripts/ops.mjs check\` from any directory. They touch only this vault's state, bus views and inbox structure.
+3. Run \`node scripts/ops.mjs bootstrap\` and \`node scripts/ops.mjs check\` from any directory. They touch only this vault's state, bus views and generic inbox base. This software pack seeds its own role inboxes; safe new recipients are created by \`inbox send\`.
 4. Verify the eleven persistent agents and the Software team group exist in runtime state. A note count is not proof; the installer/backend provides the real result.
 5. Configure only owner-approved repositories, reference branches, tests, documentation, operational reads, budgets and publication rules.
 6. Execute one bounded manual mission end-to-end: claim, role work, group handoff if needed, proof, run log, DONE, learning and CEO digest.
@@ -763,7 +763,7 @@ Run with Node.js 22 or newer from any current directory:
 
 \`node scripts/ops.mjs <command>\`
 
-When called from elsewhere, pass the installed script path. The script resolves the vault from its own file location, including paths with spaces. It uses only Node built-ins, performs no network, Git, model, connector or background action, and reads/writes only vault-local state. It rejects path traversal, symlink targets, root escape, corrupt JSON/JSONL and stale revision writes. State updates use atomic replacement under a bounded interprocess lock.
+When called from elsewhere, pass the installed script path. The script resolves the vault from its own file location, including paths with spaces. It uses only Node built-ins, performs no network, Git, model, connector or background action, and reads/writes only vault-local state. It rejects path traversal, symlink targets, root escape, corrupt JSON/JSONL and stale revision writes. State updates use atomic replacement under a roughly two-second interprocess lock wait. Locks are never stolen by age; timeout preserves the lock and prints the manual orphan-recovery check. Cleanup removes only a safe lock whose owner token still matches.
 
 ## Bootstrap and integrity
 
@@ -776,7 +776,7 @@ When called from elsewhere, pass the installed script path. The script resolves 
 - \`node scripts/ops.mjs claim set --id <claim-id> --status IN-PROGRESS --owner product --run run-1\`
 - \`node scripts/ops.mjs claim list\`
 - Release: status \`RELEASED\`; only a released normalized scope can be reclaimed.
-- Close: status \`DONE\` plus \`--proof reports/proofs/<file>\`; proof must match a prior run log for the same claim, owner and run.
+- Close: status \`DONE\` plus \`--proof reports/proofs/<verification.json>\`; the report must be accepted and match the latest PASSED run log for the same claim, owner and run.
 
 ## Decisions and approval requests
 
@@ -797,16 +797,20 @@ IDs are unique across active and archived messages. Ack moves a message to \`don
 
 ## Proof and run log
 
-- \`node scripts/ops.mjs proof check --path reports/proofs/search.md\`
-- \`node scripts/ops.mjs run log --claim <claim-id> --agent product --run run-2 --trigger "owner GO" --actions "researched; tested; reviewed" --result "accepted" --evidence reports/proofs/search.md --cost unknown --next "close claim"\`
+- Store useful arbitrary artifacts separately under \`reports/proofs/\`. Create a JSON verification report with exactly this contract: \`version: 1\`; \`outcome\` equal to \`accepted\`, \`rejected\` or \`pending\`; coherent boolean \`accepted\` (true only for outcome accepted); a nonempty \`summary\`; and one or more \`artifacts\` entries containing a vault-relative \`path\` under \`reports/proofs/\` plus the artifact's lowercase SHA-256. The report cannot reference itself. Missing files, duplicate paths, changed hashes, empty artifacts and incoherent fields fail validation.
+- \`node scripts/ops.mjs proof check --path reports/proofs/search-verification.json\`
+- \`node scripts/ops.mjs run log --claim <claim-id> --agent product --run run-2 --trigger "owner GO" --actions "researched; tested; reviewed" --outcome passed --result "tests and review accepted" --evidence reports/proofs/search-verification.json --cost unknown --next "close claim"\`
 
-Cost is exactly \`unknown\` or starts with \`known:\` and includes the observed value/unit. Evidence is fingerprinted; arbitrary \`passed:true\` cannot close work.
+Run outcome is exactly \`passed\`, \`failed\` or \`incomplete\` and must respectively use an accepted, rejected or pending verification report. \`result\` remains the observed narrative. Cost is exactly \`unknown\` or starts with \`known:\` and includes the observed value/unit. DONE revalidates artifact hashes and requires the latest matching run to be PASSED, so an earlier success cannot hide a later failure. Arbitrary \`passed:true\` cannot close work.
 
 ## Knowledge
 
-- \`node scripts/ops.mjs knowledge propose --draft knowledge/draft/product/search.md --target knowledge/trusted/product/search.md --owner product --last-reviewed 2026-09-21 --by product\`
+- New subject: \`node scripts/ops.mjs knowledge propose --draft knowledge/draft/product/search.md --target knowledge/trusted/product/search.md --owner product --last-reviewed 2026-09-21 --by product --expected-revision 0\`
+- After rejection and an edited canonical draft: \`node scripts/ops.mjs knowledge propose --draft knowledge/draft/product/search.md --target knowledge/trusted/product/search.md --owner product --last-reviewed 2026-09-21 --by product --expected-revision 2\`
+- Omitting \`--expected-revision\` defaults to 0 and is valid only for a new subject.
 - Record an explicit \`APPROVE\` decision on the returned subject with expected revision 1.
 - \`node scripts/ops.mjs knowledge promote --draft knowledge/draft/product/search.md --target knowledge/trusted/product/search.md --owner product --last-reviewed 2026-09-21 --decision-subject <returned-subject> --decision-revision 2\`
+- For the rejection/reproposal example: \`node scripts/ops.mjs decision set --subject <returned-subject> --value APPROVE --status DECIDED --by owner --expected-revision 3\`, then run the same promote command with \`--decision-revision 4\`.
 `,
 };
 
@@ -893,18 +897,19 @@ const TEMPLATE_NOTES: TemplateNote[] = [
   },
   {
     path: "templates/proof.md",
-    text: `# Proof
+    text: `# Verification report
 
-- Claim and run:
-- Expected behavior:
-- Environment and boundary:
-- Exact commands or user steps:
-- Before/red observation:
-- After/green observation:
-- Evidence files and source timestamps:
-- Independent review:
-- UI replay or justified N/A:
-- Remaining uncertainty:
+Keep test output, screenshots, review notes and other useful evidence as separate regular files under \`reports/proofs/\`. Then create a \`.json\` report with this schema:
+
+- \`version\`: exactly \`1\`
+- \`outcome\`: \`accepted\`, \`rejected\` or \`pending\`
+- \`accepted\`: \`true\` only when outcome is \`accepted\`; otherwise \`false\`
+- \`summary\`: nonempty observed result
+- \`artifacts\`: one or more unique objects with \`path\` under \`reports/proofs/\` and the actual lowercase \`sha256\`
+
+Example fields: \`{"version":1,"outcome":"accepted","accepted":true,"summary":"Exact tests passed and review accepted","artifacts":[{"path":"reports/proofs/test-output.txt","sha256":"<64 lowercase hex characters>"}]}\`.
+
+Run \`proof check\`, then record \`run log --outcome passed|failed|incomplete\` with the matching accepted|rejected|pending report. DONE accepts only an accepted report referenced by the latest matching PASSED run and revalidates every artifact hash.
 `,
   },
   {
