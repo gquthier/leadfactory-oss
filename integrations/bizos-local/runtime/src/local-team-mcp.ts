@@ -47,7 +47,7 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
       frequency: { type: "string", enum: ["daily", "interval", "once"], description: "daily at a time (optionally on some weekdays), every N minutes, or once at an instant." },
       time: { type: "string", description: "HH:MM local time, for daily." },
       weekdays: { type: "array", items: { type: "integer", minimum: 0, maximum: 6 }, description: "0 = Sunday … 6 = Saturday, for daily; every day when omitted." },
-      every_minutes: { type: "integer", minimum: 1, description: "Minutes between runs, for interval." },
+      every_minutes: { type: "integer", minimum: 5, maximum: 10080, description: "Minutes between runs, from 5 to 10080, for interval." },
       at: { type: "string", description: "ISO instant, for once." },
       owner_agent_id: { type: "string", description: "Optional teammate agent id (from the manifest or a recruitment result) who owns the routine instead of you." },
     },

@@ -7,6 +7,8 @@ export const ROUTINES_FILE = "routines.json";
 
 const TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const MIN_INTERVAL_MINUTES = 5;
+export const MAX_INTERVAL_MINUTES = 7 * 24 * 60;
 
 /** A refusal the bridge can name. `PayloadError`-style: `ipc.runHandler`
  * turns `name` into the envelope's `code`, so the renderer can tell an
@@ -51,11 +53,16 @@ export function normalizeTrigger(raw: unknown, options: NormalizeTriggerOptions 
   const frequency = record.frequency;
 
   if (frequency === "interval") {
-    if (typeof record.everyMinutes !== "number" || !Number.isFinite(record.everyMinutes)) return null;
+    if (
+      typeof record.everyMinutes !== "number"
+      || !Number.isInteger(record.everyMinutes)
+      || record.everyMinutes < MIN_INTERVAL_MINUTES
+      || record.everyMinutes > MAX_INTERVAL_MINUTES
+    ) return null;
     return {
       kind: "schedule",
       frequency: "interval",
-      everyMinutes: Math.min(Math.max(Math.round(record.everyMinutes), 5), 60 * 24 * 7),
+      everyMinutes: record.everyMinutes,
     };
   }
 

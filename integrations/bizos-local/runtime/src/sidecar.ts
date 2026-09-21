@@ -1051,8 +1051,9 @@ export class CollaborationFacade {
     return this.harness.checkpointTask(capability, raw);
   }
 
-  async scheduleRoutine(capability: TeamCapability, raw: unknown): Promise<{ routine: PublicRoutine }> {
+  async scheduleRoutine(authorize: () => TeamCapability, raw: unknown): Promise<{ routine: PublicRoutine }> {
     return this.exclusive(async () => {
+      const capability = authorize();
       const input = objectBody(raw, ["name", "prompt", "frequency", "time", "weekdays", "every_minutes", "at", "owner_agent_id"]);
       const name = requiredString(input.name, "name", 80);
       const prompt = requiredString(input.prompt, "prompt", 6000);
@@ -1062,18 +1063,34 @@ export class CollaborationFacade {
       } catch (error) {
         throw new HttpError(400, "invalid_trigger", error instanceof Error ? error.message : "invalid trigger");
       }
-      const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
-      if (!run || run.botId !== capability.botId || run.threadId !== capability.threadId) {
-        throw new HttpError(403, "invalid_team_scope", "The routine capability does not match this turn.");
-      }
+      const acceptedRun = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
+      this.requireActiveTeamRun(acceptedRun, capability, "A routine can be scheduled only while its source run is active.");
       const ownerId = input.owner_agent_id === undefined
         ? capability.botId
         : this.internalAgentId(requiredString(input.owner_agent_id, "owner_agent_id", 160));
       const bots = await this.invoke<Bot[]>("lbz:bots:list");
       if (!bots.some((bot) => bot.id === ownerId && !bot.archived)) throw new HttpError(404, "not_found", "That owner is not an active agent here.");
+      // Keep the run lookup and session validation at the commit edge. Both
+      // bot lookup and this facade's serializer can yield; STOP must win if
+      // it lands during either wait, even though this request was accepted.
+      const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
+      this.requireActiveTeamRun(run, capability, "A routine can be scheduled only while its source run is active.");
+      const current = authorize();
+      if (current.runId !== capability.runId || current.botId !== capability.botId || current.threadId !== capability.threadId) {
+        throw new HttpError(403, "invalid_team_scope", "The routine capability changed before it could be committed.");
+      }
       const routine = await this.invoke<Routine>("lbz:routines:create", [{ botId: ownerId, name, prompt, trigger, enabled: true }]);
       return { routine: publicRoutine(routine, bots, (botId) => this.agentId(botId)) };
     });
+  }
+
+  private requireActiveTeamRun(run: Run | null, capability: TeamCapability, inactiveMessage: string): asserts run is Run {
+    if (!run || run.botId !== capability.botId || run.threadId !== capability.threadId) {
+      throw new HttpError(403, "invalid_team_scope", "The routine capability does not match this turn.");
+    }
+    if (!(["queued", "working", "waiting_input"] as const).includes(run.state as "queued" | "working" | "waiting_input")) {
+      throw new HttpError(409, "run_not_active", inactiveMessage);
+    }
   }
   removeApp(id: string) { return this.invoke("lbz:apps:remove", [id]); }
   testApp(id: string) { return this.invoke("lbz:apps:test", [id]); }
@@ -1499,7 +1516,7 @@ async function serve(): Promise<void> {
         return sendJson(response, 200, await facade.manageAgent(teamBroker.authorize(bearer), await bodyOf(request)));
       }
       if (method === "POST" && url.pathname === "/api/internal/local-team/routine") {
-        return sendJson(response, 201, await facade.scheduleRoutine(teamBroker.authorize(bearer), await bodyOf(request)));
+        return sendJson(response, 201, await facade.scheduleRoutine(() => teamBroker.authorize(bearer), await bodyOf(request)));
       }
       if (method === "POST" && url.pathname === "/api/internal/local-team/checkpoint") {
         return sendJson(response, 200, facade.checkpointTask(teamBroker.authorize(bearer), await bodyOf(request)));
@@ -1717,9 +1734,9 @@ async function serve(): Promise<void> {
         inputSchema: tool.inputSchema,
         call: async (argumentsValue: unknown) => {
           if (!facade) throw new HttpError(503, "not_ready", "Local team runtime is not ready.");
+          if (tool.name === "schedule_routine") return facade.scheduleRoutine(() => teamBroker.authorize(session), argumentsValue);
           const capability = teamBroker.authorize(session);
           if (tool.name === "recruit_agent") return facade.recruit(capability, argumentsValue);
-          if (tool.name === "schedule_routine") return facade.scheduleRoutine(capability, argumentsValue);
           if (tool.name === "checkpoint_task") return facade.checkpointTask(capability, argumentsValue);
           return facade.manageAgent(capability, argumentsValue);
         },

@@ -40,6 +40,18 @@ real-sidecar-process tests, with temporary profiles and scripted model drivers.
 Build first so the sidecar-process test is exercised. These tests do not call a
 paid model, test real user credentials or validate a signed desktop installer.
 
+## Routine integrity
+
+Interval routines accept whole-minute intervals from 5 through 10,080 minutes
+and are shown as `every N minutes`, matching their relative scheduler behavior.
+An active routine always names an existing, non-archived local agent. The same
+owner invariant is enforced for direct harness/IPC calls and sidecar calls.
+
+Agent-created routines remain bound to the active source turn. STOP revokes an
+accepted request even when it is waiting behind another local mutation or an
+owner lookup; the sidecar checks the run and session again at the serialized
+write boundary. STOP does not delete a routine that was already committed.
+
 ## Native CLI permissions in local BizOS
 
 The harness adds workspace context, agent coordination and tools to the user's

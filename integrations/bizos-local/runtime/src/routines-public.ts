@@ -2,6 +2,7 @@
 // answers with, so one Routines app reads both. A local routine's trigger
 // becomes a cron line the app already knows how to describe.
 import type { Bot, Routine, RoutineTrigger, Run } from "./harness/types.js";
+import { MAX_INTERVAL_MINUTES, MIN_INTERVAL_MINUTES } from "./harness/routines.js";
 
 export interface PublicRoutine {
   id: string;
@@ -48,10 +49,7 @@ export function publicRoutineRun(run: Run, runIdFor: (id: string) => string): Pu
 
 export function cronForTrigger(trigger: RoutineTrigger): string {
   if (trigger.frequency === "interval") {
-    const minutes = Math.max(1, Math.round(trigger.everyMinutes));
-    if (minutes < 60) return `*/${minutes} * * * *`;
-    if (minutes % 60 === 0 && minutes < 24 * 60) return `0 */${minutes / 60} * * *`;
-    return `every ${minutes} minutes`;
+    return `every ${trigger.everyMinutes} minutes`;
   }
   if (trigger.frequency === "daily") {
     const [hour, minute] = trigger.time.split(":").map((part) => Number(part));
@@ -95,9 +93,12 @@ export function publicRoutine(
 export function triggerFromToolInput(input: Record<string, unknown>): RoutineTrigger {
   const frequency = input.frequency;
   if (frequency === "interval") {
-    const every = Number(input.every_minutes);
-    if (!Number.isFinite(every) || every < 1 || every > 7 * 24 * 60) throw new Error("every_minutes must be between 1 and 10080");
-    return { kind: "schedule", frequency: "interval", everyMinutes: Math.round(every) };
+    const every = input.every_minutes;
+    if (typeof every !== "number" || !Number.isInteger(every)
+      || every < MIN_INTERVAL_MINUTES || every > MAX_INTERVAL_MINUTES) {
+      throw new Error(`every_minutes must be an integer between ${MIN_INTERVAL_MINUTES} and ${MAX_INTERVAL_MINUTES}`);
+    }
+    return { kind: "schedule", frequency: "interval", everyMinutes: every };
   }
   if (frequency === "daily") {
     const time = typeof input.time === "string" ? input.time.trim() : "";

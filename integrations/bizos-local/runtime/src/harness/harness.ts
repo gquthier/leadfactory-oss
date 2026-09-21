@@ -2864,12 +2864,16 @@ export class LocalBizosHarness {
   readonly routines = {
     list: async (botId?: string): Promise<Routine[]> => this.routineStore.list(botId),
     create: async (input: CreateRoutineInput): Promise<Routine> => {
+      this.requireRoutineOwner(input.botId, input.enabled !== false);
       const routine = this.routineStore.create(input);
       this.scheduler.stop();
       this.scheduler.start();
       return this.routineStore.get(routine.id)!;
     },
     update: async (id: string, patch: Partial<CreateRoutineInput> & { enabled?: boolean }): Promise<Routine> => {
+      const current = this.routineStore.get(id);
+      if (!current) throw new Error("routine not found");
+      this.requireRoutineOwner(patch.botId ?? current.botId, patch.enabled ?? current.enabled);
       const routine = this.routineStore.update(id, patch);
       this.scheduler.stop();
       this.scheduler.start();
@@ -2885,6 +2889,12 @@ export class LocalBizosHarness {
       return started;
     },
   };
+
+  private requireRoutineOwner(botId: string, enabled: boolean): void {
+    const owner = this.botStore.get(botId);
+    if (!owner) throw new Error("routine owner does not exist");
+    if (enabled && owner.archived) throw new Error("an active routine needs an active owner");
+  }
 
   checkpointTask(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {
     return this.dispatcher.checkpointTask(scope, raw);
