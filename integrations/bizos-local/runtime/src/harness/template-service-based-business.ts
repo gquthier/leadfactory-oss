@@ -1,3 +1,4 @@
+import { operationsGuide } from "./template-ops-guide.js";
 // A practical operating vault for a service company. The payload is data:
 // the generic template installer creates the six persistent agents, their
 // shared group and their working folders. No external account or schedule is
@@ -20,11 +21,11 @@ const ROLES: readonly Role[] = [
     description: "Turns the owner's facts and priorities into an operating plan, assigns work in the team thread and keeps company decisions explicit.",
     owns: "company direction, priorities, cross-role coordination and the accuracy of the shared operating picture",
     workflow: [
-      "Read the current brief, Company.md, Mission.md, NOW.md and Decisions.md; leave unknown facts as TODO.",
+      "Read the current brief, Company.md, Mission.md, NOW.md and bus/DECISIONS.md; leave unknown facts as TODO.",
       "Choose the smallest useful outcome, name its owner and acceptance check, and coordinate it in the existing team thread.",
       "Read back the produced artifact or record, update NOW.md and record only decisions the owner actually made.",
     ],
-    writes: "Company.md, Mission.md, NOW.md, Decisions.md and a dated report under Reports/",
+    writes: "Company.md, Mission.md, NOW.md, bus/DECISIONS.md and a dated report under reports/",
     escalates: "conflicting priorities, material commitments, publication, spend and any action beyond the configured scope",
   },
   {
@@ -52,7 +53,7 @@ const ROLES: readonly Role[] = [
       "List missing access, inputs, owners, milestones and approval boundaries; unknowns remain TODO rather than invented facts.",
       "Coordinate Delivery in the team thread and keep a dated client-facing update as a draft until sending is authorized and executed.",
     ],
-    writes: "Clients/, Projects/, client updates in Deliverables/ and follow-up records in Reports/",
+    writes: "Clients/, Projects/, client updates in Deliverables/ and follow-up records in reports/",
     escalates: "scope ambiguity, missing approval, relationship risk, sensitive data and any outbound communication not in scope",
   },
   {
@@ -66,7 +67,7 @@ const ROLES: readonly Role[] = [
       "Produce the deliverable in its named folder, preserving user edits and keeping sources or calculations beside the work.",
       "Verify the acceptance checklist, then ask Quality in the current team thread for an independent review before client delivery.",
     ],
-    writes: "Projects/, Deliverables/, working evidence in knowledge/draft/ and dated progress in Reports/",
+    writes: "Projects/, Deliverables/, working evidence in knowledge/draft/ and dated progress in reports/",
     escalates: "scope changes, blocked dependencies, irreversible operations, publication and spend",
   },
   {
@@ -80,7 +81,7 @@ const ROLES: readonly Role[] = [
       "Check completeness, accuracy, links, calculations, permissions and client-specific constraints with observable evidence.",
       "Record pass, fail or blocked with exact findings; return defects to Delivery in the current team thread and never self-certify a fix you did not inspect.",
     ],
-    writes: "quality sections in Deliverables/, issue lists in Projects/ and review reports under Reports/",
+    writes: "quality sections in Deliverables/, issue lists in Projects/ and review reports under reports/",
     escalates: "material factual uncertainty, compliance questions, missing evidence and a requested release that fails its gate",
   },
   {
@@ -94,7 +95,7 @@ const ROLES: readonly Role[] = [
       "Use scripts/ops.mjs only for its documented local record operations, inspect the result and preserve manual notes.",
       "Prepare follow-up or billing records as drafts; schedule or send only through an actually available mechanism and within the user's configured scope.",
     ],
-    writes: "bus/, state/, Processes/, Reports/ and billing or follow-up fields in the relevant client and project record",
+    writes: "bus/, state/, Processes/, reports/ and billing or follow-up fields in the relevant client and project record",
     escalates: "money movement, invoice issuance, external sending, account access and discrepancies that cannot be resolved from records",
   },
 ];
@@ -155,6 +156,8 @@ const ROOT_NOTES: TemplateNote[] = [
     text: `# Service-based Business — shared operating context
 
 This vault is the company's shared second brain. Every agent starts in \`Agents/<Name>/\` and reads this file, then \`Start here.md\`, \`Mission.md\`, \`Company.md\`, \`Rules.md\`, \`Environment.md\`, \`Knowledge map.md\`, \`Team.md\`, \`NOW.md\` and its own role sheet.
+
+Use \`scripts/ops.mjs\` and its README for claims, decisions, handoffs, proof reports and run logs. \`state/decisions.jsonl\` is the canonical decisions store; \`bus/DECISIONS.md\` is its generated view and must not be edited by hand. The installed state is initialized; run \`node scripts/ops.mjs check\` before starting.
 
 Work from observed records. Keep clients separated. Preserve existing notes. Label assumptions and leave unknown facts as TODO. Store raw or unverified learning in \`knowledge/draft/\`; promote a fact to \`knowledge/trusted/\` only with a source and review date.
 
@@ -256,7 +259,7 @@ Routines run only while the local runtime is available and the Mac is awake. The
 - \`Projects/\`: contracted outcomes, milestones and status.
 - \`Deliverables/\`: artifacts and acceptance evidence.
 - \`Processes/\`: operating checklists.
-- \`Reports/\`: dated internal or client-facing reports.
+- \`reports/\`: dated internal or client-facing reports.
 - \`knowledge/draft/\`: unverified research and working knowledge.
 - \`knowledge/trusted/\`: sourced, reviewed facts.
 - \`bus/\`: local handoff and event records used by the operations helper.
@@ -292,13 +295,8 @@ The installer creates these six agents and the Service Business Team group. To c
 `,
   },
   {
-    path: "Decisions.md",
-    text: `# Decisions
-
-| Date | Decision | Owner | Scope | Evidence |
-|---|---|---|---|---|
-| TODO | TODO | TODO | TODO | TODO |
-`,
+    path: "bus/DECISIONS.md",
+    text: "# Decisions\n\nGenerated from state/decisions.jsonl by scripts/ops.mjs. Record decisions through the helper with an explicit revision; do not edit this view. No decision is recorded yet.\n",
   },
 ];
 
@@ -419,7 +417,7 @@ const RECORD_NOTES: TemplateNote[] = [
 `,
   },
   {
-    path: "Reports/Report template.md",
+    path: "reports/Report template.md",
     text: `# Report — TODO date
 
 - Period: TODO
@@ -434,7 +432,12 @@ const RECORD_NOTES: TemplateNote[] = [
   },
   { path: "bus/README.md", text: "# Local operations bus\n\nAppend-only local handoff or event records created by the documented operations helper belong here. A file is evidence of a local record, not proof of an external send.\n" },
   { path: "state/README.md", text: "# Local operations state\n\nLocal indexes and checkpoints created by scripts/ops.mjs belong here. Preserve unknown fields and human notes; inspect command output and resulting files before reporting success.\n" },
-  { path: "scripts/README.md", text: "# Scripts\n\nops.mjs is the shared local operations helper. It does not connect a CRM, payment provider or communication channel. Run only documented commands and verify the resulting record.\n" },
+  operationsGuide("delivery", "quality"),
+  { path: "state/bootstrap.json", text: '{"version":1}\n' },
+  { path: "state/claims.jsonl", text: "" },
+  { path: "state/decisions.jsonl", text: "" },
+  { path: "state/runs.jsonl", text: "" },
+  { path: "bus/claims.md", text: "# Claims\n\nGenerated from state/claims.jsonl by scripts/ops.mjs. No task claimed yet.\n" },
   { path: "scripts/ops.mjs", text: OPS_SCRIPT },
 ];
 
@@ -449,10 +452,15 @@ export const SERVICE_BASED_BUSINESS: CompanyTemplate = {
     "Projects",
     "Deliverables",
     "Processes",
-    "Reports",
+    "reports",
     "knowledge/draft",
     "knowledge/trusted",
     "bus",
+    "bus/inbox",
+    ...ROLES.map((role) => `bus/inbox/${role.slug}/done`),
+    "reports/daily",
+    "reports/proofs",
+    "state/goals",
     "state",
     "scripts",
   ],

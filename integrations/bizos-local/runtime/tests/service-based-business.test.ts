@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +35,18 @@ function harness(): LocalBizosHarness {
 }
 
 describe("Service-based Business company template", () => {
+  it("installs a ready-to-run operations helper and one canonical decisions registry", async () => {
+    await harness().templates.apply("service-based-business");
+    const vault = join(root, "state", "vaults", "service-based-business");
+    const check = spawnSync(process.execPath, [join(vault, "scripts/ops.mjs"), "check"], { cwd: root, encoding: "utf8" });
+    expect(check.status, check.stderr).toBe(0);
+    expect(JSON.parse(check.stdout)).toMatchObject({ ok: true, claims: 0, decisions: 0, runs: 0 });
+    expect(existsSync(join(vault, "Decisions.md"))).toBe(false);
+    expect(existsSync(join(vault, "bus/DECISIONS.md"))).toBe(true);
+    for (const role of SERVICE_BASED_BUSINESS.bots) expect(existsSync(join(vault, `bus/inbox/${role.slug}/done`))).toBe(true);
+    expect(readFileSync(join(vault, "scripts/README.md"), "utf8")).toContain("claim take");
+  });
+
   it("is a complete six-role operating system with truthful local capabilities", () => {
     expect(() => validateTemplate(SERVICE_BASED_BUSINESS)).not.toThrow();
     expect(SERVICE_BASED_BUSINESS).toMatchObject({
@@ -57,7 +70,7 @@ describe("Service-based Business company template", () => {
 
     const folders = new Set(SERVICE_BASED_BUSINESS.folders);
     for (const required of [
-      "Clients", "Projects", "Deliverables", "Processes", "Reports",
+      "Clients", "Projects", "Deliverables", "Processes", "reports",
       "knowledge/draft", "knowledge/trusted", "bus", "state", "scripts",
     ]) expect(folders.has(required)).toBe(true);
 
@@ -65,7 +78,7 @@ describe("Service-based Business company template", () => {
     for (const required of [
       "AGENTS.md", "CLAUDE.md", "Start here.md", "Mission.md", "Company.md", "Rules.md",
       "Environment.md", "Knowledge map.md", "Team.md", "Clients/Client template.md",
-      "Projects/Project template.md", "Deliverables/Deliverable template.md", "Reports/Report template.md",
+      "Projects/Project template.md", "Deliverables/Deliverable template.md", "reports/Report template.md",
       "Processes/Qualification.md", "Processes/Proposal.md", "Processes/Onboarding.md",
       "Processes/Delivery.md", "Processes/Quality assurance.md", "Processes/Follow-up and billing.md",
       "scripts/ops.mjs",

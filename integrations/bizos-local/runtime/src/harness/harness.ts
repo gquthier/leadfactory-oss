@@ -764,10 +764,10 @@ export class LocalBizosHarness {
     // directory; the folder was checked when it was chosen, and the spawn
     // failure names it if it has gone since.
     if (bot.workspacePath) {
-        const binding = this.bindingOrNull();
+      const binding = this.bindingOrNull();
       if (binding) {
         const fromVault = relative(binding.path, bot.workspacePath);
-        const belongsToBoundVault = fromVault === "" || (!fromVault.startsWith(`..${sep}`) && !isAbsolute(fromVault));
+        const belongsToBoundVault = fromVault !== ".." && !fromVault.startsWith(`..${sep}`) && !isAbsolute(fromVault);
         if (belongsToBoundVault && !this.verifiedBoundVaultPath(bot)) {
           throw new SettingsError("the bound company vault is unavailable");
         }
@@ -1470,8 +1470,8 @@ export class LocalBizosHarness {
       if (bot) {
         const workspace = bot.workspacePath;
         if (!workspace) return undefined;
-        const fromAgents = relative(join(binding.path, AGENTS_DIRECTORY), workspace);
-        if (!fromAgents || fromAgents.startsWith(`..${sep}`) || isAbsolute(fromAgents)) return undefined;
+        const fromVault = relative(binding.path, workspace);
+        if (fromVault === ".." || fromVault.startsWith(`..${sep}`) || isAbsolute(fromVault)) return undefined;
         const workspaceStats = lstatSync(workspace);
         if (!workspaceStats.isDirectory() || workspaceStats.isSymbolicLink()) return undefined;
         // This also rejects a replaced `Agents/` or any linked ancestor of

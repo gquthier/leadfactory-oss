@@ -58,9 +58,9 @@ function fails(args: string[], pattern: RegExp, cwd = elsewhere): SpawnSyncRetur
   return result;
 }
 
-function runConcurrent(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runConcurrent(args: string[], nodeArgs: string[] = []): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [script, ...args], { cwd: elsewhere, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [...nodeArgs, script, ...args], { cwd: elsewhere, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
@@ -255,19 +255,46 @@ describe("scripts/ops.mjs", () => {
 
   it("does not remove a lock whose ownership token changes before cleanup", async () => {
     ok(["bootstrap"]);
-    writeFileSync(join(vault, "state", "claims.jsonl"), JSON.stringify({ payload: "x".repeat(32 * 1024 * 1024) }) + "\n");
+    const claims = join(vault, "state", "claims.jsonl");
+    writeFileSync(claims, "not JSON\n");
     const lock = join(vault, "state", ".ops-lock");
     const owner = join(lock, "owner.json");
-    const running = runConcurrent(["bootstrap"]);
-    await waitFor(() => existsSync(owner));
+    const entered = join(scratch, "entered-read");
+    const release = join(scratch, "release-read");
+    const preload = join(scratch, "pause-claims-read.mjs");
+    // Pause at a known point after owner.json is written, instead of hoping
+    // a large ledger makes the child slow enough for the parent to race it.
+    writeFileSync(preload, `
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const read = fs.readFileSync;
+fs.readFileSync = function(path, ...args) {
+  if (String(path).endsWith("/state/claims.jsonl")) {
+    fs.writeFileSync(${JSON.stringify(entered)}, "ready");
+    const deadline = Date.now() + 7000;
+    while (!fs.existsSync(${JSON.stringify(release)})) {
+      if (Date.now() > deadline) throw new Error("test gate timed out");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
+    }
+  }
+  return read.call(this, path, ...args);
+};
+syncBuiltinESMExports();
+`);
+    const running = runConcurrent(["bootstrap"], ["--import", preload]);
+    await waitFor(() => existsSync(entered), 5000);
     const replacement = JSON.stringify({ token: "replacement-owner", pid: 999999, at: new Date().toISOString() }) + "\n";
-    writeFileSync(owner, replacement);
+    try {
+      expect(existsSync(owner)).toBe(true);
+      writeFileSync(owner, replacement);
+    } finally {
+      writeFileSync(release, "continue");
+    }
     const result = await running;
-
     expect(result.code).not.toBe(0);
     expect(existsSync(lock)).toBe(true);
     expect(readFileSync(owner, "utf8")).toBe(replacement);
-  });
+  }, 10000);
 
   it("uses revision CAS for decisions and fails closed on stale writers", () => {
     ok(["bootstrap"]);
