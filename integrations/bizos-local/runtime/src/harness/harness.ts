@@ -680,10 +680,12 @@ export class LocalBizosHarness {
       // rotates roughly hourly; without this every routine that fired more
       // than an hour after launch was told "this Mac's BizOS session is
       // signed out" by every tool it reached for.
-      fire: async ({ routine, missed }) => {
-        await this.refreshSessionCookie();
+      prepare: () => this.refreshSessionCookie(),
+      ineligibleReason: (routine) => this.routineOwnerIneligibleReason(routine.botId),
+      fire: ({ routine, missed }) => {
         const bot = this.botStore.get(routine.botId);
-        if (!bot) return undefined;
+        const reason = this.routineOwnerIneligibleReason(routine.botId);
+        if (!bot || reason) throw new Error(reason ?? "routine owner does not exist");
         return this.dispatcher.runRoutine({
           botId: routine.botId,
           routineId: routine.id,
@@ -2726,7 +2728,10 @@ export class LocalBizosHarness {
       const exclusive: UpdateBotInput =
         patch.planId ? { ...patch, providerId: "" } : patch.providerId ? { ...patch, planId: "" } : patch;
       const bot = this.botStore.update(id, exclusive);
-      if (bot.archived) this.events.publish({ type: "bot.archived", botId: bot.id });
+      if (bot.archived) {
+        this.routineStore.pauseForBot(bot.id);
+        this.events.publish({ type: "bot.archived", botId: bot.id });
+      }
       return this.decorate(bot);
     },
     remove: async (id: string): Promise<void> => {
@@ -2960,6 +2965,13 @@ export class LocalBizosHarness {
     const owner = this.botStore.get(botId);
     if (!owner) throw new Error("routine owner does not exist");
     if (enabled && owner.archived) throw new Error("an active routine needs an active owner");
+  }
+
+  private routineOwnerIneligibleReason(botId: string): string | null {
+    const owner = this.botStore.get(botId);
+    if (!owner) return "routine owner no longer exists";
+    if (owner.archived) return "routine owner is archived";
+    return null;
   }
 
   checkpointTask(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {

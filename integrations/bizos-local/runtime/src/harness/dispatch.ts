@@ -766,6 +766,10 @@ export class Dispatcher {
       this.pump(threadId);
       return;
     }
+    if (next.routineId && bot.archived) {
+      this.abandon(next, bot.id, "Routine owner is archived; the routine was paused.");
+      return;
+    }
     this.launch(next, bot);
   }
 

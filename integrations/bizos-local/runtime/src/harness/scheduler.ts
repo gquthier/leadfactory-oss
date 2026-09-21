@@ -42,6 +42,11 @@ export function computeNextRun(trigger: RoutineTrigger, from: Date): Date | null
 export interface SchedulerDependencies {
   routines: RoutineStore;
   clock: Clock;
+  /** Preparation that may yield (session refresh today). Eligibility is
+   * checked again after it, before any schedule timestamp moves. */
+  prepare?(): Promise<void>;
+  /** A clear refusal when the routine's owner cannot execute. */
+  ineligibleReason?(routine: Routine): string | null;
   /** Start a routine turn. Returns the run it started, so a manual run and
    * a scheduled one are literally the same code path — `runNow` used to
    * bypass every piece of bookkeeping below. */
@@ -118,6 +123,11 @@ export class Scheduler {
     const now = this.deps.clock.now();
     for (const routine of this.deps.routines.list()) {
       if (!routine.enabled) continue;
+      const reason = this.ineligibleReason(routine);
+      if (reason) {
+        this.pauseIneligible(routine, reason);
+        continue;
+      }
       if (!routine.nextRunAt) {
         const next = computeNextRun(routine.trigger, now);
         this.deps.routines.setSchedule(routine.id, {
@@ -136,6 +146,11 @@ export class Scheduler {
     const now = this.deps.clock.now();
     for (const routine of this.deps.routines.list()) {
       if (!routine.enabled || !routine.nextRunAt) continue;
+      const reason = this.ineligibleReason(routine);
+      if (reason) {
+        this.pauseIneligible(routine, reason);
+        continue;
+      }
       if (new Date(routine.nextRunAt).getTime() <= now.getTime()) this.fire(routine, false);
     }
   }
@@ -145,7 +160,7 @@ export class Scheduler {
     const routine = this.deps.routines.get(id);
     if (!routine) throw new Error("routine not found");
     if (this.inFlight.has(routine.id)) throw new Error("that routine is already running");
-    return this.run(routine, false);
+    return this.run(routine, false, true);
   }
 
   /**
@@ -203,25 +218,42 @@ export class Scheduler {
     });
   }
 
-  private async run(routine: Routine, missed: boolean): Promise<{ runId: string } | undefined> {
+  private async run(routine: Routine, missed: boolean, manual = false): Promise<{ runId: string } | undefined> {
     if (this.inFlight.has(routine.id)) return undefined;
+    const initialReason = this.ineligibleReason(routine);
+    if (initialReason) {
+      this.pauseIneligible(routine, initialReason);
+      throw new Error(initialReason);
+    }
     const token = Symbol(routine.id);
     this.inFlight.set(routine.id, { token });
-    const now = this.deps.clock.now();
-    const next = computeNextRun(routine.trigger, now);
-    this.deps.routines.setSchedule(routine.id, {
-      lastRunAt: now.toISOString(),
-      nextRunAt: next ? next.toISOString() : null,
-      // `running` is true from here until the dispatcher reports the run
-      // finished — the flag used to be permanently false, so the UI never
-      // showed a routine that was actually working.
-      running: true,
-      // A `once` routine has no next window. Leaving it enabled with no
-      // date would make it look armed forever.
-      ...(next ? {} : { enabled: false }),
-    });
     try {
-      const started = await this.deps.fire({ routine, missed });
+      await this.deps.prepare?.();
+      const current = this.deps.routines.get(routine.id);
+      if (!current) throw new Error("routine not found");
+      const reason = this.ineligibleReason(current);
+      if (reason) {
+        this.pauseIneligible(current, reason);
+        throw new Error(reason);
+      }
+      if (!manual && !current.enabled) {
+        this.release(routine.id, token);
+        return undefined;
+      }
+      const now = this.deps.clock.now();
+      const next = computeNextRun(current.trigger, now);
+      this.deps.routines.setSchedule(current.id, {
+        lastRunAt: now.toISOString(),
+        nextRunAt: next ? next.toISOString() : null,
+        // `running` is true from here until the dispatcher reports the run
+        // finished — the flag used to be permanently false, so the UI never
+        // showed a routine that was actually working.
+        running: true,
+        // A `once` routine has no next window. Leaving it enabled with no
+        // date would make it look armed forever.
+        ...(next ? {} : { enabled: false }),
+      });
+      const started = await this.deps.fire({ routine: current, missed });
       // Nothing started (the bot is gone): the lock goes back immediately, or
       // the routine could never be run again without a restart.
       if (!started) {
@@ -256,5 +288,15 @@ export class Scheduler {
     if (this.inFlight.get(routineId)?.token !== token) return;
     this.inFlight.delete(routineId);
     this.deps.routines.setSchedule(routineId, { running: false });
+  }
+
+  private ineligibleReason(routine: Routine): string | null {
+    return this.deps.ineligibleReason?.(routine) ?? null;
+  }
+
+  private pauseIneligible(routine: Routine, reason: string): void {
+    this.deps.routines.pause(routine.id);
+    this.deps.routines.setSchedule(routine.id, { running: false });
+    console.warn(`Local BizOS: pausing routine ${routine.id} — ${reason}`);
   }
 }

@@ -52,6 +52,14 @@ accepted request even when it is waiting behind another local mutation or an
 owner lookup; the sidecar checks the run and session again at the serialized
 write boundary. STOP does not delete a routine that was already committed.
 
+Archiving an agent pauses every routine it owns without changing the routine's
+last or next run timestamps. Reactivating the agent does not re-arm them; each
+routine must be resumed explicitly. Missing or archived owners are checked
+again after session preparation and when a queued routine reaches dispatch, so
+they cannot advance schedule bookkeeping or start a provider turn. Archiving
+does not interrupt a provider turn that already started; STOP remains the
+explicit control for work already executing.
+
 ## Local team-tool status
 
 `/api/local/runtime` reports `tools.scope = "local"` and separate Codex,

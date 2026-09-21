@@ -220,4 +220,39 @@ export class RoutineStore {
     this.routines = this.routines.filter((routine) => routine.botId !== botId);
     if (this.routines.length !== before) this.persist();
   }
+
+  pause(id: string): boolean {
+    const index = this.routines.findIndex((routine) => routine.id === id);
+    const current = this.routines[index];
+    if (index < 0 || !current || !current.enabled) return false;
+    const lastVersion = Math.max(...[current.createdAt, current.updatedAt, current.lastRunAt]
+      .map((at) => at ? Date.parse(at) : 0).filter(Number.isFinite));
+    this.routines[index] = {
+      ...current,
+      enabled: false,
+      updatedAt: new Date(Math.max(this.clock.now().getTime(), lastVersion + 1)).toISOString(),
+    };
+    this.persist();
+    return true;
+  }
+
+  /** Archiving an owner pauses its future work without pretending a run
+   * happened. `running` stays factual until an already queued/active run
+   * settles; reactivating the owner never silently re-arms these rows. */
+  pauseForBot(botId: string): number {
+    let changed = 0;
+    this.routines = this.routines.map((routine) => {
+      if (routine.botId !== botId || !routine.enabled) return routine;
+      changed += 1;
+      const lastVersion = Math.max(...[routine.createdAt, routine.updatedAt, routine.lastRunAt]
+        .map((at) => at ? Date.parse(at) : 0).filter(Number.isFinite));
+      return {
+        ...routine,
+        enabled: false,
+        updatedAt: new Date(Math.max(this.clock.now().getTime(), lastVersion + 1)).toISOString(),
+      };
+    });
+    if (changed > 0) this.persist();
+    return changed;
+  }
 }

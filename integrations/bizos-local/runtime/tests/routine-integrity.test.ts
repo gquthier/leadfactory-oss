@@ -1,18 +1,23 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexTurnHandle, CodexTurnInput } from "../src/harness/codex-driver.js";
 import { LocalBizosHarness } from "../src/harness/harness.js";
+import type { Routine } from "../src/harness/types.js";
 import { cronForTrigger, triggerFromToolInput } from "../src/routines-public.js";
 import { CollaborationFacade, LocalTeamBroker } from "../src/sidecar.js";
 
 const roots: string[] = [];
 const harnesses: LocalBizosHarness[] = [];
 
-function fixture() {
+function fixture(options: {
+  readSessionCookie?: () => Promise<string>;
+  routines?: Routine[];
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), "lbz-routine-integrity-"));
   roots.push(root);
+  if (options.routines) writeFileSync(join(root, "routines.json"), `${JSON.stringify(options.routines)}\n`);
   const turns: CodexTurnInput[] = [];
   const broker = new LocalTeamBroker();
   let facade: CollaborationFacade | undefined;
@@ -20,7 +25,7 @@ function fixture() {
     rootDir: root,
     homeDir: root,
     baseUrl: "",
-    readSessionCookie: async () => "",
+    readSessionCookie: options.readSessionCookie ?? (async () => ""),
     orgName: () => "Routine fixture",
     execPath: "/fake/node",
     packaged: false,
@@ -204,6 +209,119 @@ describe("routine authorization and ownership", () => {
     await f.harness.routines.update(routine.id, { botId: second.id });
     const started = await f.harness.routines.runNow(routine.id);
     expect((await f.harness.runs.get(started.runId))?.botId).toBe(second.id);
+  });
+
+  it("pauses routines when their owner is archived and requires an explicit resume", async () => {
+    const f = fixture();
+    const owner = await f.harness.bots.create({ name: "Owner" });
+    const routine = await f.harness.routines.create({
+      botId: owner.id,
+      name: "Owned",
+      prompt: "Run",
+      trigger: { kind: "schedule", frequency: "interval", everyMinutes: 5 },
+      enabled: true,
+    });
+    const before = (await f.harness.routines.list()).find((row) => row.id === routine.id)!;
+
+    await f.harness.bots.update(owner.id, { archived: true });
+    const paused = (await f.harness.routines.list()).find((row) => row.id === routine.id)!;
+    expect(paused.enabled).toBe(false);
+    expect(paused.lastRunAt).toBe(before.lastRunAt);
+    expect(paused.nextRunAt).toBe(before.nextRunAt);
+    await expect(f.harness.routines.runNow(routine.id)).rejects.toThrow(/owner|archived|active/i);
+    expect(f.turns).toHaveLength(0);
+
+    await f.harness.bots.update(owner.id, { archived: false });
+    expect((await f.harness.routines.list()).find((row) => row.id === routine.id)?.enabled).toBe(false);
+    await f.harness.routines.update(routine.id, { enabled: true });
+    const started = await f.harness.routines.runNow(routine.id);
+    expect((await f.harness.runs.get(started.runId))?.botId).toBe(owner.id);
+    expect(f.turns).toHaveLength(1);
+  });
+
+  it("rechecks owner eligibility after asynchronous preparation without advancing the schedule", async () => {
+    let preparationStarted!: () => void;
+    let releasePreparation!: () => void;
+    const started = new Promise<void>((resolve) => { preparationStarted = resolve; });
+    const gate = new Promise<void>((resolve) => { releasePreparation = resolve; });
+    const f = fixture({ readSessionCookie: async () => { preparationStarted(); await gate; return ""; } });
+    const owner = await f.harness.bots.create({ name: "Owner" });
+    const routine = await f.harness.routines.create({
+      botId: owner.id,
+      name: "Prepared",
+      prompt: "Run",
+      trigger: { kind: "schedule", frequency: "interval", everyMinutes: 5 },
+      enabled: true,
+    });
+    const before = (await f.harness.routines.list()).find((row) => row.id === routine.id)!;
+
+    const pending = f.harness.routines.runNow(routine.id);
+    await started;
+    await f.harness.bots.update(owner.id, { archived: true });
+    releasePreparation();
+
+    await expect(pending).rejects.toThrow(/owner|archived|active/i);
+    const after = (await f.harness.routines.list()).find((row) => row.id === routine.id)!;
+    expect(after.lastRunAt).toBe(before.lastRunAt);
+    expect(after.nextRunAt).toBe(before.nextRunAt);
+    expect(after.enabled).toBe(false);
+    expect(f.turns).toHaveLength(0);
+    expect(await f.harness.runs.list()).toEqual([]);
+  });
+
+  it("refuses a queued routine whose owner is archived and releases its scheduler lock", async () => {
+    const f = fixture();
+    const owner = await f.harness.bots.create({ name: "Owner" });
+    await f.harness.threads.send({ botId: owner.id }, { text: "Block the owner thread." });
+    const routine = await f.harness.routines.create({
+      botId: owner.id,
+      name: "Queued",
+      prompt: "Run later",
+      trigger: { kind: "schedule", frequency: "interval", everyMinutes: 5 },
+      enabled: true,
+    });
+    const queued = await f.harness.routines.runNow(routine.id);
+    expect(f.turns).toHaveLength(1);
+
+    await f.harness.bots.update(owner.id, { archived: true });
+    f.turns[0]?.onEvent({ type: "turn.completed", ok: true, stopReason: null });
+
+    expect(f.turns).toHaveLength(1);
+    expect(await f.harness.runs.get(queued.runId)).toMatchObject({ state: "failed", error: expect.stringMatching(/archived/i) });
+    expect((await f.harness.routines.list()).find((row) => row.id === routine.id)).toMatchObject({ enabled: false, running: false });
+
+    await f.harness.bots.update(owner.id, { archived: false });
+    await f.harness.routines.update(routine.id, { enabled: true });
+    await expect(f.harness.routines.runNow(routine.id)).resolves.toBeTruthy();
+    expect(f.turns).toHaveLength(2);
+  });
+
+  it("pauses persisted orphan routines at startup and refuses manual execution without timestamp drift", async () => {
+    const nextRunAt = "2099-01-01T00:00:00.000Z";
+    const row: Routine = {
+      id: "rtn_orphan",
+      botId: "bot_missing",
+      name: "Orphan",
+      prompt: "Must not run",
+      trigger: { kind: "schedule", frequency: "interval", everyMinutes: 5 },
+      enabled: true,
+      running: false,
+      createdAt: "2026-09-21T00:00:00.000Z",
+      updatedAt: "2026-09-21T00:00:00.000Z",
+      nextRunAt,
+    };
+    const manual = fixture({ routines: [row] });
+    await expect(manual.harness.routines.runNow(row.id)).rejects.toThrow(/owner|exist/i);
+    expect((await manual.harness.routines.list())[0]).toMatchObject({ enabled: false, nextRunAt });
+    expect((await manual.harness.routines.list())[0]?.lastRunAt).toBeUndefined();
+    expect(manual.turns).toHaveLength(0);
+
+    const startup = fixture({ routines: [row] });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    (startup.harness as unknown as { scheduler: { start(): void } }).scheduler.start();
+    expect((await startup.harness.routines.list())[0]).toMatchObject({ enabled: false, nextRunAt });
+    expect(warning).toHaveBeenCalledWith(expect.stringMatching(/pausing routine rtn_orphan.*owner.*exist/i));
+    warning.mockRestore();
   });
 });
 
