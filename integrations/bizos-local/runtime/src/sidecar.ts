@@ -1484,6 +1484,7 @@ async function serve(): Promise<void> {
   const id = instanceId();
   const token = randomBytes(48).toString("base64url");
   const teamBroker = new LocalTeamBroker();
+  const localTeamMcpScriptPath = join(dirname(fileURLToPath(import.meta.url)), "local-team-mcp.js");
   let facade: CollaborationFacade | null = null;
   let connector: RelayConnector | null = null;
   let packs: Packs | null = null;
@@ -1756,10 +1757,11 @@ async function serve(): Promise<void> {
     // a stdio MCP server, one per turn, holding a one-shot ticket that only
     // the child exchanges (it never reaches the CLI's argv or prompt). The
     // toolset rides in argv, per server; the sidecar re-checks every call.
+    localTeamMcpScriptPath,
     localTeamMcp: ({ bot, threadId, runId }) => ({
       command: process.execPath,
       args: [
-        join(dirname(fileURLToPath(import.meta.url)), "local-team-mcp.js"),
+        localTeamMcpScriptPath,
         `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },

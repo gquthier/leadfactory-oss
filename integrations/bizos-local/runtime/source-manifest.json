@@ -38,7 +38,7 @@
     "src/harness/env-path.ts": "4ba59ff3b3cc9f6475fc241570dbe495f996e3ea03ba3a70bfc6395595d26f08",
     "src/harness/events.ts": "2a9b27ae6b149a713bb1653dc94b69bdbf4e63bd4aa76a418117dd26915059d3",
     "src/harness/groups.ts": "079d659348d016860caaf0e89e099ac473a6031756a9832518bb15e6aed1980b",
-    "src/harness/harness.ts": "183815db8b6db3e7e0e29689cf3027bef8efe06d7d0b09e9a9433306c0906ab7",
+    "src/harness/harness.ts": "770f6fee404d8c9cfc988c095de24d4159444498c2811eac29ce17c1a27e4182",
     "src/harness/ids.ts": "43cdb6e73e687520a4826b790be53bb14348b38e08cf2fa628d6f5f521c02787",
     "src/harness/inference.ts": "f56a079193678f67aa0ac274893a39a71eee7ce3a01ee3c2a57efaebcf5f08b2",
     "src/harness/login-launcher.ts": "a138021bb74cfe45078ec87be7fa2ef09a732d1734b2928c40a1891131b15e6b",
@@ -78,6 +78,6 @@
     "src/routines-public.ts": "41e46b8cdffc47396556d8b054782c02b3f911a569f460fbd9eaae0ef9d25fcb",
     "src/sidecar-contract.ts": "fef322131775e78243d177d3bc7c801bda660a0a4e8309e6e6e4de551a567377",
     "src/sidecar-state.ts": "61c9149007198577dde498a3154ae5bd45aae0396630e1fb57a09a140973332b",
-    "src/sidecar.ts": "fd633eb018e9e0c72ef30626202d3b92ffab351b84f69d61ebc2102d30705812"
+    "src/sidecar.ts": "508556b052711f765c0335d2d514001a5e904797a10923697726737d52ca46d8"
   }
 }

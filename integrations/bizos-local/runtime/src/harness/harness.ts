@@ -46,11 +46,8 @@ import { GroupStore } from "./groups.js";
 import { openCliLogin } from "./login-launcher.js";
 import {
   buildMcpServers,
-  describeMissingTools,
-  describeToolsStatus,
   resolveMcpLauncher,
   type McpLauncher,
-  type ToolsStatus,
 } from "./mcp-mount.js";
 import { PlanRegistry, MAX_PLAN_LABEL } from "./plan-registry.js";
 import { failoverCooldownUntil, failoverPlan as routeFailover, resolvePlan } from "./plan-router.js";
@@ -300,6 +297,10 @@ export interface HarnessOptions {
   computerHost?: ComputerHost;
   /** Optional local-only team tool. It is never mounted by cloud composition. */
   localTeamMcp?(input: { bot: Bot; threadId: string; runId: string }): StdioMcpServer | null;
+  /** Compiled bridge used by `localTeamMcp`. Status checks the real file so a
+   * missing package artifact degrades Claude alone instead of claiming that
+   * every local tool transport is down. */
+  localTeamMcpScriptPath?: string;
   /** Optional local-only host tools. They never enter the cloud composition. */
   localTeamTools?(input: { bot: Bot; threadId: string; runId: string }): CodexDynamicTool[];
   /** Called for completed, failed and cancelled local runs. */
@@ -314,6 +315,71 @@ export interface HarnessOptions {
     sandbox: RuntimeSettings["local"]["sandbox"];
     peers: Bot[];
   }): LocalArchitectureManifest;
+}
+
+export type LocalToolsStatusCode =
+  | "ready"
+  | "no_local_team_transport"
+  | "not_registered"
+  | "bridge_missing"
+  | "unsupported"
+  | "intentionally_excluded";
+
+export interface LocalToolAvailability {
+  available: boolean;
+  code: LocalToolsStatusCode;
+  reason: string | null;
+}
+
+/** Local agent coordination only. This deliberately says nothing about CLI
+ * installation/login, personal apps, computers, or the absent cloud MCP. */
+export interface LocalToolsStatus extends LocalToolAvailability {
+  scope: "local";
+  transports: {
+    codex: LocalToolAvailability;
+    claude: LocalToolAvailability;
+    cursor: LocalToolAvailability;
+  };
+  contexts: {
+    agents: LocalToolAvailability;
+    quickChats: LocalToolAvailability;
+  };
+}
+
+export function describeLocalToolsStatus(options: Pick<
+  HarnessOptions,
+  "localTeamTools" | "localTeamMcp" | "localTeamMcpScriptPath"
+>): LocalToolsStatus {
+  const codex: LocalToolAvailability = options.localTeamTools
+    ? { available: true, code: "ready", reason: null }
+    : { available: false, code: "not_registered", reason: "Codex dynamic team tools are not registered in this local harness." };
+  const claude: LocalToolAvailability = !options.localTeamMcp
+    ? { available: false, code: "not_registered", reason: "Claude's local team MCP transport is not registered in this local harness." }
+    : !options.localTeamMcpScriptPath || !existsSync(options.localTeamMcpScriptPath)
+      ? { available: false, code: "bridge_missing", reason: "Claude's local team MCP bridge is missing from this runtime." }
+      : { available: true, code: "ready", reason: null };
+  const cursor: LocalToolAvailability = {
+    available: false,
+    code: "unsupported",
+    reason: "Cursor does not support Local BizOS team tools.",
+  };
+  const available = codex.available || claude.available;
+  const agents: LocalToolAvailability = available
+    ? { available: true, code: "ready", reason: null }
+    : { available: false, code: "no_local_team_transport", reason: "No Local BizOS agent team-tool transport is registered and usable." };
+  return {
+    scope: "local",
+    ...agents,
+    transports: { codex, claude, cursor },
+    contexts: {
+      agents,
+      quickChats: {
+        available: false,
+        code: "intentionally_excluded",
+        reason: "Quick chats intentionally omit Local BizOS team tools.",
+      },
+    },
+  };
 }
 
 /** Where the list of agents that have a computer is kept. Their partitions
@@ -835,9 +901,9 @@ export class LocalBizosHarness {
     this.computerBrokerStarting = null;
   }
 
-  /** Why the tool surface is missing, or `null` when it is mounted. */
+  /** Why local agent team tools are missing, or `null` when one transport is registered. */
   toolsUnavailableReason(): string | null {
-    return describeMissingTools(this.launcher, this.options.baseUrl);
+    return describeLocalToolsStatus(this.options).reason;
   }
 
   /** A bot row as the renderer sees it: the store's fields plus the counts
@@ -1104,7 +1170,7 @@ export class LocalBizosHarness {
       claude: await this.modelsFor("claude"),
       cursor: await this.modelsFor("cursor"),
     }),
-    toolsStatus: async (): Promise<ToolsStatus> => describeToolsStatus(this.launcher, this.options.baseUrl),
+    toolsStatus: async (): Promise<LocalToolsStatus> => describeLocalToolsStatus(this.options),
   };
 
   private async modelsFor(provider: PlanProvider): Promise<ModelsResponse> {

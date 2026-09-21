@@ -52,6 +52,20 @@ accepted request even when it is waiting behind another local mutation or an
 owner lookup; the sidecar checks the run and session again at the serialized
 write boundary. STOP does not delete a routine that was already committed.
 
+## Local team-tool status
+
+`/api/local/runtime` reports `tools.scope = "local"` and separate Codex,
+Claude, and Cursor transport states. The aggregate `tools.available` means at
+least one agent team-tool transport is registered and usable by its supported
+CLI: dynamic host tools for Codex, or the packaged local-team MCP bridge for
+Claude. Cursor is reported as unsupported, and Quick chats are reported as
+intentionally excluded from this team-tool surface.
+
+This status does not claim that a CLI is installed or signed in, that a
+personal app is connected, or that computer/Chrome permissions exist. Those
+have separate checks. The deliberately absent cloud MCP server does not make
+the local transport status unavailable; `cloudTools` remains false.
+
 ## Native CLI permissions in local BizOS
 
 The harness adds workspace context, agent coordination and tools to the user's
