@@ -20,6 +20,39 @@ export const LOCAL_BACKEND_CAPABILITIES = {
 
 export const LOCAL_PROVIDERS = ["codex", "claude", "cursor"] as const;
 
+export interface DurableVoiceBinding {
+  planId: string;
+  provider: "codex" | "claude";
+}
+
+export type DurableVoiceDispatch =
+  | {
+      state: "pending";
+      operationId: string;
+      fingerprint: string;
+      messageId: string;
+    }
+  | {
+      state: "completed";
+      operationId: string;
+      fingerprint: string;
+      messageId: string;
+      runIds: string[];
+    };
+
+export interface DurableVoiceCall {
+  callId: string;
+  requestId: string;
+  fingerprint: string;
+  botId: string;
+  threadId: string;
+  binding: DurableVoiceBinding;
+  cancelled: boolean;
+  dispatch?: DurableVoiceDispatch;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface MutationBase {
   fingerprint: string;
   createdAt: string;
@@ -116,6 +149,8 @@ export interface DurableIndex {
   recruitments: Record<string, DurableRecruitmentMutation>;
   managements: Record<string, DurableManagementMutation>;
   events: LocalTeamEvent[];
+  voiceCalls: Record<string, DurableVoiceCall>;
+  voiceRequests: Record<string, string>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,7 +196,17 @@ function validTeamEvent(value: unknown): value is LocalTeamEvent {
 }
 
 export function emptyDurableIndex(): DurableIndex {
-  return { version: 2, messages: {}, groups: {}, runTriggers: {}, recruitments: {}, managements: {}, events: [] };
+  return {
+    version: 2,
+    messages: {},
+    groups: {},
+    runTriggers: {},
+    recruitments: {},
+    managements: {},
+    events: [],
+    voiceCalls: {},
+    voiceRequests: {},
+  };
 }
 
 /** Validate current state and migrate the original completed-only index. */
@@ -240,9 +285,43 @@ export function normalizeDurableIndex(value: unknown): DurableIndex {
     }
     validatedManagements[key] = raw as unknown as DurableManagementMutation;
   }
+  const voiceCalls = value.voiceCalls === undefined ? {} : value.voiceCalls;
+  const voiceRequests = value.voiceRequests === undefined ? {} : value.voiceRequests;
+  if (!isRecord(voiceCalls) || !stringRecord(voiceRequests)) {
+    throw new Error("collaboration-index.json has invalid voice task history");
+  }
+  const validatedVoiceCalls: Record<string, DurableVoiceCall> = {};
+  for (const [key, raw] of Object.entries(voiceCalls)) {
+    if (!isRecord(raw) || raw.callId !== key || typeof raw.requestId !== "string"
+      || typeof raw.fingerprint !== "string" || typeof raw.botId !== "string"
+      || typeof raw.threadId !== "string" || typeof raw.cancelled !== "boolean"
+      || typeof raw.createdAt !== "string" || typeof raw.updatedAt !== "string"
+      || !isRecord(raw.binding) || typeof raw.binding.planId !== "string"
+      || (raw.binding.provider !== "codex" && raw.binding.provider !== "claude")) {
+      throw new Error(`collaboration-index.json has an invalid voice call entry: ${key}`);
+    }
+    if (raw.dispatch !== undefined) {
+      if (!isRecord(raw.dispatch)
+        || (raw.dispatch.state !== "pending" && raw.dispatch.state !== "completed")
+        || typeof raw.dispatch.operationId !== "string" || typeof raw.dispatch.fingerprint !== "string"
+        || typeof raw.dispatch.messageId !== "string"
+        || (raw.dispatch.state === "completed"
+          && (!Array.isArray(raw.dispatch.runIds) || raw.dispatch.runIds.some((id) => typeof id !== "string")))) {
+        throw new Error(`collaboration-index.json has an invalid voice dispatch entry: ${key}`);
+      }
+    }
+    validatedVoiceCalls[key] = raw as unknown as DurableVoiceCall;
+  }
+  for (const [requestId, callId] of Object.entries(voiceRequests)) {
+    if (!validatedVoiceCalls[callId] || validatedVoiceCalls[callId]!.requestId !== requestId) {
+      throw new Error(`collaboration-index.json has an invalid voice request entry: ${requestId}`);
+    }
+  }
   return {
     ...(value as unknown as DurableIndex),
     managements: validatedManagements,
     events: events as LocalTeamEvent[],
+    voiceCalls: validatedVoiceCalls,
+    voiceRequests,
   };
 }

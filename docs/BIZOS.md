@@ -42,6 +42,23 @@ Les skills locaux peuvent être adaptés dans `skills/` : les agents lisent cett
 
 Les données embarquées se trouvent sous `<coffre>/Apps/LeadFactory/data` ou `<coffre>/Apps/Ecommerce/data`. Pour sauvegarder, utilisez l’export JSON du dashboard ; pour copier manuellement l’ensemble du coffre, fermez d’abord BizOS et son runtime. Conservez la copie hors des dépôts publics.
 
+## Tâches vocales locales
+
+La preview vocale délègue chaque demande finalisée à un agent local réel. Le
+sidecar résout lui-même la conversation directe et lie la tâche au compte
+personnel Codex ou Claude choisi pour cet agent, ou au plan actif si l’agent
+n’a pas de surcharge. Un changement de compte pendant l’appel est détecté et
+refusé ; une erreur de quota ne bascule pas vers un autre compte ou fournisseur.
+
+Chaque demande et sa réponse restent dans l’historique normal de l’agent. STOP
+vise uniquement les exécutions appartenant à l’appel et l’état reste actif tant
+que l’annulation n’a pas été confirmée. Dans cette première tranche, les outils
+de recrutement et la délégation à un autre agent sont retirés des tâches
+vocales afin qu’aucune exécution enfant n’échappe à STOP. Les discussions texte
+conservent leur fonctionnement habituel. La clé du service vocal reste dans le
+processus principal de l’application et n’est jamais proposée comme fournisseur
+de tâches au runtime.
+
 ## Autonome et embarqué
 
 | | Cockpit autonome | Cockpit embarqué dans BizOS local |

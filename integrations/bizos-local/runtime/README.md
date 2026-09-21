@@ -18,7 +18,7 @@ A model and external accounts are supplied by the user. Inference through a pers
 
 ## Source scope and repeatable assets
 
-`source-manifest.json` identifies the 77 source files copied from the local
+`source-manifest.json` identifies the 78 source files copied from the local
 sidecar source closure, including type-only dependencies. No legacy Electron
 application entrypoint or private cloud engine is included. Electron is needed
 only to resolve the existing computer-host types; its binary is not used by
@@ -39,6 +39,37 @@ when verifying archive and checkout builds.
 real-sidecar-process tests, with temporary profiles and scripted model drivers.
 Build first so the sidecar-process test is exercised. These tests do not call a
 paid model, test real user credentials or validate a signed desktop installer.
+
+## Local voice task boundary
+
+The desktop main process delegates a finalized voice task through four
+bearer-authenticated loopback routes:
+
+- `POST /api/local/voice/calls` prepares an opaque call for one public local
+  agent id and returns the server-resolved direct thread and exact personal
+  plan binding. An optional `expectedBinding` lets later delegations in the
+  same voice session verify that the selected account did not change.
+- `POST /api/local/voice/calls/:callId/dispatch` persists one real user message
+  and starts one collaboration run. Its `operationId` is idempotent.
+- `GET /api/local/voice/calls/:callId` returns persisted run state and actual
+  assistant text for polling.
+- `POST /api/local/voice/calls/:callId/cancel` requests cancellation only for
+  queued or running ids owned by that call. A prepared call can also be
+  cancelled. Running state remains visible until the provider acknowledges
+  cancellation.
+
+This boundary accepts no provider credential, profile id, thread id, plan id
+override or run id from voice. The runtime independently resolves the agent's
+own plan override, or the currently selected plan when the agent has none. It
+accepts connected Codex and Claude personal plans only. External API providers,
+Cursor, disconnected plans and exhausted plans are rejected. A started voice
+run cannot fail over to another account or provider family.
+
+The current single-task tranche removes Local BizOS team coordination tools
+from strict voice runs and blocks group handoff. This keeps STOP complete while
+run lineage is limited to the initial run. Normal text chat keeps its existing
+routing, failover and coordination tools. GPT-Live transport and credentials
+remain owned by the desktop main process and never enter this runtime contract.
 
 ## Routine integrity
 

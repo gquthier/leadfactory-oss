@@ -39,10 +39,19 @@ import {
   LOCAL_PROVIDERS,
   normalizeDurableIndex,
   type DurableIndex,
+  type DurableVoiceCall,
   type AgentManagementResult,
   type LocalTeamEvent,
   type RecruitmentResult,
 } from "./sidecar-contract.js";
+import {
+  resolveVoiceBinding,
+  VoiceTaskError,
+  type VoiceBinding,
+  type VoiceCallMutationResponse,
+  type VoiceCallSnapshot,
+  type VoiceCallState,
+} from "./voice-tasks.js";
 import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-state.js";
 import { LOCAL_TEAM_TOOL_SPECS } from "./local-team-mcp.js";
 import { AgencyService } from "./harness/agency.js";
@@ -453,6 +462,7 @@ export class CollaborationFacade {
     private readonly teamBroker: LocalTeamBroker,
     private readonly index: DurableIndex = durableIndex(),
     private readonly packs: Packs | null = null,
+    private readonly persistIndex: (value: DurableIndex) => void = saveIndex,
   ) {
     this.handlers = buildHandlers(harness);
     this.userId = `local:${instanceId}:user`;
@@ -797,6 +807,208 @@ export class CollaborationFacade {
       const message = this.message(userMessage, target, bots);
       const runs = await Promise.all(sent.runIds.map((id) => this.run(id, userMessage.id)));
       return { status: 201, body: { message, duplicate: false, runs } };
+    });
+  }
+
+  private voiceRecord(callId: string): DurableVoiceCall {
+    const record = this.index.voiceCalls[callId];
+    if (!record) throw new HttpError(404, "voice_call_not_found", "Voice task call not found.");
+    return record;
+  }
+
+  private expectedVoiceBinding(value: unknown): VoiceBinding | undefined {
+    if (value === undefined || value === null) return undefined;
+    const input = objectBody(value, ["planId", "provider"]);
+    const planId = requiredString(input.planId, "expectedBinding.planId", 64);
+    if (input.provider !== "codex" && input.provider !== "claude") {
+      throw new HttpError(400, "invalid_payload", "expectedBinding.provider must be codex or claude.");
+    }
+    return { planId, provider: input.provider };
+  }
+
+  private async resolveVoiceBindingFor(bot: Bot, expectedBinding?: VoiceBinding): Promise<VoiceBinding> {
+    try {
+      return resolveVoiceBinding({
+        bot,
+        settings: await this.harness.runtime.getSettings(),
+        plans: await this.harness.plans.list(),
+        ...(expectedBinding ? { expectedBinding } : {}),
+      });
+    } catch (error) {
+      if (error instanceof VoiceTaskError) throw new HttpError(error.status, error.code, error.message);
+      throw error;
+    }
+  }
+
+  /** Prepare one delegation. The caller may pin the first call's returned
+   * binding into later calls; the supplied value is only an expectation and
+   * can never override the server's independently resolved account. */
+  async prepareVoiceCall(raw: unknown): Promise<VoiceCallMutationResponse> {
+    return this.exclusive(async () => {
+      const input = objectBody(raw, ["requestId", "agentId", "expectedBinding"]);
+      const requestId = uuid(input.requestId, "requestId");
+      const agentId = requiredString(input.agentId, "agentId", 200);
+      const expectedBinding = this.expectedVoiceBinding(input.expectedBinding);
+      const fingerprint = JSON.stringify({ agentId, expectedBinding: expectedBinding ?? null });
+      const previousCallId = this.index.voiceRequests[requestId];
+      if (previousCallId) {
+        const previous = this.voiceRecord(previousCallId);
+        if (previous.fingerprint !== fingerprint) {
+          throw new HttpError(409, "idempotency_conflict", "This voice request id was already used.");
+        }
+        return { ...(await this.voiceCall(previous.callId)), duplicate: true };
+      }
+
+      const botId = this.internalAgentId(agentId);
+      const bot = (await this.harness.bots.list()).find((candidate) => candidate.id === botId);
+      if (!bot) throw new HttpError(404, "voice_agent_not_found", "Selected local agent not found.");
+      const binding = await this.resolveVoiceBindingFor(bot, expectedBinding);
+      const now = new Date().toISOString();
+      const callId = `vcall_${randomBytes(18).toString("base64url")}`;
+      const record: DurableVoiceCall = {
+        callId,
+        requestId,
+        fingerprint,
+        botId,
+        threadId: threadIdForTarget({ botId }),
+        binding,
+        cancelled: false,
+        createdAt: now,
+        updatedAt: now,
+      };
+      this.index.voiceCalls[callId] = record;
+      this.index.voiceRequests[requestId] = callId;
+      this.persistIndex(this.index);
+      return { ...(await this.voiceCall(callId)), duplicate: false };
+    });
+  }
+
+  /** Persist one real collaboration message and start one direct-agent run
+   * under the call's exact plan. Pending journal entries are never retried
+   * automatically after an uncertain crash. */
+  async dispatchVoiceCall(callId: string, raw: unknown): Promise<VoiceCallMutationResponse> {
+    return this.exclusive(async () => {
+      const record = this.voiceRecord(callId);
+      const input = objectBody(raw, ["operationId", "content"]);
+      const operationId = uuid(input.operationId, "operationId");
+      const content = requiredString(input.content, "content", 20_000);
+      const fingerprint = JSON.stringify({ operationId, content });
+      if (record.cancelled) throw new HttpError(409, "voice_call_cancelled", "This voice task call was cancelled.");
+      if (record.dispatch) {
+        if (record.dispatch.fingerprint !== fingerprint) {
+          throw new HttpError(409, "voice_call_already_dispatched", "This voice task call already owns another operation.");
+        }
+        if (record.dispatch.state === "pending") {
+          throw new HttpError(409, "idempotency_in_doubt", "The earlier voice dispatch has an uncertain outcome and will not be sent again automatically.");
+        }
+        return { ...(await this.voiceCall(callId)), duplicate: true };
+      }
+
+      const bot = (await this.harness.bots.list()).find((candidate) => candidate.id === record.botId);
+      if (!bot) throw new HttpError(404, "voice_agent_not_found", "Selected local agent not found.");
+      await this.resolveVoiceBindingFor(bot, record.binding);
+      const messageId = `msg_voice_${operationId.replaceAll("-", "")}`;
+      record.dispatch = { state: "pending", operationId, fingerprint, messageId };
+      record.updatedAt = new Date().toISOString();
+      this.persistIndex(this.index);
+
+      const sent = await this.harness.threads.send(
+        { botId: record.botId },
+        {
+          text: content,
+          messageId,
+          executionPolicy: {
+            source: "voice",
+            binding: record.binding,
+            allowTeamDelegation: false,
+          },
+        },
+      );
+      record.dispatch = { state: "completed", operationId, fingerprint, messageId, runIds: sent.runIds };
+      record.updatedAt = new Date().toISOString();
+      for (const runId of sent.runIds) this.index.runTriggers[runId] = messageId;
+      this.persistIndex(this.index);
+      return { ...(await this.voiceCall(callId)), duplicate: false };
+    });
+  }
+
+  private voiceState(record: DurableVoiceCall, states: VoiceCallState[]): VoiceCallState {
+    if (!record.dispatch) return record.cancelled ? "cancelled" : "prepared";
+    // A crash after journalling but before run ids were recorded is uncertain,
+    // never a confirmed cancellation.
+    if (record.dispatch.state === "pending") return record.cancelled ? "failed" : "running";
+    // STOP is a request. Keep reporting the observed provider/run state until
+    // it actually settles so voice never announces a cancellation too early.
+    if (states.includes("running")) return "running";
+    if (states.includes("queued")) return "queued";
+    if (!states.length || states.includes("failed")) return "failed";
+    if (states.includes("cancelled")) return "cancelled";
+    return "done";
+  }
+
+  async voiceCall(callId: string): Promise<VoiceCallSnapshot> {
+    const record = this.voiceRecord(callId);
+    const target = { botId: record.botId } as const;
+    const thread = await this.harness.threads.get(target);
+    const internalRunIds = record.dispatch?.state === "completed" ? record.dispatch.runIds : [];
+    const runRows = await Promise.all(internalRunIds.map(async (runId) => {
+      const run = await this.run(runId, record.dispatch?.messageId);
+      const contents = thread.messages
+        .filter((message) => message.role === "bot" && message.runId === runId && message.deliveryState !== "control")
+        .map((message) => textOf(message.blocks).trim())
+        .filter(Boolean);
+      return {
+        runId: run.runId,
+        state: run.state,
+        content: contents.at(-1) ?? null,
+        error: run.error,
+        updatedAt: run.updatedAt,
+      };
+    }));
+    const trigger = record.dispatch
+      ? await this.harness.threads.message(target, record.dispatch.messageId)
+      : undefined;
+    const states = runRows.map((run) => run.state);
+    const updatedAt = runRows.map((run) => run.updatedAt).sort().at(-1) ?? record.updatedAt;
+    return {
+      callId: record.callId,
+      agentId: this.agentId(record.botId),
+      threadId: this.publicThreadId(target),
+      binding: record.binding,
+      state: this.voiceState(record, states),
+      operationId: record.dispatch?.operationId ?? null,
+      message: trigger ? textOf(trigger.blocks) || null : null,
+      runs: runRows.map(({ runId, state }) => ({ runId, state })),
+      results: runRows.map(({ runId, state, content, error }) => ({ runId, state, content, error })),
+      createdAt: record.createdAt,
+      updatedAt,
+    };
+  }
+
+  async cancelVoiceCall(callId: string): Promise<VoiceCallMutationResponse> {
+    return this.exclusive(async () => {
+      const record = this.voiceRecord(callId);
+      if (record.cancelled) return { ...(await this.voiceCall(callId)), duplicate: true };
+      const runIds = record.dispatch?.state === "completed" ? record.dispatch.runIds : [];
+      let stopped = false;
+      for (const runId of runIds) {
+        const run = await this.harness.runs.get(runId);
+        if (!run || (run.state !== "queued" && run.state !== "working" && run.state !== "waiting_input")) continue;
+        stopped = (await this.harness.threads.cancelRun(runId)) || stopped;
+      }
+      if (!record.dispatch || record.dispatch.state === "pending" || stopped) {
+        record.cancelled = true;
+        record.updatedAt = new Date().toISOString();
+        this.persistIndex(this.index);
+      }
+      if (stopped) {
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          const active = await Promise.all(runIds.map((runId) => this.harness.runs.get(runId)));
+          if (active.every((run) => !run || (run.state !== "queued" && run.state !== "working" && run.state !== "waiting_input"))) break;
+          await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+        }
+      }
+      return { ...(await this.voiceCall(callId)), duplicate: !stopped && Boolean(record.dispatch) };
     });
   }
 
@@ -1556,6 +1768,22 @@ async function serve(): Promise<void> {
       if (method === "GET" && url.pathname === "/api/local/health") {
         return sendJson(response, 200, { ok: true, mode: "local-harness", contractVersion: 1, instanceId: id });
       }
+      if (method === "POST" && url.pathname === "/api/local/voice/calls") {
+        const result = await facade.prepareVoiceCall(await bodyOf(request));
+        return sendJson(response, result.duplicate ? 200 : 201, result);
+      }
+      const dispatchVoiceCallId = routeId(url.pathname, /^\/api\/local\/voice\/calls\/([^/]+)\/dispatch$/);
+      if (dispatchVoiceCallId && method === "POST") {
+        const result = await facade.dispatchVoiceCall(dispatchVoiceCallId, await bodyOf(request));
+        return sendJson(response, result.duplicate ? 200 : 201, result);
+      }
+      const cancelVoiceCallId = routeId(url.pathname, /^\/api\/local\/voice\/calls\/([^/]+)\/cancel$/);
+      if (cancelVoiceCallId && method === "POST") {
+        objectBody(await bodyOf(request), []);
+        return sendJson(response, 200, await facade.cancelVoiceCall(cancelVoiceCallId));
+      }
+      const voiceCallId = routeId(url.pathname, /^\/api\/local\/voice\/calls\/([^/]+)$/);
+      if (voiceCallId && method === "GET") return sendJson(response, 200, await facade.voiceCall(voiceCallId));
       if (method === "GET" && url.pathname === "/api/collaboration/bootstrap") return sendJson(response, 200, await facade.bootstrap());
       if (method === "GET" && url.pathname === "/api/collaboration/threads") return sendJson(response, 200, await facade.threads());
       if (method === "POST" && url.pathname === "/api/collaboration/threads") {

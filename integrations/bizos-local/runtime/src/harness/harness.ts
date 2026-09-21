@@ -40,7 +40,13 @@ import {
   requireCursorPath,
   resolveCursorPath,
 } from "./cursor-status.js";
-import { approvalKey, Dispatcher, type DispatchDependencies } from "./dispatch.js";
+import {
+  approvalKey,
+  Dispatcher,
+  type DispatchDependencies,
+  type TurnContext,
+  type TurnExecutionPolicy,
+} from "./dispatch.js";
 import { EventBus, runFinishNotification, type NotificationSink } from "./events.js";
 import { GroupStore } from "./groups.js";
 import { openCliLogin } from "./login-launcher.js";
@@ -50,7 +56,7 @@ import {
   type McpLauncher,
 } from "./mcp-mount.js";
 import { PlanRegistry, MAX_PLAN_LABEL } from "./plan-registry.js";
-import { failoverCooldownUntil, failoverPlan as routeFailover, resolvePlan } from "./plan-router.js";
+import { failoverCooldownUntil, failoverPlan as routeFailover, isPlanHealthy, resolvePlan } from "./plan-router.js";
 import type { PlanProvider, PublicPlan } from "./plan-types.js";
 import { RoutineStore } from "./routines.js";
 import { RunStore } from "./runs.js";
@@ -531,15 +537,20 @@ export class LocalBizosHarness {
         }),
       claudePath: () => requireClaudePath(undefined, this.environment(), { packaged: options.packaged }),
       cursorPath: () => requireCursorPath(undefined, this.environment(), { packaged: options.packaged }),
-      resolvePlan: ({ cursorKey, preferredProvider, botPlanId }) =>
-        resolvePlan({
+      resolvePlan: ({ cursorKey, preferredProvider, botPlanId, exactPlanId }) => {
+        if (exactPlanId) {
+          const exact = this.planRegistry.get(exactPlanId);
+          return exact && isPlanHealthy(exact, this.clock.now().getTime()) ? exact : null;
+        }
+        return resolvePlan({
           plans: this.planRegistry.list(),
           routing: this.planRegistry.routing(),
           cursorKey,
           ...(preferredProvider ? { preferredProvider } : {}),
           ...(botPlanId ? { botPlanId } : {}),
           nowMs: this.clock.now().getTime(),
-        }),
+        });
+      },
       planProviderOf: (planId) => this.planRegistry.get(planId)?.provider ?? null,
       inferenceProviderById: (id) => {
         const provider = this.inferenceStore.get(id);
@@ -583,14 +594,18 @@ export class LocalBizosHarness {
             ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue(bot.id) } }
             : {}),
         });
-        const localTeam = bot.id.startsWith("qchat_") ? undefined : options.localTeamMcp?.({ bot, ...context });
+        const localTeam = bot.id.startsWith("qchat_") || context.executionPolicy?.allowTeamDelegation === false
+          ? undefined
+          : options.localTeamMcp?.({ bot, threadId: context.threadId, runId: context.runId });
         // The user's own apps go first so a harness server always wins the
         // key on a collision (the store refuses reserved names anyway).
         const apps = this.appsStore.mountedServers({ sharedDirs: this.accessStore.readableRootsFor(bot.id) });
         return { ...apps, ...cloudTools, ...(localTeam ? { local_team_actions: localTeam } : {}) };
       },
-      ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: { threadId: string; runId: string }) =>
-        bot.id.startsWith("qchat_") ? [] : options.localTeamTools!({ bot, ...context }) } : {}),
+      ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: TurnContext) =>
+        bot.id.startsWith("qchat_") || context.executionPolicy?.allowTeamDelegation === false
+          ? []
+          : options.localTeamTools!({ bot, threadId: context.threadId, runId: context.runId }) } : {}),
       ...(options.onLocalRunSettled ? { onRunSettled: (runId: string) => options.onLocalRunSettled!(runId) } : {}),
       ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       workspaceFor: (bot) => this.workspaceFor(bot),
@@ -603,13 +618,22 @@ export class LocalBizosHarness {
         fullDiskRead: this.settingsStore.get().access.fullDiskRead,
       }),
       ...(options.localArchitecture ? {
-        localArchitecture: ({ bot, threadId }: { bot: Bot; threadId: string }) => options.localArchitecture!({
-          bot,
-          threadId,
-          workspaceDir: this.workspaceFor(bot),
-          sandbox: this.settingsStore.get().local.sandbox,
-          peers: this.botStore.list().filter((candidate) => !candidate.archived && candidate.id !== bot.id),
-        }),
+        localArchitecture: ({ bot, threadId, executionPolicy }: {
+          bot: Bot;
+          threadId: string;
+          executionPolicy?: TurnExecutionPolicy;
+        }) => {
+          const manifest = options.localArchitecture!({
+            bot,
+            threadId,
+            workspaceDir: this.workspaceFor(bot),
+            sandbox: this.settingsStore.get().local.sandbox,
+            peers: this.botStore.list().filter((candidate) => !candidate.archived && candidate.id !== bot.id),
+          });
+          return executionPolicy?.allowTeamDelegation === false
+            ? { ...manifest, recruitment: "unavailable" as const }
+            : manifest;
+        },
       } : {}),
       onRunFinished: ({ bot, outcome, preview }) => this.notifyRunFinished(bot, outcome, preview),
       // The scheduler owns both halves: it hands the routine's mutex back and
@@ -2916,12 +2940,21 @@ export class LocalBizosHarness {
       this.threadStore.get(threadIdForTarget(target), messageId),
     send: async (
       target: ThreadTarget,
-      input: { text: string; mentionBotIds?: string[]; attachments?: Attachment[]; replyToMessageId?: string; role?: "user" | "system" },
+      input: {
+        text: string;
+        mentionBotIds?: string[];
+        attachments?: Attachment[];
+        replyToMessageId?: string;
+        role?: "user" | "system";
+        messageId?: string;
+        executionPolicy?: TurnExecutionPolicy;
+      },
     ): Promise<{ runIds: string[] }> => {
       await this.refreshSessionCookie();
       return this.dispatcher.send(target, input);
     },
     stop: async (target: ThreadTarget): Promise<void> => this.dispatcher.stop(target),
+    cancelRun: async (runId: string): Promise<boolean> => this.dispatcher.cancelRun(runId),
     clear: async (target: ThreadTarget): Promise<void> => {
       this.dispatcher.clearThread(target);
       this.threadStore.clear(target);

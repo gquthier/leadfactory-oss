@@ -128,6 +128,23 @@ export const PROVIDER_LABEL: Record<PlanProvider, string> = {
   cursor: "Cursor",
 };
 
+/** A voice delegation is already bound by the trusted local controller to one
+ * personal account. It is not a routing preference: the dispatcher must use
+ * exactly this account or fail the run. */
+export interface TurnExecutionPolicy {
+  source: "voice";
+  binding: { planId: string; provider: "codex" | "claude" };
+  /** Phase one deliberately has no child-run lineage, so coordination tools
+   * are removed instead of letting a recruited run escape call-wide STOP. */
+  allowTeamDelegation: false;
+}
+
+export interface TurnContext {
+  threadId: string;
+  runId: string;
+  executionPolicy?: TurnExecutionPolicy;
+}
+
 export interface DispatchDependencies {
   bots: BotStore;
   chatExecutor?(chatId: string): Bot | undefined;
@@ -149,6 +166,7 @@ export interface DispatchDependencies {
     cursorKey: string;
     preferredProvider?: PlanProvider;
     botPlanId?: string;
+    exactPlanId?: string;
   }): ConnectedPlan | null;
   /** Cool down a failed plan and pick the next; null when none remain. */
   failoverPlan?(input: {
@@ -161,7 +179,7 @@ export interface DispatchDependencies {
   /** Touch lastUsedAt after a turn uses a plan. */
   touchPlan?(planId: string): void;
   /** Per-bot MCP mount; empty when the tool surface is unavailable. */
-  mcpServers(bot: Bot, context: { threadId: string; runId: string }): Record<string, McpServerSpec>;
+  mcpServers(bot: Bot, context: TurnContext): Record<string, McpServerSpec>;
   /** The external API-key provider chosen in Settings, when one is: it
    * answers through the codex CLI with `model_providers`, no plan involved. */
   inferenceProvider?(): CodexModelProvider | null;
@@ -170,7 +188,7 @@ export interface DispatchDependencies {
   /** Which family a plan belongs to, for a bot pinned to one. */
   planProviderOf?(planId: string): PlanProvider | null;
   /** Local host-side tools. The callback captures this exact active run. */
-  dynamicTools?(bot: Bot, context: { threadId: string; runId: string }): CodexDynamicTool[];
+  dynamicTools?(bot: Bot, context: TurnContext): CodexDynamicTool[];
   /** The codex cwd for a bot. */
   workspaceFor(bot: Bot): string;
   /** What this bot may reach on the Mac, from Settings → Access. Absent in
@@ -181,7 +199,7 @@ export interface DispatchDependencies {
    * says nothing about a computer — a bot told it has tools that are not
    * mounted spends its turn discovering that. */
   hasComputer?(bot: Bot): boolean;
-  localArchitecture?(input: { bot: Bot; threadId: string }): LocalArchitectureManifest;
+  localArchitecture?(input: { bot: Bot; threadId: string; executionPolicy?: TurnExecutionPolicy }): LocalArchitectureManifest;
   /** Raised when a run ends and the window is not focused. */
   onRunFinished?(input: { bot: Bot; outcome: "completed" | "failed"; preview: string }): void;
   /** Revoke ephemeral capabilities after every terminal outcome, including STOP. */
@@ -228,6 +246,7 @@ interface QueuedTurn {
   routineId?: string;
   /** Present when a teammate handed this turn over. */
   fromBotId?: string;
+  executionPolicy?: TurnExecutionPolicy;
 }
 
 interface ActiveTurn extends QueuedTurn {
@@ -349,6 +368,7 @@ export class Dispatcher {
        * record the bots read, and it starts their turns like any message,
        * but the app does not show it. */
       role?: "user" | "system";
+      executionPolicy?: TurnExecutionPolicy;
     },
   ): { runIds: string[] } {
     const threadId = threadIdForTarget(target);
@@ -398,6 +418,7 @@ export class Dispatcher {
         hop: 0,
         chainId: message.id,
         ...(attachments.length ? { attachments } : {}),
+        ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
       });
       if (runId) runIds.push(runId);
     }
@@ -433,6 +454,34 @@ export class Dispatcher {
       this.deps.onRunStopped?.(running.runId);
       running.handle.stop();
     }
+  }
+
+  /** Cancel one run without stopping unrelated work queued on the same
+   * thread. Voice STOP uses this exact ownership boundary. */
+  cancelRun(runId: string): boolean {
+    for (const running of this.active.values()) {
+      if (running.runId !== runId) continue;
+      running.cancelled = true;
+      this.deps.onRunStopped?.(running.runId);
+      running.handle.stop();
+      return true;
+    }
+    for (const [threadId, queue] of this.queues) {
+      const index = queue.findIndex((queued) => queued.runId === runId);
+      if (index < 0) continue;
+      const [queued] = queue.splice(index, 1);
+      if (!queued) return false;
+      this.queues.set(threadId, queue);
+      this.releaseChain(queued.chainId);
+      this.deps.runs.update(runId, { state: "cancelled" });
+      this.deps.events.publish({ type: "run.cancelled", runId, threadId, botId: queued.botId });
+      if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, runId);
+      this.deps.onRunStopped?.(runId);
+      this.deps.onRunSettled?.(runId);
+      if (!this.active.has(threadId)) this.pump(threadId);
+      return true;
+    }
+    return false;
   }
 
   private cancelQueued(threadId: string): void {
@@ -701,6 +750,7 @@ export class Dispatcher {
     attachments?: Attachment[];
     routineId?: string;
     fromBotId?: string;
+    executionPolicy?: TurnExecutionPolicy;
   }): string | null {
     const chain = this.chains.get(input.chainId) ?? { turns: 0, outstanding: 0, visited: new Set<string>() };
     this.chains.set(input.chainId, chain);
@@ -737,6 +787,7 @@ export class Dispatcher {
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.routineId ? { routineId: input.routineId } : {}),
       ...(input.fromBotId ? { fromBotId: input.fromBotId } : {}),
+      ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
     });
     this.queues.set(input.threadId, queue);
     this.pump(input.threadId);
@@ -843,19 +894,25 @@ export class Dispatcher {
     const cursorKey = `${threadId}|${bot.id}`;
     // The bot's own choices (Agent settings) come before the global ones
     // (Plans & usage). A plan or provider that no longer exists is ignored.
-    const ownPlanProvider = bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
-    const preferredProvider = ownPlanProvider ?? settings.local.provider;
+    const strictBinding = queued.executionPolicy?.source === "voice" ? queued.executionPolicy.binding : null;
+    const ownPlanProvider = strictBinding ? null : bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
+    const preferredProvider = strictBinding?.provider ?? ownPlanProvider ?? settings.local.provider;
     // An external endpoint answers through codex and needs no plan at all;
     // otherwise the router picks among the connected plans.
-    const ownExternal = bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
-    const external = ownExternal ?? (bot.planId && ownPlanProvider ? null : (this.deps.inferenceProvider?.() ?? null));
+    const ownExternal = strictBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
+    const external = strictBinding ? null : ownExternal ?? (bot.planId && ownPlanProvider ? null : (this.deps.inferenceProvider?.() ?? null));
     const plan = external
       ? null
       : this.deps.resolvePlan?.({
           cursorKey,
           ...(preferredProvider ? { preferredProvider } : {}),
           ...(bot.planId && ownPlanProvider ? { botPlanId: bot.planId } : {}),
+          ...(strictBinding ? { exactPlanId: strictBinding.planId } : {}),
         });
+    if (strictBinding && (!plan || plan.id !== strictBinding.planId || plan.provider !== strictBinding.provider)) {
+      this.abandon(queued, bot.id, "The voice task's selected personal plan is no longer available.");
+      return;
+    }
     const provider: PlanProvider = external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
 
     let cli: string;
@@ -877,7 +934,7 @@ export class Dispatcher {
     // The persona is built BEFORE this turn's own (empty) message lands in
     // the thread — otherwise "since my last turn" would start at it and the
     // bot would be handed no context at all.
-    const publicMessagesEnabled = this.deps.localArchitecture?.({ bot, threadId })?.mode === "local";
+    const publicMessagesEnabled = this.deps.localArchitecture?.({ bot, threadId, ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}) })?.mode === "local";
     const shared = this.deps.sharedAccess?.(bot) ?? NO_ACCESS;
     const writableRoots = shared.folders
       .filter((folder) => folder.mode === "read-write")
@@ -920,7 +977,7 @@ export class Dispatcher {
     // Mounted once, used for the fingerprint and the start alike: a tool
     // that appeared since the thread began (a new team tool, an app the
     // person added) must start a fresh thread, or a resumed one never sees it.
-    const runContext = { threadId, runId: queued.runId };
+    const runContext: TurnContext = { threadId, runId: queued.runId, ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}) };
     // Cursor's CLI has no `--mcp-config` and no host tool channel: it loads
     // MCP servers from the person's own Cursor configuration and nothing
     // else. Mounting none is honest — and the persona below is built from
@@ -952,6 +1009,7 @@ export class Dispatcher {
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
     const persona = this.personaFor(bot, threadId, {
       replayHistory: !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
+      ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}),
     });
 
     const turn: ActiveTurn = {
@@ -1082,7 +1140,7 @@ export class Dispatcher {
     bot: Bot,
     failure: string | null,
   ): boolean {
-    if (turn.failoverUsed || turn.cancelled || turn.discarded) return false;
+    if (turn.executionPolicy?.source === "voice" || turn.failoverUsed || turn.cancelled || turn.discarded) return false;
     if (!turn.planId || !this.deps.failoverPlan) return false;
     if (!this.isPlanFailoverReason(failure)) return false;
 
@@ -1164,7 +1222,13 @@ export class Dispatcher {
     return true;
   }
 
-  private personaFor(bot: Bot, threadId: string, runtime: { replayHistory: boolean; provider: string; tools: string[]; excludeMessageId: string }): string {
+  private personaFor(bot: Bot, threadId: string, runtime: {
+    replayHistory: boolean;
+    provider: string;
+    tools: string[];
+    excludeMessageId: string;
+    executionPolicy?: TurnExecutionPolicy;
+  }): string {
     if (threadId.startsWith("chat:")) {
       const messages = this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages
         .filter(row => row.id !== runtime.excludeMessageId);
@@ -1186,7 +1250,11 @@ export class Dispatcher {
     const group = threadId.startsWith("group:") ? this.deps.groups.get(threadId.slice(6)) : undefined;
     const roster = this.deps.bots.list();
     const shared = this.deps.sharedAccess?.(bot) ?? NO_ACCESS;
-    const architecture = this.deps.localArchitecture?.({ bot, threadId });
+    const architecture = this.deps.localArchitecture?.({
+      bot,
+      threadId,
+      ...(runtime.executionPolicy ? { executionPolicy: runtime.executionPolicy } : {}),
+    });
     const settings = this.deps.settings();
     const previousTask = architecture ? this.deps.runs.list(200).find(run => run.threadId === threadId && run.botId === bot.id && run.task)?.task : undefined;
     return buildPersonaPrompt({
@@ -1566,7 +1634,7 @@ export class Dispatcher {
 
   /** A reply that names a teammate hands the turn over. */
   private handoff(turn: ActiveTurn, bot: Bot, reply: string): void {
-    if (turn.discarded || !turn.threadId.startsWith("group:") || turn.hop >= MAX_HOPS || !reply.trim()) return;
+    if (turn.executionPolicy?.source === "voice" || turn.discarded || !turn.threadId.startsWith("group:") || turn.hop >= MAX_HOPS || !reply.trim()) return;
     const group = this.deps.groups.get(turn.threadId.slice(6));
     if (!group) return;
     const roster = this.deps.bots.list().filter((candidate) => group.memberIds.includes(candidate.id));
