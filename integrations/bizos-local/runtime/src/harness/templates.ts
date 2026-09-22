@@ -58,7 +58,7 @@
 import { existsSync, lstatSync, writeFileSync, type Stats } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { BrainError, type BrainRoot } from "./brain.js";
-import { COMPANY_OS, segmentsOf, TEMPLATE_FILE, type CompanyTemplate, type TemplateState, type VaultSeed } from "./company-os.js";
+import { COMPANY_OS, segmentsOf, TEMPLATE_FILE, type CompanyTemplate, type TemplateBot, type TemplateState, type VaultSeed } from "./company-os.js";
 import { FILE_MODE, type Storage } from "./storage.js";
 import { ECOMMERCE_FALLBACK, ecommerceTemplate } from "./template-ecommerce.js";
 import { LEAD_GEN_AGENCY } from "./template-lead-gen-agency.js";
@@ -79,6 +79,121 @@ export type TemplateId = (typeof KNOWN_TEMPLATE_IDS)[number];
 /** The exact, ordered choices for creating a new company. */
 export const CREATION_TEMPLATE_IDS = ["lead-gen-agency", "service-based-business", "software"] as const;
 export type CreationTemplateId = (typeof CREATION_TEMPLATE_IDS)[number];
+
+/** Marks the new-company layout introduced for on-demand teams. Journals
+ * written before this marker deliberately keep the roster semantics they
+ * started with, even though the catalogue now bootstraps only a CEO. */
+export const CEO_ON_DEMAND_CREATION = "ceo-on-demand-v1" as const;
+export type TemplateCreationMode = typeof CEO_ON_DEMAND_CREATION;
+
+function isCreationTemplateId(id: string): id is CreationTemplateId {
+  return (CREATION_TEMPLATE_IDS as readonly string[]).includes(id);
+}
+
+/** Creation-only adaptation. Legacy payloads and journals retain their exact
+ * original semantics; archived role sources remain available in source.md. */
+export function creationTemplateOf(source: CompanyTemplate): CompanyTemplate {
+  if (!isCreationTemplateId(source.id)) return source;
+  const director = source.bots[0];
+  if (!director) throw new BrainError(`${source.name} has no CEO role`);
+  const specialists = source.bots.slice(1);
+  const delegation = "From the CEO DM, use recruit_agent with role_slug and a bounded initial_task to create or reuse a specialist and dispatch real work. A team group appears on the first recruitment. An @Name handoff works only inside an existing group containing that agent. Check the actual tool result; a role file or inbox memo never executes work.";
+  const bootstrap = "Only CEO is active at bootstrap, with one direct conversation and no team group. Specialist roles are saved under Roles/ and are recruited only when an authorized mission needs them.";
+  const adapt = (text: string): string => {
+    let result = text
+      .replaceAll("A direct chat cannot silently hand work to the preinstalled group; tell the user to open the team chat when collaboration is needed.", delegation)
+      .replaceAll("A direct message has no automatic route into the preinstalled team.", delegation)
+      .replaceAll("There is no native send from a CEO or director DM into an existing group. Direct the user to the team chat instead of pretending the handoff ran.", delegation)
+      .replaceAll("The six roster entries are persistent executable agents created by the installer, not characters described by Markdown.", bootstrap)
+      .replaceAll("This vault installs eleven persistent software-company agents, their team group specification, reusable processes and an offline-safe state helper.", "This vault starts with CEO alone, ten dormant specialist roles, reusable processes and an offline-safe state helper.")
+      .replaceAll("Verify the eleven persistent agents and the Software team group exist in runtime state.", "Verify that only CEO and its direct conversation exist at bootstrap; after recruitment, verify only the specialists and group actually returned by the runtime.")
+      .replaceAll("A DM does not dispatch work to another agent.", delegation)
+      .replaceAll("A DM does not dispatch another agent.", delegation)
+      .replaceAll("DMs do not dispatch.", delegation)
+      .replaceAll("A direct agent chat cannot dispatch another agent.", delegation)
+      .replaceAll("Coordinate a teammate only in a team chat that contains both agents.", delegation)
+      .replaceAll("Service Business Team", "current team")
+      .replaceAll("persisted @Name handoff only in the Software team group", "recruit_agent with initial_task from a DM, or persisted @Name handoff in an existing team group")
+      .replaceAll("Software team group", "current team group");
+    if (director.name !== "CEO") result = result.replaceAll(director.name, "CEO");
+    for (const role of specialists) {
+      result = result.replaceAll(`Agents/${role.name}/${role.name}.md`, `Roles/${role.slug}/system.md`);
+      result = result.replaceAll(`Agents/${role.name}/AGENTS.md`, `Roles/${role.slug}/system.md`);
+    }
+    return result;
+  };
+  const roleNotes = (role: TemplateBot): string => source.notes
+    .filter((note) => note.path.startsWith(`Agents/${role.name}/`))
+    .map((note) => `## Retained context: ${note.path}\n\n${note.text.trim()}`)
+    .join("\n\n");
+  const originalTeam = source.notes.find((note) => note.path === "Agents/TEAM.md")?.text ?? source.notes.find((note) => note.path === "Team.md")?.text;
+  const customRoleIndex = originalTeam?.indexOf("## Recruitable specialists") ?? -1;
+  const customRoleLibrary = customRoleIndex >= 0 ? originalTeam!.slice(customRoleIndex) : "";
+  const catalog = [
+    "# Available specialist roles", "", bootstrap,
+    "Choose the closest blueprint for the authorized mission. A role definition is not an active agent. Use a custom bounded role only when no blueprint fits.", "",
+    "| role_slug | Role | Responsibility | Prompt |", "|---|---|---|---|",
+    ...specialists.map((role) => `| ${role.slug} | ${role.name} | ${role.description.replaceAll("|", "\\|")} | Roles/${role.slug}/system.md |`),
+    "", delegation, "",
+    "Codex and Claude receive these tools when exposed by the runtime. Cursor has no injected recruitment tools. Use the company's connected plan and current runtime permissions; recruitment does not grant new access, spending or publication authority.",
+    "Supply a description, bounded context and initial_task. A profile photo is optional raster image data, not a generated-image promise. Report started only when a real run ID is returned; otherwise report the recorded failure or queued state.",
+    "Original source prompts are archived in each source.md for reference; system.md is the current executable role context. Preserve owner edits.", "",
+    customRoleLibrary,
+  ].join("\n");
+  const team = `# Team\n\n${bootstrap}\n\nThe owner sets the mission and authority in Company.md. CEO is the only default member. Inspect runtime state for the current roster; this file is not a live membership database.\n\n${delegation}\n\nRead Roles/README.md for the available role library. Give every task its objective, sources, permitted actions, output, acceptance evidence, budget and stop condition. Respect the runtime's chain and STOP limits. No routine is active on installation.\n`;
+  const notes = source.notes
+    .filter((note) => !note.path.startsWith("Agents/") && note.path !== "Team.md")
+    .map((note) => ({ ...note, text: adapt(note.text) }));
+  const rootAgent = notes.find((note) => note.path === "AGENTS.md");
+  if (rootAgent) rootAgent.text = `${bootstrap}\n\n${delegation}\n\n${rootAgent.text}`;
+  const directorPrefix = `Agents/${director.name}/`;
+  for (const note of source.notes.filter((candidate) => candidate.path.startsWith(directorPrefix))) {
+    const filename = note.path.slice(directorPrefix.length).replaceAll(director.name, "CEO");
+    notes.push({ path: `Agents/CEO/${filename}`, text: adapt(note.text) });
+  }
+  notes.push({ path: "Team.md", text: team });
+  notes.push({ path: "Agents/TEAM.md", text: team });
+  notes.push({ path: "Roles/README.md", text: catalog });
+  if (originalTeam) notes.push({ path: "Roles/source.md", text: originalTeam });
+  notes.push({ path: "Agents/CEO/source.md", text: `${director.instructions.trim()}\n\n${roleNotes(director)}\n` });
+  notes.push({ path: "Agents/CEO/system.md", text: `${bootstrap}\n\n${delegation}\n\n${adapt(director.instructions.trim())}\n\n${adapt(roleNotes(director))}\n` });
+  for (const role of specialists) {
+    const fullSource = `${role.instructions.trim()}${roleNotes(role) ? `\n\n${roleNotes(role)}` : ""}\n`;
+    notes.push({
+      path: `Roles/${role.slug}/role.json`,
+      text: `${JSON.stringify({ version: 1, templateId: source.id, slug: role.slug, name: role.name, title: role.title, description: role.description }, null, 2)}\n`,
+    });
+    notes.push({ path: `Roles/${role.slug}/source.md`, text: fullSource });
+    const rolePath = `../../Roles/${role.slug}/system.md`;
+    const executable = adapt(fullSource)
+      .replaceAll(`then \`${role.name}.md\``, `then \`${rolePath}\``)
+      .replaceAll(`then ${role.name}.md`, `then ${rolePath}`)
+      .replaceAll("then your named role sheet", `then ${rolePath}`)
+      .replaceAll("then your role sheet", `then ${rolePath}`);
+    notes.push({ path: `Roles/${role.slug}/system.md`, text: executable });
+  }
+  const ceo: TemplateBot = {
+    ...director, slug: "ceo", name: "CEO",
+    title: director.slug === "ceo" ? director.title : "Chief executive and owner interface",
+    description: `The company's only active bootstrap agent. ${director.description}`.slice(0, 600),
+    // Keep the runtime entry compact and below the persisted instruction limit.
+    // The complete company-specific role lives in a normal external file.
+    instructions: [
+      "You are CEO. " + bootstrap, delegation,
+      "Before working, read system.md in your working folder (Agents/CEO), ../../AGENTS.md and ../../Roles/README.md. system.md contains your full company-specific role; source.md is a legacy archive, not current operating instructions.",
+      "Recruit only when useful for an already-authorized mission, with the closest role_slug, concrete initial_task and needed context. That operational delegation needs no second ceremonial approval. It grants no new files, spending, publishing or external-action authority. Inspect tool results and actual run status before claiming that work started or finished.",
+      "The runtime manifest is authoritative. Use the user's connected plan and existing permission settings. Do not invent tools, teammates, photo generation, messages or outcomes. Unknown facts stay TODO; preserve owner files and verify deliverables.",
+    ].join("\n\n"),
+    pinned: true,
+    welcome: "Welcome — I’m the CEO and the only active agent in this new company. Tell me the company context and the first outcome you want. I’ll work directly or recruit one bounded specialist from Roles/ when the authorized mission warrants it; no team or external action has started yet.",
+  };
+  return {
+    ...source,
+    description: `Start with CEO and a shared second brain. Recruit ${specialists.length} available specialist roles only when needed.`,
+    folders: [...source.folders.filter((folder) => !folder.startsWith("Agents/")), "Agents/CEO", "Roles", ...specialists.map((role) => `Roles/${role.slug}`)],
+    notes, bots: [ceo], team: undefined,
+  };
+}
 
 /** Built-in packs. E-commerce is read from the embedded kit
  * (`agency-kit/ecommerce/template.json`) when staged, or its shipped fallback
@@ -150,6 +265,9 @@ export interface TemplateInstallation {
   groupId?: string;
   /** Always empty: the catalogue creates no routine. Kept for the legacy row. */
   routineIds: string[];
+  /** Present only for new one-CEO installations. Absence is legacy and must
+   * keep the original full-roster semantics. */
+  creationMode?: TemplateCreationMode;
 }
 
 /** One agent in the journal: its id, written before it exists. */
@@ -184,6 +302,7 @@ export interface PendingInstallation {
   bots: Record<string, PendingBot>;
   welcomes: Record<string, PendingWelcome>;
   group?: { id: string; created: boolean };
+  creationMode?: TemplateCreationMode;
 }
 
 export interface TemplateRegistry {
@@ -241,6 +360,7 @@ function installationOf(raw: unknown, id: TemplateId, binding: WorkspaceBinding 
     !bots ||
     !routineIds ||
     (raw.groupId !== undefined && typeof raw.groupId !== "string")
+    || (raw.creationMode !== undefined && raw.creationMode !== CEO_ON_DEMAND_CREATION)
   ) {
     throw corrupt(`installation ${id}`);
   }
@@ -263,6 +383,7 @@ function installationOf(raw: unknown, id: TemplateId, binding: WorkspaceBinding 
     bots,
     ...(raw.groupId ? { groupId: raw.groupId } : {}),
     routineIds,
+    ...(raw.creationMode === CEO_ON_DEMAND_CREATION ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
   };
 }
 
@@ -300,7 +421,8 @@ function pendingOf(raw: unknown, id: TemplateId): PendingInstallation {
     !bots ||
     !welcomes ||
     (group !== undefined &&
-      (!isRecord(group) || typeof group.id !== "string" || !group.id || typeof group.created !== "boolean"))
+      (!isRecord(group) || typeof group.id !== "string" || !group.id || typeof group.created !== "boolean")) ||
+    (raw.creationMode !== undefined && raw.creationMode !== CEO_ON_DEMAND_CREATION)
   ) {
     throw corrupt(`journal ${id}`);
   }
@@ -313,6 +435,7 @@ function pendingOf(raw: unknown, id: TemplateId): PendingInstallation {
     bots,
     welcomes,
     ...(group ? { group: { id: (group as { id: string }).id, created: (group as { created: boolean }).created } } : {}),
+    ...(raw.creationMode === CEO_ON_DEMAND_CREATION ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
   };
 }
 
@@ -519,6 +642,8 @@ export interface TemplateSummary {
   notes: number;
   folders: number;
   agents: Array<{ slug: string; name: string; title: string }>;
+  /** Dormant role library for on-demand creation; never roster members. */
+  availableRoles?: Array<{ slug: string; name: string; title: string }>;
   installed?: { rootId: string; appliedAt: string; bots: number; status: InstallationStatus };
   /** True for the template this workspace is bound to (`workspace-binding.json`). */
   bound?: boolean;
@@ -530,14 +655,20 @@ export function summarize(
   installation: TemplateInstallation | null,
   roster: ReadonlyArray<Bot>,
 ): TemplateSummary {
+  const creation = isCreationTemplateId(template.id) ? creationTemplateOf(template) : template;
+  const payload = installation && !installation.creationMode ? template : creation;
   return {
     id: template.id as TemplateId,
     name: template.name,
-    description: template.description ?? "",
+    description: payload.description ?? "",
     version: template.version,
-    notes: template.notes.length,
-    folders: template.folders.length,
-    agents: template.bots.map((bot) => ({ slug: bot.slug, name: bot.name, title: bot.title })),
+    notes: payload.notes.length,
+    folders: payload.folders.length,
+    agents: payload.bots
+      .map((bot) => ({ slug: bot.slug, name: bot.name, title: bot.title })),
+    ...(isCreationTemplateId(template.id)
+      ? { availableRoles: template.bots.slice(1).map((bot) => ({ slug: bot.slug, name: bot.name, title: bot.title })) }
+      : {}),
     ...(installation
       ? {
           installed: {

@@ -51,7 +51,7 @@ export function normalizeBot(raw: unknown, index: number): Bot | null {
     name,
     ...(oneLine(record.title, 80) ? { title: oneLine(record.title, 80) } : {}),
     ...(trimmed(record.description, 600) ? { description: trimmed(record.description, 600) } : {}),
-    ...(trimmed(record.instructions, 6000) ? { instructions: trimmed(record.instructions, 6000) } : {}),
+    ...(trimmed(record.instructions, 16_000) ? { instructions: trimmed(record.instructions, 16_000) } : {}),
     color: trimmed(record.color, 32) ?? colorForIndex(index),
     ...(trimmed(record.avatarUrl, 4_000_000) ? { avatarUrl: trimmed(record.avatarUrl, 4_000_000) } : {}),
     avatarKind:
@@ -130,7 +130,7 @@ export class BotStore {
       name,
       ...(trimmed(input.title, 80) ? { title: trimmed(input.title, 80) } : {}),
       ...(trimmed(input.description, 600) ? { description: trimmed(input.description, 600) } : {}),
-      ...(trimmed(input.instructions, 6000) ? { instructions: trimmed(input.instructions, 6000) } : {}),
+      ...(trimmed(input.instructions, 16_000) ? { instructions: trimmed(input.instructions, 16_000) } : {}),
       color: trimmed(input.color, 32) ?? colorForIndex(this.bots.length),
       avatarKind: "procedural",
       ...(trimmed(input.model, 120) ? { model: trimmed(input.model, 120) } : {}),
@@ -139,6 +139,8 @@ export class BotStore {
       // person's own "New agent" never sends one (the folder is chosen in
       // the agent's settings, where it is checked).
       ...(trimmed(input.workspacePath, 1000) ? { workspacePath: trimmed(input.workspacePath, 1000) } : {}),
+      ...(trimmed(input.planId, 64) ? { planId: trimmed(input.planId, 64) } : {}),
+      ...(trimmed(input.providerId, 64) ? { providerId: trimmed(input.providerId, 64) } : {}),
       pinned: false,
       archived: false,
       unread: false,

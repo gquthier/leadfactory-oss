@@ -110,7 +110,9 @@ import {
   readWorkspaceBinding,
   refuseSymlink,
   summarize,
+  CEO_ON_DEMAND_CREATION,
   CREATION_TEMPLATE_IDS,
+  creationTemplateOf,
   templateOf,
   vaultPathOf,
   vaultRootId,
@@ -1639,10 +1641,31 @@ export class LocalBizosHarness {
    * its role folder is adopted rather than made again.
    */
   private async applyTemplate(id: TemplateId, target: InstallTarget): Promise<TemplateApplyResult> {
-    const template = templateOf(id);
-    validateTemplate(template);
+    const sourceTemplate = templateOf(id);
     const registry = readTemplateRegistry(this.storage);
     const existing = this.installationOf(registry, id);
+    const priorPending = registry.pending[id];
+    // A proven pre-registry Agency install is legacy state, not a new clone:
+    // adopt its six bots exactly and never add a seventh CEO. Early 0.2
+    // installs did not all write install.json, so six live roster rows on the
+    // six exact legacy role folders are equivalent bounded evidence.
+    const legacyClaimed = new Set<string>();
+    const hasLegacyRoster = id === "lead-gen-agency" && target.rootId === "agency"
+      && sourceTemplate.bots.every((row) => {
+        const found = this.adoptableBot(target, row, legacyClaimed);
+        if (found) legacyClaimed.add(found.id);
+        return Boolean(found);
+      });
+    const adoptingLegacyAgency = id === "lead-gen-agency" && target.rootId === "agency"
+      && (this.legacyAgencyJournal() !== null || hasLegacyRoster);
+    const creationMode = existing?.creationMode === CEO_ON_DEMAND_CREATION
+      || priorPending?.creationMode === CEO_ON_DEMAND_CREATION
+      || (!existing && !priorPending && !adoptingLegacyAgency && (CREATION_TEMPLATE_IDS as readonly string[]).includes(id));
+    // A pre-feature pending journal has no creation snapshot. It must finish
+    // the old six/eleven-agent install it started; only a newly journalled
+    // creation receives the CEO-only derived template.
+    const template = creationMode ? creationTemplateOf(sourceTemplate) : sourceTemplate;
+    validateTemplate(template);
     if (existing) {
       if (existing.rootId !== target.rootId || LocalBizosHarness.comparableVaultPath(installationVaultDir(this.storage, existing)) !== LocalBizosHarness.comparableVaultPath(target.path)) {
         throw new BrainError(`This template is already installed in ${existing.rootId}. Choose its existing vault to adopt it.`, "exists");
@@ -1665,6 +1688,7 @@ export class LocalBizosHarness {
           startedAt: this.clock.nowIso(),
           bots: {},
           welcomes: {},
+          ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
         };
         current.pending[id] = { ...row, ...patch };
       });
@@ -1851,6 +1875,7 @@ export class LocalBizosHarness {
       bots,
       ...(groupId ? { groupId } : {}),
       routineIds: [],
+      ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
     };
     this.updateRegistry((current) => {
       current.installations[id] = installation;
@@ -2840,7 +2865,7 @@ export class LocalBizosHarness {
      * decided at creation and shown in the agent's settings, where it can
      * be changed.
      */
-    create: async (input: CreateBotInput): Promise<Bot> => this.spawnBot(input),
+    create: async (input: CreateBotInput, id?: string): Promise<Bot> => this.spawnBot(input, id),
     update: async (id: string, patch: UpdateBotInput): Promise<Bot> => {
       if (patch.workspacePath) this.requireFolder(patch.workspacePath);
       if (patch.planId && !this.planRegistry.get(patch.planId)) throw new SettingsError("unknown plan");
@@ -2948,6 +2973,7 @@ export class LocalBizosHarness {
         name: input.name,
         ...(input.title ? { title: input.title } : {}),
         ...(input.description ? { description: input.description } : {}),
+        ...(input.roleSlug ? { roleSlug: input.roleSlug } : {}),
       }).path;
     } else if (this.settingsStore.get().local.workingDir) {
       // The person chose a working directory for every agent in Settings:
@@ -2961,6 +2987,7 @@ export class LocalBizosHarness {
         name: input.name,
         ...(input.title ? { title: input.title } : {}),
         ...(input.description ? { description: input.description } : {}),
+        ...(input.roleSlug ? { roleSlug: input.roleSlug } : {}),
       }).path;
     }
     const bot = this.botStore.create({ ...input, ...(workspacePath ? { workspacePath } : {}) }, id);
@@ -2971,8 +2998,8 @@ export class LocalBizosHarness {
 
   readonly groups = {
     list: async (): Promise<Group[]> => this.groupStore.list(),
-    create: async (input: { name: string; memberIds: string[] }): Promise<Group> => {
-      const group = this.groupStore.create(input);
+    create: async (input: { name: string; memberIds: string[] }, id?: string): Promise<Group> => {
+      const group = this.groupStore.create(input, id);
       this.events.publish({ type: "group.created", group });
       return group;
     },
@@ -3054,8 +3081,17 @@ export class LocalBizosHarness {
       await this.refreshSessionCookie();
       return this.dispatcher.send(target, input);
     },
+    dispatchChild: async (
+      scope: { botId: string; threadId: string; runId: string },
+      target: { botId: string },
+      input: { text: string; messageId: string },
+    ) => {
+      await this.refreshSessionCookie();
+      return this.dispatcher.dispatchChild(scope, target, input);
+    },
     stop: async (target: ThreadTarget): Promise<void> => this.dispatcher.stop(target),
     cancelRun: async (runId: string): Promise<boolean> => this.dispatcher.cancelRun(runId),
+    cancelMission: async (runId: string): Promise<boolean> => this.dispatcher.cancelMission(runId),
     clear: async (target: ThreadTarget): Promise<void> => {
       this.dispatcher.clearThread(target);
       this.threadStore.clear(target);

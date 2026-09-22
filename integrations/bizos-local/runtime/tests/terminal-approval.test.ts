@@ -7,16 +7,20 @@ function facade(state: string) {
   if(channel==="lbz:threads:answer") return;
   throw Error("Unexpected side effect: "+channel);
  });
+ const cancelMission=vi.fn(async (_runId:string)=>false);
+ const cancelRun=vi.fn(async()=>{throw Error("Must not cancel an unrelated run");});
  const f=Object.create(CollaborationFacade.prototype) as CollaborationFacade;
- Object.assign(f,{instanceId:"qa",invoke,getRun:vi.fn(async()=>({state}))});
- return {f,invoke};
+ Object.assign(f,{instanceId:"qa",invoke,getRun:vi.fn(async()=>({state})),harness:{threads:{cancelMission,cancelRun}},teamBroker:{revoke:vi.fn()}});
+ return {f,invoke,cancelMission,cancelRun};
 }
 describe("terminal local approvals",()=>{
  for(const state of ["completed","cancelled","failed"]) it(`${state} expires legacy pending cards and cannot answer or stop another run`,async()=>{
-  const {f,invoke}=facade(state);const id="local:qa:run:run_abc";
+  const {f,invoke,cancelMission,cancelRun}=facade(state);const id="local:qa:run:run_abc";
   expect((await f.approvals(id)).approvals[0].status).toBe("expired");
   await expect(f.answer(id,{askId:"ask_abc",answer:{kind:"allow_once"}})).rejects.toMatchObject({status:409,code:"run_finished"});
   await f.cancel(id);
+  expect(cancelMission).toHaveBeenCalledExactlyOnceWith("run_abc");
+  expect(cancelRun).not.toHaveBeenCalled();
   expect(invoke.mock.calls.some(([c])=>c==="lbz:threads:answer"||c==="lbz:threads:stop")).toBe(false);
  });
  it("keeps active waiting requests actionable",async()=>{

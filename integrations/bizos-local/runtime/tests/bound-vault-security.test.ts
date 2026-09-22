@@ -69,14 +69,14 @@ describe("company vault boundary regressions", () => {
       const { harness, turns } = fixture();
       const installed = await harness.templates.apply("service-based-business");
       const vault = join(root, "state", "vaults", "service-based-business");
-      const targets = { vault, vaults: join(root, "state", "vaults"), state: join(root, "state"), Agents: join(vault, "Agents"), agent: join(vault, "Agents", "Business Director") };
+      const targets = { vault, vaults: join(root, "state", "vaults"), state: join(root, "state"), Agents: join(vault, "Agents"), agent: join(vault, "Agents", "CEO") };
       const target = targets[replaced];
       const moved = join(root, "moved");
       renameSync(target, moved);
       symlinkSync(moved, target);
       // The entire real agent CWD exists behind this link. Dropping extra
       // writableRoots alone would still launch into the redirected directory.
-      await harness.threads.send({ botId: installed.bots["business-director"]! }, { text: "Write Company.md" }).catch(() => undefined);
+      await harness.threads.send({ botId: installed.bots.ceo! }, { text: "Write Company.md" }).catch(() => undefined);
       expect(turns).toHaveLength(0);
     });
   }
@@ -101,7 +101,7 @@ describe("company vault boundary regressions", () => {
       await harness.access.grant({ nonce: ticket.nonce, mode });
     }
     await harness.runtime.setSettings({ mode: "local", local: { provider: "claude" } });
-    await harness.threads.send({ botId: installed.bots["business-director"]! }, { text: "Read source and update notes" });
+    await harness.threads.send({ botId: installed.bots.ceo! }, { text: "Read source and update notes" });
     expect(claude.turns).toHaveLength(1);
     expect(claude.turns[0]!.additionalDirectories).toContain(realpathSync(write));
     expect(claude.turns[0]!.additionalDirectories).not.toContain(realpathSync(read));

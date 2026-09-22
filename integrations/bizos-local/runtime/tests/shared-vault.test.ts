@@ -68,7 +68,7 @@ describe("bound company vault provider contract", () => {
     const peer = await harness.bots.create({ name: "Research Peer", title: "Research", description: "Verify sources" });
     expect(peer.workspacePath).toBe(join(vault, "Agents", "Research Peer"));
 
-    const director = (await harness.bots.list()).find((bot) => bot.id === installed.bots["business-director"])!;
+    const director = (await harness.bots.list()).find((bot) => bot.id === installed.bots.ceo)!;
     await harness.threads.send({ botId: director.id }, { text: "Update Company.md with the agreed facts." });
     expect(turns).toHaveLength(1);
     expect(turns[0]!.sandbox).toBe("workspace-write");
@@ -89,7 +89,7 @@ describe("bound company vault provider contract", () => {
     mkdirSync(outside);
     symlinkSync(outside, vault);
 
-    const director = (await harness.bots.list()).find((bot) => bot.id === installed.bots["business-director"])!;
+    const director = (await harness.bots.list()).find((bot) => bot.id === installed.bots.ceo)!;
     await harness.threads.send({ botId: director.id }, { text: "Read the company context." }).catch(() => undefined);
     expect(turns).toHaveLength(0);
     expect(architectureInputs).toHaveLength(0);

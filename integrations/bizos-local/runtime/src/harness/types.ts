@@ -202,6 +202,10 @@ export interface CreateBotInput {
   model?: string;
   thinking?: ReasoningEffort;
   workspacePath?: string;
+  /** Trusted on-demand role slug used only while seeding a new agent folder.
+   * It is not persisted as authority; verified affiliation lives in the
+   * collaboration index. */
+  roleSlug?: string;
   planId?: string;
   providerId?: string;
   sectionId?: string;
@@ -209,7 +213,7 @@ export interface CreateBotInput {
 }
 
 export type UpdateBotInput = Partial<
-  Omit<CreateBotInput, "name"> & {
+  Omit<CreateBotInput, "name" | "roleSlug"> & {
     name: string;
     pinned: boolean;
     archived: boolean;

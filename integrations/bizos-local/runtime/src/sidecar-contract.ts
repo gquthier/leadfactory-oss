@@ -76,10 +76,11 @@ export interface RecruitmentResult {
   sourceAgentId: string;
   sourceRunId: string;
   sourceThreadId: string;
-  agent: { agentId: string; slug: string; name: string; title: string | null };
+  agent: LocalTeamAgent;
   threadId: string;
   teamThreadId: string;
   eventId: string;
+  dispatch: RecruitmentDispatch;
 }
 
 export interface AgentManagementResult {
@@ -87,10 +88,50 @@ export interface AgentManagementResult {
   sourceAgentId: string;
   sourceRunId: string;
   sourceThreadId: string;
-  agent: { agentId: string; slug: string; name: string; title: string | null };
+  agent: LocalTeamAgent;
   threadId: string;
   active: boolean;
   eventId: string;
+}
+
+export interface LocalTeamAgent {
+  agentId: string;
+  slug: string;
+  name: string;
+  title: string | null;
+  description: string | null;
+  avatarKind: "procedural" | "upload";
+  avatarHash: string | null;
+}
+
+export interface RecruitmentDispatch {
+  status: "not_requested" | "queued" | "started" | "failed";
+  parentRunId: string;
+  runId: string | null;
+  messageId: string | null;
+  error?: string;
+}
+
+export interface DurableRoleBinding {
+  templateId: "lead-gen-agency" | "service-based-business" | "software";
+  roleSlug: string;
+  botId: string;
+  groupId: string;
+}
+
+export interface DurableRoleAffiliation {
+  templateId: "lead-gen-agency" | "service-based-business" | "software";
+  roleSlug: string;
+}
+
+export interface DurableRecruitmentPlan {
+  botId: string;
+  groupId: string;
+  messageId: string;
+  /** Set immediately after the bot exists. Missing/false proves a create
+   * failed before effect and may be retried; true plus a missing bot is a
+   * deletion and must not be resurrected. */
+  botCreated?: boolean;
 }
 
 export interface LocalTeamEvent {
@@ -115,6 +156,7 @@ export type DurableRecruitmentMutation =
       sourceBotId: string;
       sourceRunId: string;
       sourceThreadId: string;
+      plan?: DurableRecruitmentPlan;
     })
   | (MutationBase & {
       state: "completed";
@@ -122,6 +164,7 @@ export type DurableRecruitmentMutation =
       sourceRunId: string;
       sourceThreadId: string;
       result: RecruitmentResult;
+      plan?: DurableRecruitmentPlan;
     });
 
 export type DurableManagementMutation =
@@ -151,6 +194,11 @@ export interface DurableIndex {
   events: LocalTeamEvent[];
   voiceCalls: Record<string, DurableVoiceCall>;
   voiceRequests: Record<string, string>;
+  /** Stable company-scoped role identity and verified pack membership. */
+  roleBindings: Record<string, DurableRoleBinding>;
+  roleAffiliations: Record<string, DurableRoleAffiliation>;
+  /** One durable team group per recruiter DM. */
+  recruiterGroups: Record<string, string>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -166,6 +214,15 @@ function validBase(value: Record<string, unknown>): boolean {
     && (value.state === "pending" || value.state === "completed");
 }
 
+const ROLE_TEMPLATES = new Set(["lead-gen-agency", "service-based-business", "software"]);
+const ROLE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function validRecruitmentPlan(value: unknown): value is DurableRecruitmentPlan {
+  return isRecord(value) && [value.botId, value.groupId, value.messageId]
+    .every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 160)
+    && (value.botCreated === undefined || typeof value.botCreated === "boolean");
+}
+
 function validRecruitmentResult(value: unknown): value is RecruitmentResult {
   if (!isRecord(value) || !isRecord(value.agent)) return false;
   return ["recruitmentId", "sourceAgentId", "sourceRunId", "sourceThreadId", "threadId", "teamThreadId", "eventId"]
@@ -173,7 +230,9 @@ function validRecruitmentResult(value: unknown): value is RecruitmentResult {
     && typeof value.agent.agentId === "string"
     && typeof value.agent.slug === "string"
     && typeof value.agent.name === "string"
-    && (typeof value.agent.title === "string" || value.agent.title === null);
+    && (typeof value.agent.title === "string" || value.agent.title === null)
+    && (value.agent.description === undefined || typeof value.agent.description === "string" || value.agent.description === null)
+    && (value.dispatch === undefined || isRecord(value.dispatch));
 }
 
 function validManagementResult(value: unknown): value is AgentManagementResult {
@@ -184,7 +243,8 @@ function validManagementResult(value: unknown): value is AgentManagementResult {
     && typeof value.agent.agentId === "string"
     && typeof value.agent.slug === "string"
     && typeof value.agent.name === "string"
-    && (typeof value.agent.title === "string" || value.agent.title === null);
+    && (typeof value.agent.title === "string" || value.agent.title === null)
+    && (value.agent.description === undefined || typeof value.agent.description === "string" || value.agent.description === null);
 }
 
 function validTeamEvent(value: unknown): value is LocalTeamEvent {
@@ -206,6 +266,9 @@ export function emptyDurableIndex(): DurableIndex {
     events: [],
     voiceCalls: {},
     voiceRequests: {},
+    roleBindings: {},
+    roleAffiliations: {},
+    recruiterGroups: {},
   };
 }
 
@@ -266,6 +329,7 @@ export function normalizeDurableIndex(value: unknown): DurableIndex {
   for (const [key, raw] of Object.entries(value.recruitments)) {
     if (!isRecord(raw) || !validBase(raw) || typeof raw.sourceBotId !== "string"
       || typeof raw.sourceRunId !== "string" || typeof raw.sourceThreadId !== "string"
+      || (raw.plan !== undefined && !validRecruitmentPlan(raw.plan))
       || (raw.state === "completed" && !validRecruitmentResult(raw.result))) {
       throw new Error(`collaboration-index.json has an invalid recruitment entry: ${key}`);
     }
@@ -317,11 +381,33 @@ export function normalizeDurableIndex(value: unknown): DurableIndex {
       throw new Error(`collaboration-index.json has an invalid voice request entry: ${requestId}`);
     }
   }
+  const roleBindings = value.roleBindings === undefined ? {} : value.roleBindings;
+  const roleAffiliations = value.roleAffiliations === undefined ? {} : value.roleAffiliations;
+  const recruiterGroups = value.recruiterGroups === undefined ? {} : value.recruiterGroups;
+  if (!isRecord(roleBindings) || !isRecord(roleAffiliations) || !stringRecord(recruiterGroups)) {
+    throw new Error("collaboration-index.json has invalid role recruitment state");
+  }
+  for (const [identity, raw] of Object.entries(roleBindings)) {
+    if (!isRecord(raw) || typeof raw.templateId !== "string" || !ROLE_TEMPLATES.has(raw.templateId)
+      || typeof raw.roleSlug !== "string" || !ROLE_SLUG.test(raw.roleSlug)
+      || typeof raw.botId !== "string" || typeof raw.groupId !== "string" || identity !== `${raw.templateId}:${raw.roleSlug}`) {
+      throw new Error(`collaboration-index.json has an invalid role binding: ${identity}`);
+    }
+  }
+  for (const [botId, raw] of Object.entries(roleAffiliations)) {
+    if (!botId || !isRecord(raw) || typeof raw.templateId !== "string" || !ROLE_TEMPLATES.has(raw.templateId)
+      || typeof raw.roleSlug !== "string" || !ROLE_SLUG.test(raw.roleSlug)) {
+      throw new Error(`collaboration-index.json has an invalid role affiliation: ${botId}`);
+    }
+  }
   return {
     ...(value as unknown as DurableIndex),
     managements: validatedManagements,
     events: events as LocalTeamEvent[],
     voiceCalls: validatedVoiceCalls,
     voiceRequests,
+    roleBindings: roleBindings as unknown as Record<string, DurableRoleBinding>,
+    roleAffiliations: roleAffiliations as unknown as Record<string, DurableRoleAffiliation>,
+    recruiterGroups,
   };
 }

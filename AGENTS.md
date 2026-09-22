@@ -6,7 +6,7 @@ Ce dépôt contient un cockpit local, des méthodes d’agence, 23 skills et une
 
 Le cockpit autonome démarre par `npm start` à la racine et utilise `data/` dans le clone. Il ne crée pas d’agents. Le dossier `vault/` est un modèle à personnaliser ; lire ses rôles ne les exécute pas.
 
-Dans BizOS local, **Apps → Agence LeadFactory → Installer** crée six agents, leur équipe, les 23 skills et un vault dédié sans remplacer le second cerveau existant. Le runtime intégré sous `integrations/bizos-local/runtime/` réalise cette installation ; le JSON de template en fournit les données. L’ouverture du cockpit depuis BizOS lance une session locale authentifiée.
+Dans BizOS local, **Apps → Agence LeadFactory → Installer** crée uniquement CEO et sa conversation, les 23 skills et un vault dédié. Les cinq autres rôles restent dans `Roles/` pour un recrutement à la demande ; aucune équipe n’est créée à l’installation. Les installations historiques conservent leurs agents. Le runtime intégré sous `integrations/bizos-local/runtime/` réalise cette installation ; le JSON de template en fournit les données. L’ouverture du cockpit depuis BizOS lance une session locale authentifiée.
 
 Les outils `agency_*` et ce cockpit partagent les clients, campagnes, tâches, livrables et l’onboarding. Quand ces outils sont disponibles, les utiliser pour enregistrer le travail métier ; ne pas modifier directement les fichiers de base ou de connexion. Les notes Markdown complètent cet enregistrement. Sans ces outils, produire le livrable dans le dossier autorisé et identifier l’import restant à faire, sans prétendre avoir synchronisé BizOS.
 

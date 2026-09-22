@@ -187,6 +187,22 @@ export function agentSheet(input: { name: string; title?: string; description?: 
   ].join("\n");
 }
 
+function recruitedRoleSheet(input: { name: string; title?: string; description?: string; roleSlug: string }): string {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(input.roleSlug)) throw new BrainError("invalid role slug", "invalid_payload");
+  const title = input.title?.trim();
+  return [
+    `# ${input.name.trim()}${title ? ` — ${title}` : ""}`,
+    "",
+    "## Role source",
+    `Read and follow \`../../Roles/${input.roleSlug}/system.md\` in full. That company-owned role definition is authoritative for responsibilities, boundaries, sources, and where work is recorded.`,
+    "",
+    input.description?.trim() ?? "",
+    "",
+    "The current bounded assignment and initial task are supplied by the runtime. Do not replace this role source or invent a generic TODO mission.",
+    "",
+  ].filter((line, index, lines) => line !== "" || lines[index - 1] !== "").join("\n");
+}
+
 /**
  * The folder a new agent works in: `Agents/<Name>/` inside the vault,
  * created with its role sheet (`<Name>.md`) and the `AGENTS.md` / `CLAUDE.md`
@@ -197,7 +213,7 @@ export function agentSheet(input: { name: string; title?: string; description?: 
  */
 export function ensureAgentFolder(
   brainDir: string,
-  input: { name: string; title?: string; description?: string },
+  input: { name: string; title?: string; description?: string; roleSlug?: string },
 ): { path: string; relative: string } {
   const agents = join(brainDir, AGENTS_DIRECTORY);
   mkdirSync(agents, { recursive: true, mode: 0o700 });
@@ -209,7 +225,10 @@ export function ensureAgentFolder(
   }
   const path = join(agents, candidate);
   mkdirSync(path, { mode: 0o700 });
-  writeFileSync(join(path, `${candidate}.md`), agentSheet({ ...input, name: candidate }), { mode: 0o600 });
+  const sheet = input.roleSlug
+    ? recruitedRoleSheet({ ...input, name: candidate, roleSlug: input.roleSlug })
+    : agentSheet({ ...input, name: candidate });
+  writeFileSync(join(path, `${candidate}.md`), sheet, { mode: 0o600 });
   writeFileSync(join(path, "AGENTS.md"), agentPointer(candidate), { mode: 0o600 });
   writeFileSync(join(path, "CLAUDE.md"), `@${candidate}.md\n`, { mode: 0o600 });
   return { path, relative: `${AGENTS_DIRECTORY}/${candidate}` };

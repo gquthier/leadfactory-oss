@@ -26,8 +26,11 @@ import { COMPANY_OS, seedTemplateVault, TEMPLATE_FILE, validateTemplate, type Co
 import { LocalBizosHarness } from "../src/harness/harness.js";
 import { LEAD_GEN_AGENCY } from "../src/harness/template-lead-gen-agency.js";
 import { SERVICE_BASED_BUSINESS } from "../src/harness/template-service-based-business.js";
+import { SOFTWARE } from "../src/harness/template-software.js";
 import {
   CREATION_TEMPLATE_IDS,
+  CEO_ON_DEMAND_CREATION,
+  creationTemplateOf,
   templateOf,
   holdsTemplate,
   legacyCompanyOsInstallation,
@@ -171,7 +174,12 @@ describe("the Lead Gen Agency pack", () => {
   });
 });
 
-const SHIPPED_AGENCY = templateOf("lead-gen-agency");
+const LEGACY_AGENCY = templateOf("lead-gen-agency");
+const SHIPPED_AGENCY = creationTemplateOf(LEGACY_AGENCY);
+
+function legacyPendingAgency(): void {
+  new Storage(stateOf()).writeJson(TEMPLATES_FILE, { version: 1, installations: {}, pending: { "lead-gen-agency": { id: "lead-gen-agency", version: 1, startedAt: "2026-09-21T00:00:00Z", bots: {}, welcomes: {} } } });
+}
 
 describe("harness.templates.list", () => {
   it("lists exactly the three ordered creation choices on a fresh state", async () => {
@@ -179,8 +187,8 @@ describe("harness.templates.list", () => {
     const { templates } = await harness.templates.list();
     expect(templates.map((row) => row.id)).toEqual(CREATION_TEMPLATE_IDS);
     expect(templates[0]).toMatchObject({ name: "Lead Gen Agency", version: 1, notes: SHIPPED_AGENCY.notes.length, folders: SHIPPED_AGENCY.folders.length });
-    expect(templates[0]!.agents).toHaveLength(6);
-    expect(templates[0]!.agents[0]).toEqual({ slug: "agency-director", name: "Agency Director", title: "Agency coordination" });
+    expect(templates[0]!.agents).toHaveLength(1);
+    expect(templates[0]!.agents[0]).toEqual({ slug: "ceo", name: "CEO", title: "Chief executive and owner interface" });
     expect(templates[1]).toMatchObject({ name: "Service-based Business", version: 1, agents: expect.any(Array) });
     expect(templates[2]).toMatchObject({ name: "Software", version: 1, agents: expect.any(Array) });
     expect(templates[0]!.description.length).toBeGreaterThan(20);
@@ -241,6 +249,60 @@ describe("harness.templates.list", () => {
 });
 
 describe("harness.templates.apply", () => {
+  it.each(CREATION_TEMPLATE_IDS)("resumes the full pre-feature %s roster without converting it to CEO-only", async (id) => {
+    const source = templateOf(id);
+    new Storage(stateOf()).writeJson(TEMPLATES_FILE, {
+      version: 1, installations: {},
+      pending: { [id]: { id, version: source.version, startedAt: "2026-09-21T00:00:00Z", bots: {}, welcomes: {} } },
+    });
+    const harness = harnessFor();
+    const installed = await harness.templates.apply(id);
+    expect(Object.keys(installed.bots)).toEqual(source.bots.map((bot) => bot.slug));
+    expect((await harness.bots.list()).map((bot) => bot.name)).toEqual(source.bots.map((bot) => bot.name));
+    expect(await harness.groups.list()).toHaveLength(source.team ? 1 : 0);
+    expect(registryOf().installations[id]!.creationMode).toBeUndefined();
+    expect(await harnessFor().templates.apply(id)).toEqual({ ...installed, created: false });
+  });
+
+  it.each([
+    ["lead-gen-agency", LEAD_GEN_AGENCY],
+    ["service-based-business", SERVICE_BASED_BUSINESS],
+    ["software", SOFTWARE],
+  ] as const)("creates a CEO-only %s workspace and retains dormant roles outside Agents", async (id, source) => {
+    const harness = harnessFor();
+    const result = await harness.templates.apply(id);
+
+    expect(Object.keys(result.bots)).toEqual(["ceo"]);
+    expect(await harness.groups.list()).toEqual([]);
+    const [ceo] = await harness.bots.list();
+    expect(ceo).toMatchObject({ name: "CEO", pinned: true, workspacePath: join(vaultOf(id), "Agents", "CEO") });
+    expect(readdirSync(join(vaultOf(id), "Agents"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name)).toEqual(["CEO"]);
+
+    const specialists = source.bots.slice(1);
+    expect(readdirSync(join(vaultOf(id), "Roles"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort())
+      .toEqual(specialists.map((role) => role.slug).sort());
+    for (const role of specialists) {
+      const definition = JSON.parse(readFileSync(join(vaultOf(id), "Roles", role.slug, "role.json"), "utf8"));
+      expect(definition).toMatchObject({ version: 1, templateId: id, slug: role.slug, name: role.name, title: role.title, description: role.description });
+      const system = readFileSync(join(vaultOf(id), "Roles", role.slug, "system.md"), "utf8");
+      expect(system.length).toBeGreaterThan(100);
+      const archived = readFileSync(join(vaultOf(id), "Roles", role.slug, "source.md"), "utf8");
+      expect(archived).toContain(role.instructions);
+      for (const note of source.notes.filter((candidate) => candidate.path.startsWith(`Agents/${role.name}/`))) {
+        expect(archived).toContain(note.text.trim());
+      }
+    }
+
+    const listed = (await harness.templates.list()).templates.find((row) => row.id === id)! as typeof source & {
+      agents: Array<{ slug: string; name: string }>;
+      availableRoles: Array<{ slug: string; name: string }>;
+    };
+    expect(listed.agents).toEqual([expect.objectContaining({ slug: "ceo", name: "CEO" })]);
+    expect(listed.availableRoles.map((role) => role.slug)).toEqual(specialists.map((role) => role.slug));
+  });
+
   it("validates the selected pack before persisting the workspace binding", async () => {
     const notes = SERVICE_BASED_BUSINESS.notes as Array<{ path: string; text: string }>;
     notes.push({ path: "../outside.md", text: "must be refused" });
@@ -280,17 +342,17 @@ describe("harness.templates.apply", () => {
     await expect(reopened.templates.ensureDefault()).resolves.toMatchObject({
       id: "service-based-business",
       vault: "kept",
-      bots: 6,
+      bots: 1,
       applied: false,
     });
-    expect((await reopened.bots.list()).map((bot) => bot.name)).toEqual(SERVICE_BASED_BUSINESS.bots.map((bot) => bot.name));
-    expect(await reopened.groups.list()).toHaveLength(1);
+    expect((await reopened.bots.list()).map((bot) => bot.name)).toEqual(["CEO"]);
+    expect(await reopened.groups.list()).toHaveLength(0);
     expect(await reopened.routines.list()).toEqual([]);
     expect(registryOf().pending).toEqual({});
     expect(registryOf().installations["service-based-business"]).toBeTruthy();
   });
 
-  it("creates the Lead Gen Agency in its own vault: notes, six executable agents, one welcome, nothing scheduled", async () => {
+  it("creates the Lead Gen Agency in its own vault: notes, one CEO and dormant roles, one welcome, nothing scheduled", async () => {
     const harness = harnessFor();
     // A populated workspace: a brain with the person's notes and an agent of their own.
     seedStarterVault(brainOf());
@@ -300,7 +362,7 @@ describe("harness.templates.apply", () => {
 
     const result = await harness.templates.apply("lead-gen-agency");
     expect(result).toMatchObject({ id: "lead-gen-agency", rootId: "vault:lead-gen-agency", created: true, vault: "seeded" });
-    expect(result.groupId).toEqual(expect.any(String));
+    expect(result.groupId).toBeUndefined();
     expect(Object.keys(result.bots)).toEqual(SHIPPED_AGENCY.bots.map((bot) => bot.slug));
 
     // The vault, whole, with its graph and no staging folder left behind.
@@ -310,11 +372,11 @@ describe("harness.templates.apply", () => {
     const scan = await harness.brain.scan("vault:lead-gen-agency");
     expect(scan.root).toMatchObject({ id: "vault:lead-gen-agency", label: "Lead Gen Agency", path: vault, writable: true });
     expect(scan.notes.map(note => note.id)).toEqual(expect.arrayContaining(SHIPPED_AGENCY.notes.filter(note => note.path.endsWith(".md")).map(note => note.path)));
-    expect(scan.graph.edges.filter(edge => edge.target.startsWith("ghost:") && !edge.source.startsWith("skills/"))).toEqual([]);
+    expect(scan.graph.edges.filter(edge => edge.target.startsWith("ghost:") && !edge.source.startsWith("skills/") && !edge.source.endsWith("/source.md"))).toEqual([]);
     expect(scan.capabilities.write).toBe(true);
     expect((await harness.brain.roots()).map((root) => root.id)).toEqual(["vault:lead-gen-agency"]);
 
-    // Six real bots in the roster, each working from its folder in the vault,
+    // One real CEO works from its folder in the vault,
     // with the pack's own sheet — not a stub — and the person's Ada untouched.
     const bots = await harness.bots.list();
     expect(bots.map((bot) => bot.name)).toEqual(["Ada", ...SHIPPED_AGENCY.bots.map((bot) => bot.name)]);
@@ -333,13 +395,13 @@ describe("harness.templates.apply", () => {
         expect(thread.messages[0]).toMatchObject({ role: "bot", botId: bot.id, deliveryState: "complete" });
         expect((thread.messages[0]!.blocks[0] as { text: string }).text).toBe(row.welcome);
         expect(bot.unread).toBe(true);
-        expect(bot.lastMessagePreview).toMatch(/^Welcome\./);
+        expect(bot.lastMessagePreview).toMatch(/^Welcome/);
       } else {
         expect(thread.messages).toEqual([]);
         expect(bot.unread).toBe(false);
       }
     }
-    expect((await harness.groups.list()).map(group => group.id)).toEqual([result.groupId]);
+    expect(await harness.groups.list()).toEqual([]);
     expect(await harness.routines.list()).toEqual([]);
 
     // The person's brain and roster: byte for byte what they were.
@@ -359,7 +421,7 @@ describe("harness.templates.apply", () => {
       routineIds: [],
     });
     const listed = (await harness.templates.list()).templates.find((row) => row.id === "lead-gen-agency")!;
-    expect(listed.installed).toEqual({ rootId: "vault:lead-gen-agency", appliedAt: "2026-09-08T09:00:00.000Z", bots: 6, status: "ready" });
+    expect(listed.installed).toEqual({ rootId: "vault:lead-gen-agency", appliedAt: "2026-09-08T09:00:00.000Z", bots: 1, status: "ready" });
   });
 
   it("creates the Company OS in a managed vault when the brain is the person's — starter notes included", async () => {
@@ -391,13 +453,13 @@ describe("harness.templates.apply", () => {
     expect(b).toEqual({ ...a, created: false });
     const again = await harness.templates.apply("lead-gen-agency");
     expect(again).toEqual({ ...a, created: false });
-    expect(await harness.bots.list()).toHaveLength(6);
+    expect(await harness.bots.list()).toHaveLength(1);
     expect(readdirSync(join(stateOf(), "vaults"))).toEqual(["lead-gen-agency"]);
 
     const reopened = harnessFor();
     expect(await reopened.templates.apply("lead-gen-agency")).toEqual({ ...a, created: false });
-    expect(await reopened.bots.list()).toHaveLength(6);
-    const director = (await reopened.bots.list()).find((bot) => bot.id === a.bots["agency-director"])!;
+    expect(await reopened.bots.list()).toHaveLength(1);
+    const director = (await reopened.bots.list()).find((bot) => bot.id === a.bots["ceo"])!;
     expect((await reopened.threads.get({ botId: director.id })).messages).toHaveLength(1);
     expect((await reopened.brain.roots()).map((root) => root.id)).toContain("vault:lead-gen-agency");
   });
@@ -413,7 +475,7 @@ describe("harness.templates.apply", () => {
     expect(registry.pending).toEqual({});
     const binding = (await harness.workspaceTemplate.get()).binding!;
     expect(Object.keys(registry.installations)).toEqual([binding.templateId]);
-    expect(await harness.bots.list()).toHaveLength(binding.templateId === "company-os" ? 1 : 6);
+    expect(await harness.bots.list()).toHaveLength(1);
     expect((await harness.brain.roots()).map(root => root.id)).toEqual([binding.rootId]);
     expect(readdirSync(join(stateOf(), "vaults"))).toEqual([binding.templateId]);
   });
@@ -473,14 +535,16 @@ describe("harness.templates.apply", () => {
       expect(injected).toBe(true);
     }
 
-    /** The whole promise, checked after the retry: one vault, six agents, one welcome, the director pinned. */
-    async function expectWhole(harness: LocalBizosHarness, result: { bots: Record<string, string> }): Promise<void> {
-      expect(Object.keys(result.bots)).toHaveLength(6);
+    /** The whole promise, checked after the retry: one vault, the expected roster, one welcome, the director pinned. */
+    async function expectWhole(harness: LocalBizosHarness, result: { bots: Record<string, string> }, legacy = false): Promise<void> {
+      const expected = legacy ? LEGACY_AGENCY : SHIPPED_AGENCY;
+      const count = expected.bots.length;
+      expect(Object.keys(result.bots)).toHaveLength(count);
       const bots = await harness.bots.list();
-      expect(bots).toHaveLength(6);
-      expect(new Set(bots.map((bot) => bot.name)).size).toBe(6);
-      const director = bots.find((bot) => bot.id === result.bots["agency-director"])!;
-      expect(director).toMatchObject({ pinned: true, unread: true, workspacePath: join(vaultOf("lead-gen-agency"), "Agents", "Agency Director") });
+      expect(bots).toHaveLength(count);
+      expect(new Set(bots.map((bot) => bot.name)).size).toBe(count);
+      const director = bots.find((bot) => bot.id === result.bots[expected.bots[0]!.slug])!;
+      expect(director).toMatchObject({ pinned: true, unread: true, workspacePath: join(vaultOf("lead-gen-agency"), "Agents", expected.bots[0]!.name) });
       const messages = (await harness.threads.get({ botId: director.id })).messages;
       expect(messages.filter((message) => message.role === "bot")).toHaveLength(1);
       for (const bot of bots) {
@@ -488,7 +552,7 @@ describe("harness.templates.apply", () => {
         expect((await harness.threads.get({ botId: bot.id })).messages).toEqual([]);
       }
       expect(readdirSync(join(stateOf(), "vaults"))).toEqual(["lead-gen-agency"]);
-      expect(holdsTemplate(vaultOf("lead-gen-agency"), SHIPPED_AGENCY)).toBe(true);
+      expect(holdsTemplate(vaultOf("lead-gen-agency"), expected)).toBe(true);
       expect(registryOf().pending).toEqual({});
       expect(registryOf().installations["lead-gen-agency"]!.bots).toEqual(result.bots);
     }
@@ -530,7 +594,7 @@ describe("harness.templates.apply", () => {
       storage.writeJson(TEMPLATES_FILE, {
         version: 1,
         installations: {},
-        pending: { "lead-gen-agency": { id: "lead-gen-agency", version: 1, startedAt: "x", staging, bots: {}, welcomes: {} } },
+        pending: { "lead-gen-agency": { id: "lead-gen-agency", version: 1, startedAt: "x", creationMode: CEO_ON_DEMAND_CREATION, staging, bots: {}, welcomes: {} } },
       });
       mkdirSync(join(stateOf(), "vaults", staging), { recursive: true });
       writeFileSync(join(stateOf(), "vaults", staging, "AGENTS.md"), "half");
@@ -574,12 +638,12 @@ describe("harness.templates.apply", () => {
           return Boolean(journal && Object.keys(journal.bots).length === 1 && !Object.values(journal.bots)[0]!.created);
         },
       });
-      const planned = registryOf().pending["lead-gen-agency"]!.bots["agency-director"]!;
+      const planned = registryOf().pending["lead-gen-agency"]!.bots["ceo"]!;
       expect(planned.created).toBe(false);
       expect(await harnessFor().bots.list()).toEqual([]);
       const harness = harnessFor();
       const result = await harness.templates.apply("lead-gen-agency");
-      expect(result.bots["agency-director"]).toBe(planned.id);
+      expect(result.bots["ceo"]).toBe(planned.id);
       await expectWhole(harness, result);
     });
 
@@ -588,31 +652,32 @@ describe("harness.templates.apply", () => {
       const persisted = await harnessFor().bots.list();
       expect(persisted).toHaveLength(1);
       expect(persisted[0]!.pinned).toBe(false); // the pin comes after the persist; the crash was between
-      const planned = registryOf().pending["lead-gen-agency"]!.bots["agency-director"]!;
+      const planned = registryOf().pending["lead-gen-agency"]!.bots["ceo"]!;
       expect(planned).toEqual({ id: persisted[0]!.id, created: false });
       const harness = harnessFor();
       const result = await harness.templates.apply("lead-gen-agency");
-      expect(result.bots["agency-director"]).toBe(persisted[0]!.id);
+      expect(result.bots["ceo"]).toBe(persisted[0]!.id);
       await expectWhole(harness, result);
     });
 
-    it("after the fourth agent persisted: the retry makes exactly the two missing ones", async () => {
+    it("a pre-change install after its fourth agent resumes exactly the two missing specialists", async () => {
+      legacyPendingAgency();
       await crashDuringApply({ writeJson: (name, value, when) => name === "bots.json" && when === "after" && (value as unknown[]).length === 4 });
       const persisted = await harnessFor().bots.list();
       expect(persisted.map((bot) => bot.name)).toEqual(["Agency Director", "Acquisition", "Onboarding", "Strategist"]);
       const harness = harnessFor();
       const result = await harness.templates.apply("lead-gen-agency");
       for (const bot of persisted) expect(Object.values(result.bots)).toContain(bot.id);
-      await expectWhole(harness, result);
+      await expectWhole(harness, result, true);
     });
 
     it("after the welcome was appended but before its mark: one welcome, the bot unread, on the retry", async () => {
       await crashDuringApply({ appendNdjson: (entry) => (entry as { role: string }).role === "bot" });
       const journal = registryOf().pending["lead-gen-agency"]!;
-      const welcome = journal.welcomes["agency-director"]!;
+      const welcome = journal.welcomes["ceo"]!;
       expect(welcome.posted).toBe(false);
       const before = harnessFor();
-      const directorId = journal.bots["agency-director"]!.id;
+      const directorId = journal.bots["ceo"]!.id;
       expect((await before.threads.get({ botId: directorId })).messages.map((message) => message.id)).toEqual([welcome.id]);
       const harness = harnessFor();
       const result = await harness.templates.apply("lead-gen-agency");
@@ -627,9 +692,9 @@ describe("harness.templates.apply", () => {
         writeJson: (name, value, when) =>
           name === TEMPLATES_FILE && when === "after" && Object.keys((value as TemplateRegistry).pending["lead-gen-agency"]?.welcomes ?? {}).length === 1,
       });
-      const welcome = registryOf().pending["lead-gen-agency"]!.welcomes["agency-director"]!;
+      const welcome = registryOf().pending["lead-gen-agency"]!.welcomes["ceo"]!;
       expect(welcome.posted).toBe(false);
-      const directorId = registryOf().pending["lead-gen-agency"]!.bots["agency-director"]!.id;
+      const directorId = registryOf().pending["lead-gen-agency"]!.bots["ceo"]!.id;
       expect((await harnessFor().threads.get({ botId: directorId })).messages).toEqual([]);
       const harness = harnessFor();
       const result = await harness.templates.apply("lead-gen-agency");
@@ -643,7 +708,7 @@ describe("harness.templates.apply", () => {
       });
       const before = fingerprint(stateOf());
       const bots = await harnessFor().bots.list();
-      expect(bots).toHaveLength(6);
+      expect(bots).toHaveLength(1);
       const harness = harnessFor();
       const result = await harness.templates.apply("lead-gen-agency");
       expect(result.created).toBe(true);
@@ -656,7 +721,20 @@ describe("harness.templates.apply", () => {
       expect(await harness.bots.list()).toEqual(bots);
     });
 
-    it("an agent the person deleted between the crash and the retry is not brought back", async () => {
+    it("does not recreate the single CEO deleted during a pending new installation", async () => {
+      await crashDuringApply({ writeJson: (name, value, when) => name === "bots.json" && when === "after" && (value as unknown[]).length === 1 });
+      const between = harnessFor();
+      const [ceo] = await between.bots.list();
+      await between.bots.remove(ceo!.id);
+      expect(registryOf().pending["lead-gen-agency"]!.bots.ceo).toMatchObject({ id: ceo!.id, removed: true });
+      const restarted = harnessFor();
+      expect((await restarted.templates.apply("lead-gen-agency")).bots).toEqual({});
+      expect(await restarted.bots.list()).toEqual([]);
+      expect(await restarted.groups.list()).toEqual([]);
+    });
+
+    it("a legacy specialist deleted between crash and retry is not brought back", async () => {
+      legacyPendingAgency();
       await crashDuringApply({ writeJson: (name, value, when) => name === "bots.json" && when === "after" && (value as unknown[]).length === 3 });
       const between = harnessFor();
       const onboarding = (await between.bots.list()).find((bot) => bot.name === "Onboarding")!;
@@ -698,7 +776,7 @@ describe("harness.templates.apply", () => {
     const installed = await harness.templates.apply("lead-gen-agency");
     const elsewhere = join(scratch, "elsewhere");
     fs.renameSync(vaultOf("lead-gen-agency"), elsewhere);
-    expect((await harness.templates.list()).templates.find((row) => row.id === "lead-gen-agency")!.installed).toMatchObject({ rootId: "vault:lead-gen-agency", bots: 6, status: "missing" });
+    expect((await harness.templates.list()).templates.find((row) => row.id === "lead-gen-agency")!.installed).toMatchObject({ rootId: "vault:lead-gen-agency", bots: 1, status: "missing" });
     await expect(harness.templates.apply("lead-gen-agency")).rejects.toMatchObject({
       code: "not_found",
       message: expect.stringMatching(/no longer at vaults\/lead-gen-agency/),
@@ -707,7 +785,7 @@ describe("harness.templates.apply", () => {
     await expect(harness.brain.scan("vault:lead-gen-agency")).rejects.toThrow();
     // Nothing was made to fill the gap: not a vault, not an agent.
     expect(existsSync(vaultOf("lead-gen-agency"))).toBe(false);
-    expect(await harness.bots.list()).toHaveLength(6);
+    expect(await harness.bots.list()).toHaveLength(1);
 
     symlinkSync(elsewhere, vaultOf("lead-gen-agency"));
     expect((await harness.templates.list()).templates.find((row) => row.id === "lead-gen-agency")!.installed).toMatchObject({ status: "unreadable" });
@@ -850,7 +928,7 @@ describe("harness.templates.apply", () => {
     writeFileSync(join(stateOf(), TEMPLATES_FILE), "{ not json");
     await expect(harness.templates.apply("lead-gen-agency")).rejects.toThrow(/damaged/);
     await expect(harness.templates.list()).rejects.toThrow(/damaged/);
-    expect(await harness.bots.list()).toHaveLength(6);
+    expect(await harness.bots.list()).toHaveLength(1);
     // The brain still opens; the managed vault is simply not offered until the file is repaired.
     expect((await harness.brain.roots()).map((root) => root.id)).toEqual(["vault:lead-gen-agency"]);
 
@@ -858,7 +936,7 @@ describe("harness.templates.apply", () => {
     await expect(harness.templates.apply("lead-gen-agency")).rejects.toThrow(/damaged/);
     writeFileSync(join(stateOf(), TEMPLATES_FILE), JSON.stringify({ version: 1, installations: { "not-a-template": {} }, pending: {} }));
     await expect(harness.templates.list()).rejects.toThrow(/damaged/);
-    expect(await harness.bots.list()).toHaveLength(6);
+    expect(await harness.bots.list()).toHaveLength(1);
 
     // Repaired: the same installation answers again.
     const storage = new Storage(stateOf());
@@ -870,6 +948,7 @@ describe("harness.templates.apply", () => {
       vaultPath: "vaults/lead-gen-agency",
       appliedAt: "x",
       vault: "seeded",
+      creationMode: CEO_ON_DEMAND_CREATION,
       bots: first.bots,
       routineIds: [],
     };
@@ -904,16 +983,16 @@ describe("harness.templates.apply", () => {
     const harness = harnessFor();
     await harness.templates.ensureDefault();
     const result = await harness.templates.apply("lead-gen-agency");
-    const strategist = (await harness.bots.list()).find((bot) => bot.id === result.bots.strategist)!;
+    const strategist = (await harness.bots.list()).find((bot) => bot.id === result.bots.ceo)!;
     writeFileSync(join(strategist.workspacePath!, "Notes.md"), "# Notes\n");
     await harness.bots.remove(strategist.id);
     expect(existsSync(strategist.workspacePath!)).toBe(false);
-    expect(readFileSync(join(vaultOf("lead-gen-agency"), ".trash", "Strategist", "Notes.md"), "utf8")).toBe("# Notes\n");
+    expect(readFileSync(join(vaultOf("lead-gen-agency"), ".trash", "CEO", "Notes.md"), "utf8")).toBe("# Notes\n");
     expect(existsSync(join(brainOf(), ".trash"))).toBe(false);
     // The installation stays: the roster row is gone, the count says so, nothing is recreated.
-    expect((await harness.templates.list()).templates.find((row) => row.id === "lead-gen-agency")!.installed).toMatchObject({ bots: 5 });
+    expect((await harness.templates.list()).templates.find((row) => row.id === "lead-gen-agency")!.installed).toMatchObject({ bots: 0 });
     expect((await harness.templates.apply("lead-gen-agency")).created).toBe(false);
-    expect((await harness.bots.list()).map((bot) => bot.name)).not.toContain("Strategist");
+    expect((await harness.bots.list()).map((bot) => bot.name)).not.toContain("CEO");
   });
 });
 
@@ -930,7 +1009,7 @@ describe("the bridge and the sidecar", () => {
     const refused = (await runHandler(handlers["lbz:brain:applyTemplate"]!, ["../evil"])) as IpcEnvelope;
     expect(refused.ok).toBe(false);
     if (!refused.ok) expect(refused.error.code).toBe("invalid_payload");
-    expect(await harness.bots.list()).toHaveLength(6);
+    expect(await harness.bots.list()).toHaveLength(1);
   });
 
   it("answers 404 for an id outside the catalogue and 400 for a payload that is not one, before the harness is asked", async () => {

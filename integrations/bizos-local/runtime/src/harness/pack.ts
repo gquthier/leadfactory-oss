@@ -1,14 +1,15 @@
 // A business pack inside Local BizOS: the LeadFactory agency (`agency.ts`)
 // and the E-commerce store (`ecommerce.ts`), on ONE frame.
 //
-// A pack is a catalogue template (its notes, its agents, its team) plus a
+// A pack is a catalogue template (its notes and installed agents) plus a
 // cockpit: the kit's own `createApp`, bound to `127.0.0.1` on an ephemeral
 // port, its store INSIDE the bound vault (`Apps/<Pack>/data`). The template
 // is installed by the generic installer (`harness.templates`, through the
 // workspace binding) — a pack creates no agent of its own and never a second
-// team; it attaches its cockpit and its tools to the bots the installation
-// recorded. There is no second store and nothing writes `db.json` behind the
-// cockpit's back.
+// team; it attaches its cockpit and tools to bots recorded by the installation
+// or to specialists with a verified persisted template/role affiliation.
+// A matching name or workspace path never grants membership. There is no
+// second store and nothing writes `db.json` behind the cockpit's back.
 //
 // What a pack guards:
 //   - the cockpit's service credential: random, in memory, for this process
@@ -89,6 +90,9 @@ export interface PackHost {
   install(templateId: TemplateId, rootId: string): Promise<PackInstallation>;
   listBots(): Promise<Bot[]>;
   run(runId: string): Promise<Run | undefined>;
+  /** Verified role affiliations persisted by the recruitment boundary. A
+   * name or workspace path is never sufficient to grant pack tools. */
+  roleBots?(templateId: TemplateId): Record<string, string>;
 }
 
 // ── the service ──────────────────────────────────────────────────────────
@@ -223,7 +227,9 @@ export abstract class PackService {
   /** True for a bot the installation recorded — the only bots the tools serve. */
   isPackBot(botId: string): boolean {
     const installation = this.ready();
-    return Boolean(installation && Object.values(installation.bots).includes(botId));
+    if (!installation) return false;
+    return Object.values(installation.bots).includes(botId)
+      || Object.values(this.host.roleBots?.(this.templateId) ?? {}).includes(botId);
   }
 
   // ── status ──
@@ -262,10 +268,12 @@ export abstract class PackService {
       };
     }
     const roster = await this.host.listBots();
-    const bots = kit.template.bots.flatMap((row) => {
-      const botId = installation.bots[row.slug];
+    const members = { ...installation.bots, ...(this.host.roleBots?.(this.templateId) ?? {}) };
+    const order = new Map(kit.template.bots.map((row, index) => [row.slug, index]));
+    const bots = Object.entries(members).sort(([left], [right]) =>
+      (order.get(left) ?? -1) - (order.get(right) ?? -1) || left.localeCompare(right)).flatMap(([slug, botId]) => {
       const bot = botId ? roster.find((candidate) => candidate.id === botId && !candidate.archived) : undefined;
-      return bot ? [{ slug: row.slug, botId: bot.id, name: bot.name }] : [];
+      return bot ? [{ slug, botId: bot.id, name: bot.name }] : [];
     });
     const installed = installation.status === "ready";
     const error = this.installError ?? this.appError ?? undefined;

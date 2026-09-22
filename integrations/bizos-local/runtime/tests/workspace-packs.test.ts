@@ -54,8 +54,11 @@ describe("one business template per vault", () => {
     const service = s[kind];
     const installed = await service.install();
     expect(installed.status).toBe("ready");
-    expect(installed.bots).toHaveLength(6);
-    expect(installed.groupId).toBeTruthy();
+    expect(installed.bots).toHaveLength(kind === "agency" ? 1 : 6);
+    if (kind === "agency") {
+      expect(installed.bots[0]!.name).toBe("CEO");
+      expect(installed.groupId).toBeNull();
+    } else expect(installed.groupId).toBeTruthy();
     const vault = installed.vaultPath!;
     const skill = kind === "agency" ? "client-onboarding" : "shopify-setup";
     const actualSkill = kind === "agency" ? "onboarding-client" : skill;

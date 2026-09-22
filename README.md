@@ -9,7 +9,7 @@ Le second template **[E-commerce](ecommerce/README.md)** ajoute 24 skills, six r
 | Mode | Ce que vous utilisez | Démarrage |
 |---|---|---|
 | Cockpit autonome | Gestion locale des clients, campagnes, tâches, onboarding et livrables ; assistant au choix | Clonez le dépôt et lancez `npm start` |
-| Template dans BizOS local | Six agents, leur équipe, les skills et le dashboard intégré | **Apps → Agence ou E-commerce → choisir un coffre** |
+| Template dans BizOS local | Un CEO, des spécialistes recrutés à la demande, les skills et le dashboard intégré | **Apps → choisir un template et un coffre** |
 | E-commerce autonome | Produits, concurrents, fournisseurs, boutiques, créatives et opérations | `cd ecommerce && npm start` |
 
 La [preview BizOS pour Mac Apple Silicon](https://github.com/gquthier/leadfactory-oss/releases/tag/v0.3.0-preview.2) inclut les deux templates, avec leurs dashboards intégrés et les sources desktop correspondantes. Des missions avec un vrai agent Claude ont vérifié la lecture de skills et les écritures partagées : dossier client pour Agency, produit, livrable et titre du dashboard pour E-commerce. Cette preview locale est signée ad hoc, non notarisée. Le [guide BizOS](docs/BIZOS.md) explique l’installation et la compilation.
@@ -32,9 +32,9 @@ Il démarre vide ; la démo facultative est fictive. Vos données restent dans `
 
 ## Utiliser l’agence dans BizOS local
 
-1. Dans **Apps**, choisissez **Agence LeadFactory** ou **E-commerce**, puis un nouveau coffre ou un dossier déjà partagé avec BizOS. Le choix reste fixe pour cet espace. BizOS y installe les notes, processus, skills, six agents et leur équipe.
+1. Une nouvelle entreprise propose **Lead Gen Agency**, **Service-based Business** ou **Software**. Choisissez un nouveau coffre ou un dossier déjà partagé avec BizOS ; ce choix reste fixe. Le modèle installe ses notes, processus et uniquement **CEO**, avec sa conversation. Les spécialistes restent dans `Roles/` jusqu’à un recrutement utile à une mission. Les anciens espaces E-commerce et les équipes déjà installées restent disponibles.
 2. Le dashboard métier s’affiche directement dans Apps. Les agents et les formulaires utilisent la même base : clients et onboarding pour l’agence, produits et boutiques pour l’e-commerce.
-3. Dans les réglages, connectez votre modèle personnel. Complétez **Start Here**, puis confiez une mission au directeur de l’équipe dans Discussions.
+3. Dans les réglages, connectez votre modèle personnel. Complétez **Start Here**, puis confiez une mission au CEO dans Discussions. Lorsqu’elle le justifie, le CEO recrute un spécialiste, lui crée ou réutilise une équipe persistante et lui envoie une vraie première tâche.
 
 Dans **Second cerveau → Dossier**, vous retrouvez les rôles, processus, `skills/` et les dossiers métier. Les skills locaux sont modifiables ; leur réinstallation préserve vos éditions. Les agents peuvent adapter le titre, les sections et les checklists autorisées du dashboard.
 

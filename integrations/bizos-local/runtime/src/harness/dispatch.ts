@@ -145,6 +145,13 @@ export interface TurnContext {
   executionPolicy?: TurnExecutionPolicy;
 }
 
+export interface ChildDispatchResult {
+  messageId: string;
+  runId: string;
+  state: "queued" | "working" | "waiting_input" | "completed" | "failed" | "cancelled";
+  error?: string;
+}
+
 export interface DispatchDependencies {
   bots: BotStore;
   chatExecutor?(chatId: string): Bot | undefined;
@@ -346,6 +353,13 @@ export class Dispatcher {
   private readonly queues = new Map<string, QueuedTurn[]>();
   private readonly active = new Map<string, ActiveTurn>();
   private readonly chains = new Map<string, Chain>();
+  /** Source threads that own cross-thread child chains. This lets STOP on a
+   * finished parent DM still cancel a child that remains active elsewhere. */
+  private readonly chainOwners = new Map<string, Set<string>>();
+  /** Run → mission chain while any turn in that mission is outstanding.
+   * Kept after a parent finishes so the public cancel endpoint can target
+   * exactly its descendants without stopping a newer, unrelated DM turn. */
+  private readonly runChains = new Map<string, string>();
   private readonly cursors: Record<string, string>;
   private readonly approvals: Record<string, true>;
 
@@ -445,15 +459,59 @@ export class Dispatcher {
     return { runId };
   }
 
+  /** Dispatch a real child turn from an active parent capability. Unlike a
+   * fresh `send`, this inherits the parent's chain budget and STOP lineage. */
+  dispatchChild(
+    scope: { botId: string; threadId: string; runId: string },
+    target: { botId: string },
+    input: { text: string; messageId: string },
+  ): ChildDispatchResult {
+    const parent = this.active.get(scope.threadId);
+    if (!parent || parent.runId !== scope.runId || parent.botId !== scope.botId || parent.cancelled || parent.discarded) {
+      throw new Error("initial task requires the matching active parent run");
+    }
+    if (parent.hop >= MAX_HOPS) throw new Error("the parent mission reached its handoff depth limit");
+    const threadId = threadIdForTarget(target);
+    if (this.deps.threads.get(threadId, input.messageId)) {
+      throw new Error("the initial task message already exists and will not be dispatched twice");
+    }
+    const message = this.deps.threads.append(threadId, {
+      id: input.messageId,
+      role: "system",
+      blocks: [{ kind: "text", text: input.text }],
+    });
+    this.deps.events.publish({ type: "thread.message.created", threadId, message });
+    const owned = this.chainOwners.get(scope.threadId) ?? new Set<string>();
+    owned.add(parent.chainId);
+    this.chainOwners.set(scope.threadId, owned);
+    const runId = this.enqueue({
+      threadId,
+      botId: target.botId,
+      text: input.text,
+      hop: parent.hop + 1,
+      chainId: parent.chainId,
+      fromBotId: parent.botId,
+      ...(parent.executionPolicy ? { executionPolicy: parent.executionPolicy } : {}),
+    });
+    if (!runId) throw new Error("the parent mission reached its turn or queue limit");
+    const run = this.deps.runs.get(runId);
+    return {
+      messageId: message.id,
+      runId,
+      state: run?.state ?? "failed",
+      ...(run?.error ? { error: run.error } : {}),
+    };
+  }
+
   stop(target: ThreadTarget): void {
     const threadId = threadIdForTarget(target);
-    this.cancelQueued(threadId);
+    const chainIds = new Set<string>();
     const running = this.active.get(threadId);
-    if (running) {
-      running.cancelled = true;
-      this.deps.onRunStopped?.(running.runId);
-      running.handle.stop();
-    }
+    if (running) chainIds.add(running.chainId);
+    for (const queued of this.queues.get(threadId) ?? []) chainIds.add(queued.chainId);
+    for (const owned of this.chainOwners.get(threadId) ?? []) chainIds.add(owned);
+    if (!chainIds.size) return;
+    for (const chainId of chainIds) this.cancelChain(chainId);
   }
 
   /** Cancel one run without stopping unrelated work queued on the same
@@ -484,6 +542,13 @@ export class Dispatcher {
     return false;
   }
 
+  cancelMission(runId: string): boolean {
+    const chainId = this.runChains.get(runId);
+    if (!chainId) return false;
+    this.cancelChain(chainId);
+    return true;
+  }
+
   private cancelQueued(threadId: string): void {
     for (const queued of this.queues.get(threadId) ?? []) {
       this.releaseChain(queued.chainId);
@@ -500,6 +565,37 @@ export class Dispatcher {
       if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
     }
     this.queues.set(threadId, []);
+  }
+
+  /** STOP follows a mission across DM child dispatches, not merely across
+   * one transcript. All queued and active descendants share `chainId`. */
+  private cancelChain(chainId: string): void {
+    const pump = new Set<string>();
+    for (const [threadId, queue] of this.queues) {
+      const kept: QueuedTurn[] = [];
+      for (const queued of queue) {
+        if (queued.chainId !== chainId) {
+          kept.push(queued);
+          continue;
+        }
+        this.releaseChain(queued.chainId);
+        this.deps.runs.update(queued.runId, { state: "cancelled" });
+        this.deps.events.publish({ type: "run.cancelled", runId: queued.runId, threadId, botId: queued.botId });
+        if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
+        this.deps.onRunStopped?.(queued.runId);
+        this.deps.onRunSettled?.(queued.runId);
+        pump.add(threadId);
+      }
+      this.queues.set(threadId, kept);
+    }
+    for (const turn of [...this.active.values()]) {
+      if (turn.chainId !== chainId || turn.cancelled) continue;
+      turn.cancelled = true;
+      this.deps.onRunStopped?.(turn.runId);
+      turn.handle.stop();
+      pump.add(turn.threadId);
+    }
+    for (const threadId of pump) if (!this.active.has(threadId)) this.pump(threadId);
   }
 
   /** Stop everything on a thread AND disown whatever is still in flight.
@@ -722,7 +818,16 @@ export class Dispatcher {
     const chain = this.chains.get(chainId);
     if (!chain) return;
     chain.outstanding -= 1;
-    if (chain.outstanding <= 0) this.chains.delete(chainId);
+    if (chain.outstanding <= 0) {
+      this.chains.delete(chainId);
+      for (const [threadId, owned] of this.chainOwners) {
+        owned.delete(chainId);
+        if (!owned.size) this.chainOwners.delete(threadId);
+      }
+      for (const [runId, ownedChainId] of this.runChains) {
+        if (ownedChainId === chainId) this.runChains.delete(runId);
+      }
+    }
   }
 
   /** A grey line in the transcript. The only honest way for the thread to say
@@ -774,6 +879,7 @@ export class Dispatcher {
       state: "queued",
       ...(input.routineId ? { routineId: input.routineId } : {}),
     });
+    this.runChains.set(run.id, input.chainId);
     chain.turns += 1;
     chain.outstanding += 1;
     chain.visited.add(input.botId);

@@ -25,15 +25,24 @@ export function toolsetsFromArgv(argv: readonly string[]): Set<string> {
 
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
-  description: "Autonomously create one persistent Local BizOS teammate for this active mission. The new agent gets its own DM and joins this team; from a DM, a new two-agent team thread is created.",
+  description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain.",
   inputSchema: {
     type: "object",
     properties: {
+      role_slug: { type: "string", description: "Optional role slug from the bound company vault's Roles index." },
       name: { type: "string", description: "Short teammate name." },
       title: { type: "string", description: "Concrete role, such as Research lead." },
-      mission: { type: "string", description: "Bounded responsibility and operating instructions." },
+      description: { type: "string", description: "Short stable role description." },
+      instructions: { type: "string", description: "Optional bounded operating instructions; a role blueprint remains intact." },
+      context: { type: "string", description: "Bounded company/task context appended to the agent's actual instructions." },
+      mission: { type: "string", description: "Legacy bounded responsibility field; prefer description/context." },
+      initial_task: { type: "string", description: "Concrete first task dispatched as a real native-plan child run." },
+      avatar_data_url: { type: "string", description: "Optional canonical PNG/JPEG/WebP base64 data URL, at most 32768 characters." },
     },
-    required: ["name", "title", "mission"],
+    anyOf: [
+      { required: ["role_slug"] },
+      { required: ["name", "title"] },
+    ],
     additionalProperties: false,
   },
 }, {
@@ -63,8 +72,12 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
       agent_id: { type: "string", description: "Persistent local agent id from the runtime manifest or a recruitment result." },
       name: { type: "string", description: "Optional updated teammate name." },
       title: { type: "string", description: "Optional updated role." },
+      description: { type: "string", description: "Optional updated public description." },
+      instructions: { type: "string", description: "Optional bounded assignment instructions; preserved separately from a role blueprint." },
+      context: { type: "string", description: "Optional bounded assignment context." },
       mission: { type: "string", description: "Optional updated bounded responsibility." },
       active: { type: "boolean", description: "true activates/reactivates; false suspends without deleting history." },
+      avatar_data_url: { type: ["string", "null"], description: "Canonical PNG/JPEG/WebP data URL, or null to reset to the procedural avatar." },
     },
     required: ["agent_id"],
     additionalProperties: false,

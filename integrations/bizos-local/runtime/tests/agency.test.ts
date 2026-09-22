@@ -112,7 +112,7 @@ describe("before the install", () => {
 });
 
 describe("install", () => {
-  it("creates the vault, six agents on their role folders, a team and one cockpit", async () => {
+  it("creates the vault, one CEO, dormant roles and one cockpit", async () => {
     const { harness, agency } = build();
     const state = await agency.install();
     expect(state).toMatchObject({
@@ -124,20 +124,20 @@ describe("install", () => {
       boundTemplateId: null,
     });
     expect(state.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(state.bots.map((bot) => bot.name)).toEqual([
-      "Agency Director", "Acquisition", "Onboarding", "Strategist", "Creative", "Account Manager",
-    ]);
+    expect(state.bots.map((bot) => bot.name)).toEqual(["CEO"]);
 
     const vault = vaultOf();
     expect(readFileSync(join(vault, "AGENTS.md"), "utf8")).toContain("How this agency works");
     expect(existsSync(join(vault, "Processes", "Handoffs.md"))).toBe(true);
     const roster = await harness.bots.list();
-    expect(roster).toHaveLength(6);
+    expect(roster).toHaveLength(1);
     for (const bot of roster) {
       expect(bot.workspacePath).toBe(join(vault, "Agents", bot.name));
       expect(existsSync(join(bot.workspacePath!, "AGENTS.md"))).toBe(true);
       expect(existsSync(join(bot.workspacePath!, "CLAUDE.md"))).toBe(true);
       expect(existsSync(join(bot.workspacePath!, `${bot.name}.md`))).toBe(true);
+      const fullContext = readFileSync(join(bot.workspacePath!, "system.md"), "utf8");
+      expect(fullContext).toContain("Turn the owner brief into scoped priorities");
       expect(bot.instructions).toContain("agency_clients");
       expect(bot.instructions).toContain("agency_read_skill");
     }
@@ -146,16 +146,16 @@ describe("install", () => {
     // The skills the agents read are the vault's own copy, not the kit's.
     expect(existsSync(join(vault, "skills", "creative-brief", "SKILL.md"))).toBe(true);
 
-    const director = roster.find((bot) => bot.name === "Agency Director")!;
+    const director = roster.find((bot) => bot.name === "CEO")!;
     expect(director.pinned).toBe(true);
     const chat = await harness.threads.get({ botId: director.id });
     expect(chat.messages).toHaveLength(1);
     expect(chat.messages[0]).toMatchObject({ role: "bot", botId: director.id, deliveryState: "complete" });
 
     const groups = await harness.groups.list();
-    expect(groups).toHaveLength(1);
-    expect(groups[0]!.memberIds).toEqual(roster.map((bot) => bot.id));
-    expect(state.groupId).toBe(groups[0]!.id);
+    expect(groups).toHaveLength(0);
+    expect(state.groupId).toBeNull();
+    expect(existsSync(join(vault, "Roles", "acquisition", "system.md"))).toBe(true);
 
     // The cockpit is hosted: bare HTTP gets nothing, a ticketed session reads the same state.
     expect((await json(`${state.dashboardUrl}/api/state`)).status).toBe(401);
@@ -189,12 +189,12 @@ describe("install", () => {
     expect(second.bots.map((bot) => bot.botId)).toEqual(first.bots.map((bot) => bot.botId));
     const third = await agency.install();
     expect(third.bots.map((bot) => bot.botId)).toEqual(first.bots.map((bot) => bot.botId));
-    expect(await harness.bots.list()).toHaveLength(6);
-    expect(await harness.groups.list()).toHaveLength(1);
+    expect(await harness.bots.list()).toHaveLength(1);
+    expect(await harness.groups.list()).toHaveLength(0);
     expect((await harness.threads.get({ botId: first.bots[0]!.botId })).messages).toHaveLength(1);
   });
 
-  it("adopts an older agency installation when its vault is bound: its agents, its store, nothing duplicated", async () => {
+  it.each([false, true])("adopts an older agency installation (journal=%s): same agents, group and store", async (withJournal) => {
     const { harness, agency } = build();
     // What version 0.2 left on this Mac: its own vault under `agency/`, its
     // agents already in the roster on their role folders, and its store.
@@ -215,11 +215,18 @@ describe("install", () => {
       campaigns: [], tasks: [], deliverables: [],
     }));
 
+    const oldGroup = withJournal ? await harness.groups.create({ name: "Historical team", memberIds: Object.values(before) }) : undefined;
+    if (withJournal) writeFileSync(join(root, LEGACY_AGENCY_DIRECTORY, "install.json"), JSON.stringify({ bots: before, groupId: oldGroup!.id }));
     const state = await agency.install("agency");
     expect(state).toMatchObject({ status: "ready", rootId: "agency", vaultPath: legacyVault });
     // The same six agents, adopted where they already work.
     expect(Object.fromEntries(state.bots.map((bot) => [bot.slug, bot.botId]))).toEqual(before);
     expect(await harness.bots.list()).toHaveLength(6);
+    for (const botId of Object.values(before)) expect(agency.isPackBot(botId)).toBe(true);
+    if (oldGroup) {
+      expect(state.groupId).toBe(oldGroup.id);
+      expect(await harness.groups.list()).toEqual([oldGroup]);
+    }
     // The note the person rewrote is theirs, and the pack's own notes are whole.
     expect(readFileSync(join(legacyVault, "Company.md"), "utf8")).toBe("# My agency\n\nEdited by hand.\n");
     expect(existsSync(join(legacyVault, "Processes", "Handoffs.md"))).toBe(true);
@@ -246,12 +253,12 @@ describe("install", () => {
     // The cockpit's own reason, kept as it was given: the lock it found.
     expect(failed.error).toContain("db.lock");
     // The agents the installer made are there; only the cockpit failed.
-    expect(failed.bots).toHaveLength(6);
+    expect(failed.bots).toHaveLength(1);
     await expect(agency.open()).rejects.toMatchObject({ code: "cockpit_error" });
     await rm(join(dataDir, "db.lock"));
     const state = await agency.install();
     expect(state.status).toBe("ready");
-    expect(state.bots).toHaveLength(6);
+    expect(state.bots).toHaveLength(1);
     expect(state.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   });
 });
@@ -291,7 +298,7 @@ describe("the agents' tools", () => {
     const state = await agency.install();
     const url = state.dashboardUrl!;
     const { cookie } = await dashboardSession(agency);
-    const acquisition = (await harness.bots.list()).find((bot) => bot.name === "Acquisition")!;
+    const acquisition = (await harness.bots.list()).find((bot) => bot.name === "CEO")!;
     const { runIds } = await harness.threads.send({ botId: acquisition.id }, { text: "Create the client" });
     const tools = toolsOf(turns[0]);
     expect(Object.keys(tools).sort()).toEqual(AGENCY_TOOL_SPECS.map((tool) => tool.name).sort());
@@ -406,7 +413,7 @@ describe("the agents' tools", () => {
     const error = await refused(agency.callTool({ botId: ada.id, threadId: `bot:${ada.id}`, runId: runIds[0]! }, "agency_clients", { action: "list" }));
     expect(error).toContain("only to the agents of the installed agency pack");
     // A pack agent's id with someone else's run is refused too.
-    const director = (await harness.bots.list()).find((bot) => bot.name === "Agency Director")!;
+    const director = (await harness.bots.list()).find((bot) => bot.name === "CEO")!;
     const scoped = await refused(agency.callTool({ botId: director.id, threadId: `bot:${director.id}`, runId: runIds[0]! }, "agency_clients", { action: "list" }));
     expect(scoped).toContain("active run");
   });
@@ -452,7 +459,7 @@ describe("the agents' tools", () => {
     const built = build({ fetchImpl: gate.fetchImpl, abortOnSettle, delayedStop });
     await built.agency.install();
     const { url, cookie } = await dashboardSession(built.agency);
-    const strategist = (await built.harness.bots.list()).find((bot) => bot.name === "Strategist")!;
+    const strategist = (await built.harness.bots.list()).find((bot) => bot.name === "CEO")!;
     await built.harness.threads.send({ botId: strategist.id }, { text: "plan" });
     const tools = toolsOf(built.turns[0]);
     const call = (name: string, args: unknown) => tools[name]!.call(args, { callId: "c", threadId: "t", turnId: "u" });
@@ -467,7 +474,7 @@ describe("the agents' tools", () => {
     const update = call("agency_campaigns", { action: "update", clientId: client.id, campaignId: campaign.id, data: { status: "active" } });
     await reached;
     const before = gate.requests.length;
-    const bot = (await harness.bots.list()).find(value => value.name === "Strategist")!;
+    const bot = (await harness.bots.list()).find(value => value.name === "CEO")!;
     await harness.threads.stop({ botId: bot.id });
     expect((await harness.runs.list()).some(run => run.state === "working")).toBe(true);
     gate.release();
@@ -527,7 +534,7 @@ describe("the agents' tools", () => {
   it("stop revokes the capability mid-turn", async () => {
     const { harness, agency, turns } = build();
     await agency.install();
-    const strategist = (await harness.bots.list()).find((bot) => bot.name === "Strategist")!;
+    const strategist = (await harness.bots.list()).find((bot) => bot.name === "CEO")!;
     await harness.threads.send({ botId: strategist.id }, { text: "research" });
     const tools = toolsOf(turns[0]);
     const skills = await tools.agency_list_skills!.call({}, { callId: "c", threadId: "t", turnId: "u" }) as { count: number };
@@ -542,7 +549,7 @@ describe("skills and documents", () => {
   async function pack(options: Partial<PackFixtureOptions> = {}) {
     const built = build(options);
     await built.agency.install();
-    const strategist = (await built.harness.bots.list()).find((bot) => bot.name === "Strategist")!;
+    const strategist = (await built.harness.bots.list()).find((bot) => bot.name === "CEO")!;
     await built.harness.threads.send({ botId: strategist.id }, { text: "read" });
     const tools = toolsOf(built.turns[0]);
     return { ...built, call: (name: string, args: unknown) => tools[name]!.call(args, { callId: "c", threadId: "t", turnId: "u" }) };
@@ -604,7 +611,8 @@ describe("skills and documents", () => {
     expect(rootListing.kind).toBe("folder");
     expect(rootListing.entries).toEqual(expect.arrayContaining([{ name: "Agents", kind: "folder" }, { name: "AGENTS.md", kind: "file" }]));
     const agents = await call("agency_read_document", { path: "Agents" }) as { entries: Array<{ name: string }> };
-    expect(agents.entries.map((entry) => entry.name)).toContain("Strategist");
+    expect(agents.entries.map((entry) => entry.name)).toContain("CEO");
+    expect(agents.entries.map((entry) => entry.name)).not.toContain("Strategist");
     expect(await refused(call("agency_read_document", { path: "../templates.json" }))).toContain("invalid path");
     expect(await refused(call("agency_read_document", { path: ".trash" }))).toContain("invalid path");
     expect(await refused(call("agency_read_document", { path: "Processes/nope.md" }))).toContain("not found");

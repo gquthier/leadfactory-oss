@@ -101,12 +101,13 @@ describe("Service-based Business company template", () => {
     }
   });
 
-  it("installs real persistent agents, one team and one shared vault without touching the existing brain", async () => {
+  it("resumes a pre-change pending full roster and preserves its agents, team and owner notes", async () => {
     const first = harness();
     const brain = join(root, "state", "brain");
     mkdirSync(brain, { recursive: true });
     writeFileSync(join(brain, "Personal.md"), "keep me\n");
 
+    writeFileSync(join(root, "state", "templates.json"), JSON.stringify({ version: 1, installations: {}, pending: { "service-based-business": { id: "service-based-business", version: 1, startedAt: "2026-09-21T00:00:00Z", bots: {}, welcomes: {} } } }));
     const installed = await first.templates.apply("service-based-business");
     const vault = join(root, "state", "vaults", "service-based-business");
     expect(installed).toMatchObject({

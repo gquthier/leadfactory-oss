@@ -3,9 +3,11 @@ import {
   chmodSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -59,6 +61,8 @@ import { EcommerceService } from "./harness/ecommerce.js";
 import { PackError, type PackService, type PackState } from "./harness/pack.js";
 import { isAgencyToolName } from "./harness/agency-tools.js";
 import { isCommerceToolName } from "./harness/commerce-tools.js";
+import { parseAvatarDataUrl, safeAvatarDataUrl } from "./harness/avatar.js";
+import { newId, newMessageId } from "./harness/ids.js";
 import type { PackHost } from "./harness/pack.js";
 import { publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, type PublicRoutine, type PublicRoutineRun } from "./routines-public.js";
 import { pairingAdminRoute } from "./mobile/admin-routes.js";
@@ -189,6 +193,29 @@ function requiredString(value: unknown, field: string, max: number): string {
   }
   if (value.length > max) throw new HttpError(400, "invalid_payload", `${field} is too long.`);
   return value.trim();
+}
+
+function optionalString(value: unknown, field: string, max: number): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  return requiredString(value, field, max);
+}
+
+const ROLE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const ASSIGNMENT_MARKER = "\n\n<!-- local-bizos-current-assignment -->\n## Current bounded assignment\n";
+
+interface RoleBlueprint {
+  templateId: "lead-gen-agency" | "service-based-business" | "software";
+  slug: string;
+  name: string;
+  title: string;
+  description: string;
+  system: string;
+}
+
+function assignmentInstructions(base: string, context?: string, instructions?: string): string {
+  const blueprint = base.split(ASSIGNMENT_MARKER)[0]!.trim();
+  const assignment = [context, instructions].filter(Boolean).join("\n\n").trim();
+  return assignment ? `${blueprint}${ASSIGNMENT_MARKER}${assignment}` : blueprint;
 }
 
 /** The second brain's refusals, as statuses: everything else stays 400. */
@@ -536,8 +563,61 @@ export class CollaborationFacade {
     return `${readable}-${bot.id.slice(-6).toLowerCase().replace(/[^a-z0-9]/g, "")}`.slice(0, 40);
   }
 
-  private agent(bot: Bot) {
-    return { agentId: this.agentId(bot.id), slug: this.slug(bot), name: bot.name, title: bot.title ?? null };
+  private agent(bot: Bot, desktopBootstrap = false) {
+    const avatar = safeAvatarDataUrl(bot.avatarUrl);
+    return {
+      agentId: this.agentId(bot.id),
+      slug: this.slug(bot),
+      name: bot.name,
+      title: bot.title ?? null,
+      description: bot.description ?? null,
+      avatarKind: avatar ? "upload" as const : "procedural" as const,
+      avatarHash: avatar?.hash ?? null,
+      ...(desktopBootstrap ? { avatarDataUrl: avatar?.dataUrl ?? null } : {}),
+    };
+  }
+
+  /** Resolve a role only from this workspace's verified bound company vault.
+   * Every path component and file is lstat'ed so a user-visible role library
+   * cannot be replaced by a link into another company or arbitrary folder. */
+  private roleBlueprint(roleSlug: string): RoleBlueprint {
+    if (!ROLE_SLUG.test(roleSlug)) throw new HttpError(422, "invalid_role", "role_slug must be a lowercase role slug.");
+    const binding = this.harness.workspaceTemplate.current();
+    if (!binding || !["lead-gen-agency", "service-based-business", "software"].includes(binding.templateId)) {
+      throw new HttpError(409, "role_catalog_unavailable", "The current company has no on-demand role catalog.");
+    }
+    try {
+      const rolesDir = join(binding.path, "Roles");
+      const roleDir = join(rolesDir, roleSlug);
+      const jsonPath = join(roleDir, "role.json");
+      const systemPath = join(roleDir, "system.md");
+      for (const [path, label, kind] of [
+        [binding.path, "bound vault", "directory"],
+        [rolesDir, "Roles", "directory"],
+        [roleDir, `role ${roleSlug}`, "directory"],
+        [jsonPath, "role.json", "file"],
+        [systemPath, "system.md", "file"],
+      ] as const) {
+        const stats = lstatSync(path);
+        if (stats.isSymbolicLink() || (kind === "directory" ? !stats.isDirectory() : !stats.isFile())) {
+          throw new Error(`${label} is not a regular ${kind}`);
+        }
+      }
+      if (realpathSync(roleDir) !== join(realpathSync(rolesDir), roleSlug)) throw new Error("role path leaves Roles");
+      if (lstatSync(jsonPath).size > 8_192 || lstatSync(systemPath).size > 15_000) throw new Error("role data is too large");
+      const raw = JSON.parse(readFileSync(jsonPath, "utf8")) as Record<string, unknown>;
+      const name = requiredString(raw.name, "role name", 60);
+      const title = requiredString(raw.title, "role title", 80);
+      const description = requiredString(raw.description, "role description", 600);
+      const system = readFileSync(systemPath, "utf8").trim();
+      if (raw.version !== 1 || raw.templateId !== binding.templateId || raw.slug !== roleSlug || /[\r\n]/.test(name) || /[\r\n]/.test(title) || !system) {
+        throw new Error("role metadata does not match the bound company");
+      }
+      return { templateId: binding.templateId as RoleBlueprint["templateId"], slug: roleSlug, name, title, description, system };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(422, "invalid_role", `Role ${roleSlug} is missing, linked or corrupt; nothing was recruited.`);
+    }
   }
 
   private clientIdForMessage(messageId: string): string | null {
@@ -636,7 +716,7 @@ export class CollaborationFacade {
         recruitment: { codex: true, claude: true },
       },
       humans: [{ userId: this.userId, displayName: "Local owner", email: null, isSelf: true }],
-      agents: visibleBots.map((bot) => this.agent(bot)),
+      agents: visibleBots.map((bot) => this.agent(bot, true)),
       threads,
       teamEvents: this.index.events.slice(-100),
     };
@@ -1042,14 +1122,13 @@ export class CollaborationFacade {
     const runId = this.internalRunId(publicRunId);
     const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
-    // A stale stop for an ended run must not stop a newer run on this thread.
-    if (publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued") {
-      return this.getRun(publicRunId);
-    }
-    const target = targetForThreadId(run.threadId);
-    if (!target) throw new HttpError(500, "invalid_local_run", "Run thread is invalid.");
-    await this.invoke<void>("lbz:threads:stop", [target]);
+    const active = publicRunState(run.state) === "running" || publicRunState(run.state) === "queued";
+    // Target the run's own mission chain. An ended parent may still own a
+    // recruited child, while a newer unrelated run can share the same DM.
+    const stoppedMission = await this.harness.threads.cancelMission(runId);
+    if (!stoppedMission && active) await this.harness.threads.cancelRun(runId);
     this.teamBroker.revoke(runId);
+    if (!active) return this.getRun(publicRunId);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const stopped = await this.getRun(publicRunId);
       if (stopped.state !== "running" && stopped.state !== "queued") return stopped;
@@ -1304,6 +1383,18 @@ export class CollaborationFacade {
       throw new HttpError(409, "run_not_active", inactiveMessage);
     }
   }
+
+  private async revalidateActiveTeamRun(capability: TeamCapability, inactiveMessage: string): Promise<Run> {
+    const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
+    if (!run || run.botId !== capability.botId || run.threadId !== capability.threadId) {
+      throw new HttpError(403, "invalid_team_scope", "The team capability does not match this turn.");
+    }
+    if (!(["queued", "working", "waiting_input"] as const).includes(run.state as "queued" | "working" | "waiting_input")) {
+      this.teamBroker.revoke(capability.runId);
+      throw new HttpError(409, "run_not_active", inactiveMessage);
+    }
+    return run;
+  }
   removeApp(id: string) { return this.invoke("lbz:apps:remove", [id]); }
   testApp(id: string) { return this.invoke("lbz:apps:test", [id]); }
   loginApp(id: string) { return this.invoke("lbz:apps:login", [id]); }
@@ -1481,62 +1572,199 @@ export class CollaborationFacade {
 
   async recruit(capability: TeamCapability, raw: unknown): Promise<RecruitmentResult> {
     return this.exclusive(async () => {
-      const input = objectBody(raw, ["name", "title", "mission"]);
-      const name = requiredString(input.name, "name", 60);
-      const title = requiredString(input.title, "title", 80);
-      const mission = requiredString(input.mission, "mission", 2_000);
-      const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
-      if (!run || run.botId !== capability.botId || run.threadId !== capability.threadId) {
-        throw new HttpError(403, "invalid_team_scope", "The recruitment capability does not match this turn.");
-      }
-      const fingerprint = JSON.stringify({ name, title, mission });
+      const input = objectBody(raw, ["role_slug", "name", "title", "description", "instructions", "context", "mission", "initial_task", "avatar_data_url"]);
+      const roleSlug = optionalString(input.role_slug, "role_slug", 80);
+      const blueprint = roleSlug ? this.roleBlueprint(roleSlug) : undefined;
+      const legacyMission = optionalString(input.mission, "mission", 2_000);
+      const name = optionalString(input.name, "name", 60) ?? blueprint?.name;
+      const title = optionalString(input.title, "title", 80) ?? blueprint?.title;
+      if (!name || !title) throw new HttpError(400, "invalid_payload", "name and title are required for a custom recruit.");
+      if (/[\r\n]/.test(name) || /[\r\n]/.test(title)) throw new HttpError(400, "invalid_payload", "name and title must be one line.");
+      const description = optionalString(input.description, "description", 600) ?? blueprint?.description ?? legacyMission ?? title;
+      const context = optionalString(input.context, "context", 2_000) ?? legacyMission;
+      const supplemental = optionalString(input.instructions, "instructions", 4_000);
+      const initialTask = optionalString(input.initial_task, "initial_task", 12_000);
+      const baseInstructions = blueprint?.system ?? supplemental ?? `You were recruited locally as ${title}. ${description}`;
+      const instructions = assignmentInstructions(baseInstructions, context, blueprint ? supplemental : undefined);
+      if (instructions.length > 16_000) throw new HttpError(422, "role_too_large", "The role instructions and bounded context exceed the local agent limit.");
+      const avatar = input.avatar_data_url === undefined ? undefined : (() => {
+        try { return parseAvatarDataUrl(input.avatar_data_url); }
+        catch (error) { throw new HttpError(400, "invalid_avatar", error instanceof Error ? error.message : String(error)); }
+      })();
+      await this.revalidateActiveTeamRun(capability, "Recruitment is available only while its run is active.");
+      const fingerprint = JSON.stringify({ roleSlug: roleSlug ?? null, name, title, description, context: context ?? null,
+        supplemental: supplemental ?? null, initialTask: initialTask ?? null, avatarHash: avatar?.hash ?? null });
       const recruitmentId = capability.runId;
       const previous = this.index.recruitments[recruitmentId];
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw new HttpError(409, "recruitment_limit", "One turn may recruit only one teammate.");
-        if (previous.state === "pending") throw new HttpError(409, "idempotency_in_doubt", "The earlier recruitment has an uncertain outcome and will not be repeated.");
-        return previous.result;
-      }
-      if (!(["queued", "working", "waiting_input"] as const).includes(run.state as "queued" | "working" | "waiting_input")) {
-        this.teamBroker.revoke(capability.runId);
-        throw new HttpError(409, "run_not_active", "Recruitment is available only while its run is active.");
+        if (previous.state === "pending" && !previous.plan) throw new HttpError(409, "idempotency_in_doubt", "The earlier legacy recruitment has an uncertain outcome and will not be repeated.");
+        if (previous.state === "pending" && previous.plan) {
+          const existingMessage = await this.harness.threads.message({ botId: previous.plan.botId }, previous.plan.messageId);
+          if (existingMessage) throw new HttpError(409, "idempotency_in_doubt", "The initial task message exists but its launch result was not recorded; it will not be dispatched twice.");
+        }
+        if (previous.state === "pending") {
+          // Continue below from the stable planned identities.
+        } else {
+          return previous.result;
+        }
       }
       const bots = await this.invoke<Bot[]>("lbz:bots:list");
-      if (bots.filter((bot) => !bot.archived).length >= 32) throw new HttpError(409, "team_limit", "The local workspace is limited to 32 active agents.");
-      this.index.recruitments[recruitmentId] = {
-        state: "pending", fingerprint, sourceBotId: capability.botId, sourceRunId: capability.runId,
-        sourceThreadId: capability.threadId, createdAt: new Date().toISOString(),
-      };
-      saveIndex(this.index);
-      const bot = await this.invoke<Bot>("lbz:bots:create", [{
-        name,
-        title,
-        description: mission,
-        instructions: `You were recruited locally for this bounded responsibility: ${mission}`,
-        notifyOnFinish: true,
-      }]);
-      let group: Group;
+      const identity = blueprint ? `${blueprint.templateId}:${blueprint.slug}` : null;
+      const boundRole = identity ? this.index.roleBindings[identity] : undefined;
+      const earlierPendingReservation = boundRole ? Object.values(this.index.recruitments).find((entry) =>
+        entry.state === "pending" && entry.plan?.botId === boundRole.botId && entry.plan.groupId === boundRole.groupId) : undefined;
+      const reservedByEarlierPendingTurn = Boolean(earlierPendingReservation);
+      const recoverableUncreatedRole = earlierPendingReservation?.state === "pending"
+        && earlierPendingReservation.plan?.botCreated !== true ? earlierPendingReservation.plan : undefined;
+      let bot = boundRole ? bots.find((candidate) => candidate.id === boundRole.botId) : undefined;
+      if (boundRole && bot?.archived) {
+        throw new HttpError(409, "role_not_active", "That company role was deleted or suspended and will not be recreated or reactivated implicitly.");
+      }
+
+      const groups = await this.invoke<Group[]>("lbz:groups:list");
+      let existingGroup: Group | undefined;
       if (capability.threadId.startsWith("group:")) {
         const groupId = capability.threadId.slice(6);
-        const existing = (await this.invoke<Group[]>("lbz:groups:list")).find((candidate) => candidate.id === groupId);
-        if (!existing || !existing.memberIds.includes(capability.botId)) throw new HttpError(403, "invalid_team_scope", "Recruiter is not a member of this team.");
-        group = await this.invoke<Group>("lbz:groups:update", [groupId, { memberIds: [...new Set([...existing.memberIds, bot.id])] }]);
+        existingGroup = groups.find((candidate) => candidate.id === groupId && !candidate.archived);
+        if (!existingGroup || !existingGroup.memberIds.includes(capability.botId)) throw new HttpError(403, "invalid_team_scope", "Recruiter is not a member of this team.");
       } else {
-        const recruiter = bots.find((candidate) => candidate.id === capability.botId);
-        if (!recruiter) throw new HttpError(404, "not_found", "Recruiting agent no longer exists.");
-        group = await this.invoke<Group>("lbz:groups:create", [{ name: `${recruiter.name} + ${bot.name}`.slice(0, 60), memberIds: [recruiter.id, bot.id] }]);
+        const recruiterGroupId = this.index.recruiterGroups[capability.botId];
+        const fallbackGroupId = recruiterGroupId ? undefined : boundRole?.groupId;
+        const stableGroupId = recruiterGroupId ?? fallbackGroupId;
+        const candidateGroup = stableGroupId ? groups.find((candidate) => candidate.id === stableGroupId && !candidate.archived) : undefined;
+        existingGroup = candidateGroup?.memberIds.includes(capability.botId) ? candidateGroup : undefined;
+        const recoveringReservedGroup = previous?.state === "pending" && previous.plan?.groupId === stableGroupId;
+        if (recruiterGroupId && (!existingGroup || !existingGroup.memberIds.includes(capability.botId))) {
+          throw new HttpError(409, "role_team_unavailable", "The recruiter's team was deleted, suspended, or lost its recruiter and will not be recreated implicitly.");
+        }
+        if (fallbackGroupId && !candidateGroup && !recoveringReservedGroup && !reservedByEarlierPendingTurn) {
+          throw new HttpError(409, "role_team_unavailable", "The role's team was deleted or suspended and will not be recreated implicitly.");
+        }
+        if (recoveringReservedGroup && candidateGroup && !existingGroup) {
+          throw new HttpError(409, "idempotency_in_doubt", "The reserved team no longer contains the recruiter.");
+        }
       }
-      // The newcomer introduces itself in the team thread right away, so the
-      // person opening that chat finds it already there. The trigger is a
-      // runtime message: part of the record the bots read, never shown.
+      const recruiter = bots.find((candidate) => candidate.id === capability.botId && !candidate.archived);
+      if (!recruiter) throw new HttpError(404, "not_found", "Recruiting agent no longer exists.");
+      const planned = previous?.state === "pending" && previous.plan ? previous.plan : {
+        botId: bot?.id ?? recoverableUncreatedRole?.botId ?? newId("bot"),
+        groupId: existingGroup?.id ?? recoverableUncreatedRole?.groupId ?? newId("grp"),
+        messageId: newMessageId(),
+        botCreated: Boolean(bot),
+      };
+      if (previous?.state === "pending") {
+        if (boundRole && (boundRole.botId !== planned.botId || boundRole.groupId !== planned.groupId)) {
+          throw new HttpError(409, "idempotency_in_doubt", "The reserved role identity no longer matches the pending recruitment.");
+        }
+        bot ??= bots.find((candidate) => candidate.id === planned.botId);
+        if (bot?.archived || (!bot && planned.botCreated === true)) {
+          throw new HttpError(409, "idempotency_in_doubt", "The reserved recruit was created and is now missing or inactive; it will not be recreated implicitly.");
+        }
+      } else if (boundRole && !bot && !recoverableUncreatedRole) {
+        throw new HttpError(409, "role_not_active", "That company role was deleted and will not be recreated implicitly.");
+      }
+      const appliedName = input.name === undefined && bot ? bot.name : name;
+      const appliedTitle = input.title === undefined && bot?.title ? bot.title : title;
+      const appliedDescription = input.description === undefined && bot?.description ? bot.description : description;
+      if (!bot && bots.filter((candidate) => !candidate.archived).length >= 32) throw new HttpError(409, "team_limit", "The local workspace is limited to 32 active agents.");
+
+      if (!previous) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before its identities could be reserved.");
+        this.index.recruitments[recruitmentId] = {
+          state: "pending", fingerprint, sourceBotId: capability.botId, sourceRunId: capability.runId,
+          sourceThreadId: capability.threadId, plan: planned, createdAt: new Date().toISOString(),
+        };
+        if (blueprint && identity) {
+          this.index.roleBindings[identity] = {
+            templateId: blueprint.templateId,
+            roleSlug: blueprint.slug,
+            botId: planned.botId,
+            groupId: planned.groupId,
+          };
+        }
+        this.persistIndex(this.index);
+      }
+      if (!bot) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the agent could be created.");
+        bot = await this.harness.bots.create({
+          name: appliedName,
+          title: appliedTitle,
+          description: appliedDescription,
+          instructions,
+          notifyOnFinish: true,
+          ...(blueprint ? { roleSlug: blueprint.slug } : {}),
+          ...(recruiter.planId ? { planId: recruiter.planId } : {}),
+        }, planned.botId);
+      } else {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the role assignment could be updated.");
+        bot = await this.harness.bots.update(bot.id, {
+          name: appliedName,
+          title: appliedTitle,
+          description: appliedDescription,
+          instructions,
+          ...(recruiter.planId ? { planId: recruiter.planId } : {}),
+        });
+      }
+      await this.revalidateActiveTeamRun(capability, "Recruitment stopped while the agent was being prepared.");
+      let markedCreated = false;
+      for (const pendingRecruitment of Object.values(this.index.recruitments)) {
+        if (pendingRecruitment.state !== "pending" || pendingRecruitment.plan?.botId !== bot.id
+          || pendingRecruitment.plan.botCreated === true) continue;
+        pendingRecruitment.plan.botCreated = true;
+        markedCreated = true;
+      }
+      if (markedCreated) this.persistIndex(this.index);
+      if (blueprint && identity) {
+        this.index.roleAffiliations[bot.id] = { templateId: blueprint.templateId, roleSlug: blueprint.slug };
+        this.persistIndex(this.index);
+      }
+      if (avatar) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the avatar could be set.");
+        bot = await this.harness.bots.setAvatar(bot.id, { dataUrl: avatar.dataUrl });
+      }
+      let group = existingGroup ?? groups.find((candidate) => candidate.id === planned.groupId && !candidate.archived);
+      if (!group) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the team could be created.");
+        group = await this.harness.groups.create({ name: `${recruiter.name} team`.slice(0, 60), memberIds: [recruiter.id, bot.id] }, planned.groupId);
+      } else if (!group.memberIds.includes(bot.id) || !group.memberIds.includes(recruiter.id)) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the team could be updated.");
+        group = await this.harness.groups.update(group.id, { memberIds: [...new Set([...group.memberIds, recruiter.id, bot.id])] });
+      }
+      await this.revalidateActiveTeamRun(capability, "Recruitment stopped while the team was being prepared.");
+      this.index.recruiterGroups[capability.botId] = group.id;
+      if (blueprint && identity) {
+        this.index.roleBindings[identity] = { templateId: blueprint.templateId, roleSlug: blueprint.slug, botId: bot.id, groupId: group.id };
+        this.index.roleAffiliations[bot.id] = { templateId: blueprint.templateId, roleSlug: blueprint.slug };
+      }
+      this.persistIndex(this.index);
+
+      const task = initialTask ?? `Introduce yourself briefly as ${appliedName}, confirm your bounded responsibility (${appliedDescription}), and state the first concrete step you can take.`;
+      let dispatch: RecruitmentResult["dispatch"];
       try {
-        await this.invoke("lbz:threads:send", [{ groupId: group.id }, {
-          text: `Welcome @${bot.name}. You were just created by ${bots.find((row) => row.id === capability.botId)?.name ?? "a teammate"} for this mission: ${mission}. Introduce yourself to the person in two lines, in their language, and say what you will start with.`,
-          mentionBotIds: [bot.id],
-          role: "system",
-        }]);
-      } catch {
-        /* the recruitment stands even when the introduction cannot start */
+        const launched = await this.harness.threads.dispatchChild(
+          { botId: capability.botId, threadId: capability.threadId, runId: capability.runId },
+          { botId: bot.id },
+          { text: task, messageId: planned.messageId },
+        );
+        dispatch = {
+          status: launched.state === "queued" ? "queued"
+            : launched.state === "working" || launched.state === "waiting_input" || launched.state === "completed" ? "started"
+              : "failed",
+          parentRunId: this.runId(capability.runId),
+          runId: this.runId(launched.runId),
+          messageId: this.messageId(launched.messageId),
+          ...(launched.error ? { error: launched.error } : {}),
+        };
+      } catch (error) {
+        const existingMessage = await this.harness.threads.message({ botId: bot.id }, planned.messageId);
+        dispatch = {
+          status: "failed",
+          parentRunId: this.runId(capability.runId),
+          runId: null,
+          messageId: existingMessage ? this.messageId(existingMessage.id) : null,
+          error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+        };
       }
       const event: LocalTeamEvent = {
         eventId: `local:${this.instanceId}:team-event:${randomUUID()}`,
@@ -1557,33 +1785,44 @@ export class CollaborationFacade {
         threadId: this.publicThreadId({ botId: bot.id }),
         teamThreadId: this.publicThreadId({ groupId: group.id }),
         eventId: event.eventId,
+        dispatch,
       };
       this.index.recruitments[recruitmentId] = {
         state: "completed", fingerprint, sourceBotId: capability.botId, sourceRunId: capability.runId,
         sourceThreadId: capability.threadId, createdAt: new Date().toISOString(), result,
       };
       this.index.events = [...this.index.events, event].slice(-1_000);
-      saveIndex(this.index);
+      this.persistIndex(this.index);
       return result;
     });
   }
 
   async manageAgent(capability: TeamCapability, raw: unknown): Promise<AgentManagementResult> {
     return this.exclusive(async () => {
-      const input = objectBody(raw, ["agent_id", "name", "title", "mission", "active"]);
+      const input = objectBody(raw, ["agent_id", "name", "title", "description", "instructions", "context", "mission", "active", "avatar_data_url"]);
       const publicAgentId = requiredString(input.agent_id, "agent_id", 160);
       const targetBotId = this.internalAgentId(publicAgentId);
       if (targetBotId === capability.botId) throw new HttpError(422, "invalid_agent_target", "An agent cannot manage itself through the team tool.");
       const name = input.name === undefined ? undefined : requiredString(input.name, "name", 60);
       const title = input.title === undefined ? undefined : requiredString(input.title, "title", 80);
-      const mission = input.mission === undefined ? undefined : requiredString(input.mission, "mission", 2_000);
-      if (input.active !== undefined && typeof input.active !== "boolean") throw new HttpError(400, "invalid_payload", "active must be a boolean.");
-      if (!name && !title && !mission && input.active === undefined) throw new HttpError(400, "invalid_payload", "At least one bounded agent update is required.");
-      const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
-      if (!run || run.botId !== capability.botId || run.threadId !== capability.threadId) {
-        throw new HttpError(403, "invalid_team_scope", "The management capability does not match this turn.");
+      if ((name && /[\r\n]/.test(name)) || (title && /[\r\n]/.test(title))) {
+        throw new HttpError(400, "invalid_payload", "name and title must be one line.");
       }
-      const fingerprint = JSON.stringify({ publicAgentId, name: name ?? null, title: title ?? null, mission: mission ?? null, active: input.active ?? null });
+      const mission = input.mission === undefined ? undefined : requiredString(input.mission, "mission", 2_000);
+      const description = input.description === undefined ? undefined : requiredString(input.description, "description", 600);
+      const instructions = input.instructions === undefined ? undefined : requiredString(input.instructions, "instructions", 4_000);
+      const context = input.context === undefined ? undefined : requiredString(input.context, "context", 2_000);
+      const avatarProvided = Object.prototype.hasOwnProperty.call(input, "avatar_data_url");
+      const avatar = !avatarProvided || input.avatar_data_url === null ? null : (() => {
+        try { return parseAvatarDataUrl(input.avatar_data_url); }
+        catch (error) { throw new HttpError(400, "invalid_avatar", error instanceof Error ? error.message : String(error)); }
+      })();
+      if (input.active !== undefined && typeof input.active !== "boolean") throw new HttpError(400, "invalid_payload", "active must be a boolean.");
+      if (!name && !title && !description && !instructions && !context && !mission && input.active === undefined && !avatarProvided) throw new HttpError(400, "invalid_payload", "At least one bounded agent update is required.");
+      await this.revalidateActiveTeamRun(capability, "Agent management is available only while its run is active.");
+      const fingerprint = JSON.stringify({ publicAgentId, name: name ?? null, title: title ?? null, description: description ?? null,
+        instructions: instructions ?? null, context: context ?? null, mission: mission ?? null, active: input.active ?? null,
+        avatarHash: avatar?.hash ?? (avatarProvided ? null : undefined) });
       const managementId = `${capability.runId}:${targetBotId}`;
       const previous = this.index.managements[managementId];
       if (previous) {
@@ -1593,10 +1832,6 @@ export class CollaborationFacade {
       }
       const changesThisRun = Object.values(this.index.managements).filter((entry) => entry.sourceRunId === capability.runId).length;
       if (changesThisRun >= 4) throw new HttpError(409, "management_limit", "One run may manage at most four teammates.");
-      if (!(["queued", "working", "waiting_input"] as const).includes(run.state as "queued" | "working" | "waiting_input")) {
-        this.teamBroker.revoke(capability.runId);
-        throw new HttpError(409, "run_not_active", "Agent management is available only while its run is active.");
-      }
       const bots = await this.invoke<Bot[]>("lbz:bots:list");
       const targetBot = bots.find((candidate) => candidate.id === targetBotId);
       if (!targetBot) throw new HttpError(404, "not_found", "Managed agent does not exist.");
@@ -1610,17 +1845,26 @@ export class CollaborationFacade {
           && entry.sourceBotId === capability.botId && entry.result.agent.agentId === publicAgentId);
       }
       if (!inScope) throw new HttpError(403, "invalid_team_scope", "An agent may manage only a teammate in the current group or one it recruited.");
+      await this.revalidateActiveTeamRun(capability, "Agent management stopped before its update could be recorded.");
       this.index.managements[managementId] = {
         state: "pending", fingerprint, sourceBotId: capability.botId, sourceRunId: capability.runId,
         sourceThreadId: capability.threadId, targetBotId, createdAt: new Date().toISOString(),
       };
-      saveIndex(this.index);
-      const updated = await this.invoke<Bot>("lbz:bots:update", [targetBotId, {
+      this.persistIndex(this.index);
+      await this.revalidateActiveTeamRun(capability, "Agent management stopped before the agent could be updated.");
+      let updated = await this.harness.bots.update(targetBotId, {
         ...(name ? { name } : {}),
         ...(title ? { title } : {}),
-        ...(mission ? { description: mission, instructions: `Your current locally assigned responsibility: ${mission}` } : {}),
+        ...(description ? { description } : {}),
+        ...(instructions || context || mission
+          ? { instructions: assignmentInstructions(targetBot.instructions ?? "", context ?? mission, instructions) }
+          : {}),
         ...(typeof input.active === "boolean" ? { archived: !input.active } : {}),
-      }]);
+      });
+      if (avatarProvided) {
+        await this.revalidateActiveTeamRun(capability, "Agent management stopped before the avatar could be updated.");
+        updated = await this.harness.bots.setAvatar(targetBotId, avatar ? { dataUrl: avatar.dataUrl } : null);
+      }
       const event: LocalTeamEvent = {
         eventId: `local:${this.instanceId}:team-event:${randomUUID()}`,
         type: "agent.updated",
@@ -1651,7 +1895,7 @@ export class CollaborationFacade {
         sourceThreadId: capability.threadId, targetBotId, createdAt: new Date().toISOString(), result,
       };
       this.index.events = [...this.index.events, event].slice(-1_000);
-      saveIndex(this.index);
+      this.persistIndex(this.index);
       return result;
     });
   }
@@ -2025,6 +2269,7 @@ async function serve(): Promise<void> {
   // The packs share this harness: their agents are roster bots the generic
   // installer made, their cockpits run on demand in the bound vault and
   // close with the sidecar.
+  const index = durableIndex();
   const packHost: PackHost = {
     rootDir: harnessRoot,
     binding: () => harness.workspaceTemplate.current(),
@@ -2032,13 +2277,16 @@ async function serve(): Promise<void> {
     install: (templateId, rootId) => harness.workspaceTemplate.install(templateId, rootId),
     listBots: () => harness.bots.list(),
     run: (runId) => harness.runs.get(runId),
+    roleBots: (templateId) => Object.fromEntries(Object.entries(index.roleAffiliations)
+      .filter(([, affiliation]) => affiliation.templateId === templateId)
+      .map(([botId, affiliation]) => [affiliation.roleSlug, botId])),
   };
   const log = (line: string) => process.stderr.write(`[localbizos] ${line}\n`);
   packs = {
     agency: new AgencyService({ host: packHost, log }),
     ecommerce: new EcommerceService({ host: packHost, log }),
   };
-  const localFacade = new CollaborationFacade(harness, id, teamBroker, durableIndex(), packs);
+  const localFacade = new CollaborationFacade(harness, id, teamBroker, index, packs);
   await startLocalHarness(harness, existsSync(join(harnessRoot, "settings.json")), () => {
     facade = localFacade;
   });
