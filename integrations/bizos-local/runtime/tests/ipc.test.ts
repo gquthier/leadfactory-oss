@@ -323,6 +323,25 @@ describe("handlers", () => {
     }
   });
 
+  it("accepts only an exact empty path for root reveal on the brain open channel", async () => {
+    const { harness, calls } = fakeHarness();
+    const open = buildHandlers(harness)["lbz:brain:open"]!;
+    expect(await runHandler(open, ["brain", "", "reveal"])).toEqual({ ok: true, value: { ok: true } });
+    expect(calls.at(-1)).toEqual({ name: "brain.open", args: ["brain", "", "reveal"] });
+    for (const args of [
+      ["brain", "", "default"],
+      ["brain", "", "obsidian"],
+      ["brain", undefined, "reveal"],
+      ["brain", null, "reveal"],
+      ["brain", 0, "reveal"],
+    ]) {
+      const result = (await runHandler(open, args)) as IpcEnvelope;
+      expect(result.ok, JSON.stringify(args)).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("invalid_payload");
+    }
+    expect(calls.filter((call) => call.name === "brain.open")).toHaveLength(1);
+  });
+
   it("turns a bad payload into an error envelope, never a throw", async () => {
     const { harness } = fakeHarness();
     const handlers = buildHandlers(harness);

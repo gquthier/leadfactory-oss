@@ -58,6 +58,18 @@ describe("links", () => {
     expect(extractLinkTargets("[[A|alias]] [[B#h]] [c](sub/c.md) [web](https://x.y) [same](#top)")).toEqual(["A", "B", "sub/c.md"]);
   });
 
+  it("ignores code blocks, indented examples, comments and inline link examples, and survives malformed URI escapes", () => {
+    const source = [
+      "[[Good]] [bad](bad%ZZ.md)",
+      "`[[Inline example]]`",
+      "````md", "[[Long fence]]", "````",
+      "~~~", "[[Tilde fence]]", "~~~",
+      "    [[Indented]]",
+      "<!-- [[Commented]] -->",
+    ].join("\n");
+    expect(extractLinkTargets(source)).toEqual(["Good"]);
+  });
+
   it("resolves like Obsidian: relative first, then the shortest note with that name", () => {
     const index = { ids: new Set(["Index.md", "projects/Launch.md", "projects/plan.md", "deep/x/plan.md"]), byBase: new Map([["index.md", ["Index.md"]], ["launch.md", ["projects/Launch.md"]], ["plan.md", ["projects/plan.md", "deep/x/plan.md"]]]) };
     expect(resolveLink("Index", "projects/Launch.md", index)).toBe("Index.md");
@@ -66,7 +78,28 @@ describe("links", () => {
     expect(resolveLink("plan", "projects/Launch.md", index)).toBe("projects/plan.md");
     expect(resolveLink("projects/plan.md", "Index.md", index)).toBe("projects/plan.md");
     expect(resolveLink("plan.md", "deep/x/other.md", index)).toBe("deep/x/plan.md");
+    expect(resolveLink("missing/plan.md", "Index.md", index)).toBeNull();
+    expect(resolveLink("../../Index.md", "projects/Launch.md", index)).toBeNull();
     expect(resolveLink("Nowhere", "Index.md", index)).toBeNull();
+  });
+
+  it("keeps qualified fallback exact, inside the vault and unambiguous", () => {
+    const unique = {
+      ids: new Set(["Index.md", "docs/Visible.md"]),
+      byBase: new Map([["index.md", ["Index.md"]], ["visible.md", ["docs/Visible.md"]]]),
+    };
+    expect(resolveLink("../Index.md", "projects/Source.md", unique)).toBe("Index.md");
+    expect(resolveLink("../../Index.md", "projects/Source.md", unique)).toBeNull();
+    expect(resolveLink("Docs/Visible.md", "Source.md", unique)).toBe("docs/Visible.md");
+    expect(resolveLink("\\docs\\Visible.md", "Source.md", unique)).toBeNull();
+    expect(resolveLink("\\\\server\\Visible.md", "Source.md", unique)).toBeNull();
+    expect(resolveLink("docs/Visible.md\u0007", "Source.md", unique)).toBeNull();
+
+    const collision = {
+      ids: new Set(["docs/Visible.md", "DOCS/Visible.md"]),
+      byBase: new Map([["visible.md", ["docs/Visible.md", "DOCS/Visible.md"]]]),
+    };
+    expect(resolveLink("Docs/Visible.md", "Source.md", collision)).toBeNull();
   });
 });
 
@@ -119,6 +152,89 @@ describe("scanVault", () => {
 
   it("refuses a folder that is not one", () => {
     expect(() => scanVault({ id: "x", label: "Nope", path: join(scratch, "missing") })).toThrow(BrainError);
+  });
+
+  it("links exact inline and bare note filenames without duplicate edges or backlinks", () => {
+    mkdirSync(join(vault, "docs"), { recursive: true });
+    mkdirSync(join(vault, "other"), { recursive: true });
+    writeFileSync(join(vault, "Guide With Spaces.markdown"), "# Guide\n");
+    writeFileSync(join(vault, "docs", "Checklist.txt"), "check\n");
+    writeFileSync(join(vault, "docs", "AGENTS.md"), "# Local instructions\n");
+    writeFileSync(join(vault, "other", "AGENTS.md"), "# Other instructions\n");
+    writeFileSync(join(vault, "projects", "Refs.md"), [
+      "Read `Guide With Spaces.markdown`, `docs/Checklist.txt`, and `../Ideas.md`.",
+      "Then Guide With Spaces.markdown, docs/Checklist.txt, ./plan.md, ../notes.txt, and Index.md.",
+      "The local qualified note is ../docs/AGENTS.md. Refs.md is this note.",
+      "AGENTS.md is ambiguous here. missing/AGENTS.md must not use a basename fallback.",
+    ].join("\n"));
+    writeFileSync(join(vault, "docs", "source.md"), "The folder-local AGENTS.md applies.\n");
+
+    const scan = scanVault(root(), undefined, { obsidian: false });
+    const refs = scan.notes.find((note) => note.id === "projects/Refs.md")!;
+    expect(refs.links).toEqual([
+      "Guide With Spaces.markdown",
+      "docs/Checklist.txt",
+      "Ideas.md",
+      "projects/plan.md",
+      "notes.txt",
+      "Index.md",
+      "docs/AGENTS.md",
+    ]);
+    expect(refs.unresolved).toEqual([]);
+    expect(scan.notes.find((note) => note.id === "docs/source.md")!.links).toEqual(["docs/AGENTS.md"]);
+    expect(scan.graph.edges.filter((edge) => edge.source === "projects/Refs.md" && edge.target === "docs/Checklist.txt")).toHaveLength(1);
+    expect(scan.notes.find((note) => note.id === "docs/Checklist.txt")!.backlinks).toBe(1);
+  });
+
+  it("does not turn examples, URLs, unsafe paths or unindexed filenames into edges or ghosts", () => {
+    writeFileSync(join(vault, "Visible.md"), "# Visible\n");
+    writeFileSync(join(vault, ".hidden.md"), "# Hidden\n");
+    writeFileSync(join(vault, "projects", "Negative.md"), [
+      "```", "Visible.md", "```",
+      "~~~~", "Visible.md", "~~~~",
+      "````text", "Visible.md", "````",
+      "    Visible.md",
+      "<!-- Visible.md -->",
+      "`[[Example]]` and `cat Visible.md` and `Visible.md --help`",
+      "https://example.invalid/Visible.md /Visible.md ../../Visible.md C:\\Visible.md //host/Visible.md",
+      "wrong/Visible.md Missing.md .hidden.md node_modules/pkg/README.md escape.md",
+    ].join("\n"));
+    const note = scanVault(root(), undefined, { obsidian: false }).notes.find((candidate) => candidate.id === "projects/Negative.md")!;
+    expect(note.links).toEqual([]);
+    expect(note.unresolved).toEqual([]);
+  });
+
+  it("keeps explicit wiki and Markdown links when another Markdown URI is malformed", () => {
+    writeFileSync(join(vault, "Good.md"), "# Good\n");
+    writeFileSync(join(vault, "Malformed.md"), "[bad](bad%ZZ.md) [[Good#heading|alias]] [plan](projects/plan.md)\n");
+    const note = scanVault(root(), undefined, { obsidian: false }).notes.find((candidate) => candidate.id === "Malformed.md")!;
+    expect(note.links).toEqual(["Good.md", "projects/plan.md"]);
+    expect(note.unresolved).toEqual([]);
+  });
+
+  it("uses filename boundaries and does not reinterpret explicit-link labels or aliases", () => {
+    writeFileSync(join(vault, "Visible.md"), "# Visible\n");
+    writeFileSync(join(vault, "Other.md"), "# Other\n");
+    writeFileSync(join(vault, "Suffixes.md"), "Visible.md.bak Visible.md2\n");
+    writeFileSync(join(vault, "Labels.md"), "[[Other|Visible.md]] [Visible.md](https://example.invalid/doc)\n");
+    writeFileSync(join(vault, "Markdown code label.md"), "[`Visible.md`](https://example.invalid/doc)\n");
+    writeFileSync(join(vault, "Wiki code alias.md"), "[[Other|`Visible.md`]]\n");
+    writeFileSync(join(vault, "Encoded.md"), "[doc](Visible%2Emd)\n");
+    writeFileSync(join(vault, "Sentence.md"), "Read Visible.md.\n");
+    writeFileSync(join(vault, "Smile😀.md"), "# Emoji\n");
+    writeFileSync(join(vault, "Emoji source.md"), "Read Smile😀.md.\n");
+    writeFileSync(join(vault, "projects", "Mixed.md"), "Read ./.././Ideas.md.\n");
+
+    const scan = scanVault(root(), undefined, { obsidian: false });
+    const links = (id: string) => scan.notes.find((note) => note.id === id)!.links;
+    expect(links("Suffixes.md")).toEqual([]);
+    expect(links("Labels.md")).toEqual(["Other.md"]);
+    expect(links("Markdown code label.md")).toEqual([]);
+    expect(links("Wiki code alias.md")).toEqual(["Other.md"]);
+    expect(links("Encoded.md")).toEqual(["Visible.md"]);
+    expect(links("Sentence.md")).toEqual(["Visible.md"]);
+    expect(links("Emoji source.md")).toEqual(["Smile😀.md"]);
+    expect(links("projects/Mixed.md")).toEqual(["Ideas.md"]);
   });
 });
 
@@ -220,6 +336,7 @@ describe("writeNote", () => {
     expect(refusal(() => writeNote(root(), "image.png", "hello"))).toBe("invalid_payload");
     expect(refusal(() => writeNote(root(), "escape.md", "hello"))).toBe("not_found");
     expect(refusal(() => writeNote(root(), "../outside.md", "hello"))).toBe("invalid_payload");
+    expect(refusal(() => writeNote(root(), "", "hello"))).toBe("invalid_payload");
     expect(refusal(() => writeNote(root(), "projects", "hello"))).toBe("invalid_payload");
     // Nothing above touched a byte.
     expect(readFileSync(join(scratch, "outside.md"), "utf8")).toBe("# secret\n");
@@ -237,6 +354,7 @@ describe("renameEntry", () => {
     expect(refusal(() => renameEntry(root(), "Index.md", "notes.txt"))).toBe("exists");
     expect(refusal(() => renameEntry(root(), "Index.md", "../taken"))).toBe("invalid_payload");
     expect(refusal(() => renameEntry(root(), "../outside.md", "mine"))).toBe("invalid_payload");
+    expect(refusal(() => renameEntry(root(), "", "mine"))).toBe("invalid_payload");
     expect(refusal(() => renameEntry(root(), "escape.md", "mine"))).toBe("not_found");
     expect(refusal(() => renameEntry(root(), "gone.md", "mine"))).toBe("not_found");
     expect(existsSync(join(scratch, "outside.md"))).toBe(true);
@@ -283,6 +401,18 @@ describe("openEntry", () => {
     expect(calls.at(-1)!.args).toEqual([join(realpathSync(vault), "Q4 launch.md")]);
   });
 
+  it("reveals an empty vault root, including when it is shared read-only", () => {
+    const emptyVault = join(scratch, "empty vault");
+    mkdirSync(emptyVault);
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const spawn = (command: string, args: string[]): void => void calls.push({ command, args });
+    const readOnlyRoot = { id: "read", label: "Read only", path: emptyVault, writable: false };
+    expect(openEntry(readOnlyRoot, "", "reveal", { spawn, platform: "darwin" })).toEqual({ ok: true });
+    expect(calls).toEqual([{ command: "/usr/bin/open", args: ["-R", realpathSync(emptyVault)] }]);
+    expect(refusal(() => openEntry(readOnlyRoot, "", "default", { spawn, platform: "darwin" }))).toBe("invalid_payload");
+    expect(refusal(() => openEntry(readOnlyRoot, "", "obsidian", { spawn, platform: "darwin" }))).toBe("invalid_payload");
+  });
+
   it("refuses an unknown mode, a path that is not there, and a Mac that is not one", () => {
     const spawn = (): void => {
       throw new Error("nothing should be opened");
@@ -291,6 +421,7 @@ describe("openEntry", () => {
     expect(refusal(() => openEntry(root(), "Index.md", "shell" as "reveal", options))).toBe("invalid_payload");
     expect(refusal(() => openEntry(root(), "gone.md", "reveal", options))).toBe("not_found");
     expect(refusal(() => openEntry(root(), "escape.md", "reveal", options))).toBe("not_found");
+    expect(refusal(() => openEntry(root(), "../outside.md", "reveal", options))).toBe("invalid_payload");
     expect(refusal(() => openEntry(root(), "Index.md", "reveal", { spawn, platform: "linux" }))).toBe("invalid_payload");
   });
 });

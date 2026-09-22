@@ -147,40 +147,248 @@ function titleOf(id: string, text: string | null): string {
 
 const WIKILINK = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 const MARKDOWN_LINK = /\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+const NOTE_FILENAME = /\.(?:md|markdown|txt)$/i;
+
+interface NoteReference {
+  target: string;
+  kind: "explicit" | "mention";
+}
+
+function masked(value: string): string {
+  return value.replace(/[^\n]/g, " ");
+}
+
+/** Keep prose and inline code separate while dropping blocks that must never
+ * contribute graph edges. This intentionally handles only the Markdown forms
+ * relevant to references: fenced blocks, indented examples and comments. */
+function readableMarkdown(source: string): { prose: string; inline: string[] } {
+  const uncommented = source.replace(/<!--[\s\S]*?(?:-->|$)/g, masked);
+  const inline: string[] = [];
+  const prose: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (const original of uncommented.split("\n")) {
+    const line = original.endsWith("\r") ? original.slice(0, -1) : original;
+    if (fence) {
+      const marker = fence.marker === "`" ? "`" : "~";
+      if (new RegExp(`^[ \\t]{0,3}${marker}{${fence.length},}[ \\t]*$`).test(line)) fence = null;
+      prose.push(" ".repeat(original.length));
+      continue;
+    }
+    const opening = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (opening) {
+      fence = { marker: opening[0] as "`" | "~", length: opening.length };
+      prose.push(" ".repeat(original.length));
+      continue;
+    }
+    if (/^(?: {4}|\t)/.test(line)) {
+      prose.push(" ".repeat(original.length));
+      continue;
+    }
+
+    let visible = "";
+    for (let at = 0; at < line.length;) {
+      if (line[at] !== "`") {
+        visible += line[at];
+        at += 1;
+        continue;
+      }
+      let runEnd = at + 1;
+      while (line[runEnd] === "`") runEnd += 1;
+      const ticks = line.slice(at, runEnd);
+      let close = line.indexOf(ticks, runEnd);
+      while (close >= 0 && (line[close - 1] === "`" || line[close + ticks.length] === "`")) {
+        close = line.indexOf(ticks, close + ticks.length);
+      }
+      if (close < 0) {
+        visible += ticks;
+        at = runEnd;
+        continue;
+      }
+      inline.push(line.slice(runEnd, close));
+      const end = close + ticks.length;
+      visible += " ".repeat(end - at);
+      at = end;
+    }
+    prose.push(visible);
+  }
+  return { prose: prose.join("\n"), inline };
+}
+
+function explicitReferences(prose: string): NoteReference[] {
+  const references: NoteReference[] = [];
+  for (const match of prose.matchAll(WIKILINK)) {
+    const target = match[1]?.trim();
+    if (target) references.push({ target, kind: "explicit" });
+  }
+  for (const match of prose.matchAll(MARKDOWN_LINK)) {
+    const encoded = match[1]?.trim();
+    if (!encoded || /^[a-z][a-z0-9+.-]*:/i.test(encoded) || encoded.startsWith("#") || encoded.startsWith("//")) continue;
+    try {
+      const target = decodeURIComponent(encoded.split("#")[0] ?? encoded);
+      if (target) references.push({ target, kind: "explicit" });
+    } catch {
+      // A malformed percent escape invalidates this reference, not the scan.
+    }
+  }
+  return references;
+}
 
 /** Raw link targets in document order: wikilinks first-class, then relative
  * markdown links. Code is skipped the way Obsidian skips it: a `[[link]]`
  * inside backticks or a fenced block is text about a link, not a link. */
 export function extractLinkTargets(source: string): string[] {
-  const text = source.replace(/```[\s\S]*?```/g, " ").replace(/`[^`\n]*`/g, " ");
-  const targets: string[] = [];
-  for (const match of text.matchAll(WIKILINK)) {
-    const target = match[1]?.trim();
-    if (target) targets.push(target);
-  }
-  for (const match of text.matchAll(MARKDOWN_LINK)) {
-    const target = match[1]?.trim();
-    if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("#")) continue;
-    targets.push(decodeURIComponent(target.split("#")[0] ?? target));
-  }
-  return targets;
+  return explicitReferences(readableMarkdown(source).prose).map((reference) => reference.target);
+}
+
+interface LinkIndex {
+  byBase: Map<string, string[]>;
+  ids: Set<string>;
+}
+
+function insideVault(path: string): boolean {
+  return path !== ".." && !path.startsWith("../") && !posix.isAbsolute(path);
+}
+
+function safeReferenceTarget(target: string): string | null {
+  const value = target.trim();
+  if (!value || /\p{Cc}/u.test(value) || /^[a-z][a-z0-9+.-]*:/i.test(value)) return null;
+  const normalized = value.replace(/\\/g, "/");
+  if (normalized.startsWith("/") || normalized.startsWith("//") || /^[a-z]:\//i.test(normalized)) return null;
+  return normalized;
 }
 
 /**
  * Obsidian's rule, roughly: a wikilink names a note by its title/basename
  * (shortest path wins), a markdown link is relative to the linking note.
  */
-export function resolveLink(target: string, fromId: string, index: { byBase: Map<string, string[]>; ids: Set<string> }): string | null {
-  const cleaned = target.replace(/\\/g, "/").replace(/^\.\//, "");
+export function resolveLink(target: string, fromId: string, index: LinkIndex): string | null {
+  const safe = safeReferenceTarget(target);
+  if (!safe) return null;
+  const cleaned = safe.replace(/^\.\//, "");
   const withExt = extname(cleaned) ? cleaned : `${cleaned}.md`;
   const relativeToNote = posix.normalize(posix.join(posix.dirname(fromId), withExt));
+  if (!insideVault(relativeToNote)) return null;
   if (index.ids.has(relativeToNote)) return relativeToNote;
-  if (index.ids.has(withExt)) return withExt;
-  if (index.ids.has(cleaned)) return cleaned;
+  const rootPath = posix.normalize(withExt);
+  if (insideVault(rootPath) && index.ids.has(rootPath)) return rootPath;
+  if (insideVault(cleaned) && index.ids.has(cleaned)) return cleaned;
   const base = posix.basename(withExt).toLowerCase();
   const candidates = index.byBase.get(base) ?? index.byBase.get(posix.basename(cleaned).toLowerCase()) ?? [];
+  if (cleaned.includes("/") || cleaned.startsWith(".")) {
+    const qualified = new Set([relativeToNote, rootPath, cleaned].filter(insideVault).map((path) => path.toLowerCase()));
+    const foldedMatches = candidates.filter((candidate) => qualified.has(candidate.toLowerCase()));
+    return foldedMatches.length === 1 ? foldedMatches[0] ?? null : null;
+  }
   if (candidates.length === 0) return null;
   return [...candidates].sort((a, b) => a.length - b.length || a.localeCompare(b))[0] ?? null;
+}
+
+const PREVIOUS_PATH_CHARACTER = /[\p{L}\p{N}\p{M}_./\\~%:@#$&=+-]/u;
+const NEXT_PATH_CHARACTER = /[\p{L}\p{N}\p{M}_/\\~%:?#$&=+-]/u;
+
+interface MentionNode {
+  next: Map<string, MentionNode>;
+  terminal: boolean;
+}
+
+/** One bounded matcher is built from the indexed note paths. Each note is
+ * then scanned once through this trie; missing, hidden, skipped and symlinked
+ * files cannot be mentioned because they never enter this index. */
+class MentionMatcher {
+  private readonly root: MentionNode = { next: new Map(), terminal: false };
+
+  constructor(ids: Iterable<string>) {
+    const forms = new Set<string>();
+    for (const id of ids) {
+      const segments = id.split("/");
+      for (let offset = 0; offset < segments.length; offset += 1) {
+        forms.add(segments.slice(offset).join("/"));
+      }
+    }
+    for (const value of forms) {
+      if (!NOTE_FILENAME.test(value)) continue;
+      let node = this.root;
+      for (let at = 0; at < value.length; at += 1) {
+        const character = value[at] ?? "";
+        let next = node.next.get(character);
+        if (!next) {
+          next = { next: new Map(), terminal: false };
+          node.next.set(character, next);
+        }
+        node = next;
+      }
+      node.terminal = true;
+    }
+  }
+
+  private matchAt(text: string, start: number): number | null {
+    if (start > 0 && PREVIOUS_PATH_CHARACTER.test(text[start - 1] ?? "")) return null;
+    let cursor = start;
+    while (text.startsWith("./", cursor) || text.startsWith("../", cursor)) {
+      cursor += text.startsWith("../", cursor) ? 3 : 2;
+    }
+    let node = this.root;
+    let longest: number | null = null;
+    for (let at = cursor; at < text.length; at += 1) {
+      const next = node.next.get(text[at] ?? "");
+      if (!next) break;
+      node = next;
+      const end = at + 1;
+      if (!node.terminal) continue;
+      const following = text[end] ?? "";
+      const afterPeriod = text[end + 1] ?? "";
+      const sentencePeriod = following === "." && (!afterPeriod || /[\s)\]}>,'";:!?]/u.test(afterPeriod));
+      if (!following || sentencePeriod || (following !== "." && !NEXT_PATH_CHARACTER.test(following))) longest = end;
+    }
+    return longest;
+  }
+
+  find(text: string): string[] {
+    const mentions: string[] = [];
+    for (let at = 0; at < text.length;) {
+      const end = this.matchAt(text, at);
+      if (end === null) {
+        at += 1;
+        continue;
+      }
+      mentions.push(text.slice(at, end));
+      at = end;
+    }
+    return mentions;
+  }
+
+  exact(value: string): boolean {
+    const matches = this.find(value);
+    return matches.length === 1 && matches[0] === value;
+  }
+}
+
+function resolveMention(target: string, fromId: string, index: LinkIndex): string | null {
+  const safe = safeReferenceTarget(target);
+  if (!safe || !NOTE_FILENAME.test(safe)) return null;
+  const relativeToNote = posix.normalize(posix.join(posix.dirname(fromId), safe));
+  if (!insideVault(relativeToNote)) return null;
+  if (index.ids.has(relativeToNote)) return relativeToNote;
+  const rootPath = posix.normalize(safe.replace(/^\.\//, ""));
+  if (insideVault(rootPath) && index.ids.has(rootPath)) return rootPath;
+  if (safe.includes("/") || safe.startsWith(".")) return null;
+  const candidates = index.byBase.get(safe.toLowerCase()) ?? [];
+  return candidates.length === 1 ? candidates[0] ?? null : null;
+}
+
+function referencesIn(source: string, matcher: MentionMatcher): NoteReference[] {
+  const explicitReadable = readableMarkdown(source);
+  const references = explicitReferences(explicitReadable.prose);
+  const mentionReadable = readableMarkdown(source.replace(WIKILINK, masked).replace(MARKDOWN_LINK, masked));
+  for (const code of mentionReadable.inline) {
+    const target = code.trim();
+    if (!target.includes("\n") && NOTE_FILENAME.test(target) && matcher.exact(target)) {
+      references.push({ target, kind: "mention" });
+    }
+  }
+  for (const target of matcher.find(mentionReadable.prose)) references.push({ target, kind: "mention" });
+  return references;
 }
 
 interface Found {
@@ -218,6 +426,7 @@ function walk(root: string): { found: Found[]; tree: BrainTreeNode[]; truncated:
     } catch {
       return [];
     }
+    entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) || a.name.localeCompare(b.name));
     const folders: BrainTreeNode[] = [];
     const files: BrainTreeNode[] = [];
     for (const entry of entries) {
@@ -292,6 +501,7 @@ export function scanVault(
     byBase.set(base, [...(byBase.get(base) ?? []), file.id]);
   }
   const index = { byBase, ids };
+  const mentionMatcher = new MentionMatcher(ids);
   const backlinks = new Map<string, number>();
   const notes: BrainNote[] = found.map((file) => {
     let text: string | null = null;
@@ -305,12 +515,14 @@ export function scanVault(
     const links: string[] = [];
     const unresolved: string[] = [];
     if (text) {
-      for (const target of extractLinkTargets(text)) {
-        const resolved = resolveLink(target, file.id, index);
+      for (const reference of referencesIn(text, mentionMatcher)) {
+        const resolved = reference.kind === "explicit"
+          ? resolveLink(reference.target, file.id, index)
+          : resolveMention(reference.target, file.id, index);
         if (resolved && resolved !== file.id) {
           if (!links.includes(resolved)) links.push(resolved);
-        } else if (!resolved && !unresolved.includes(target)) {
-          unresolved.push(target.slice(0, 120));
+        } else if (!resolved && reference.kind === "explicit" && !unresolved.includes(reference.target)) {
+          unresolved.push(reference.target.slice(0, 120));
         }
       }
     }
@@ -602,15 +814,17 @@ export function openEntry(
   options: { spawn?: BrainSpawn; platform?: NodeJS.Platform } = {},
 ): { ok: true } {
   if (!OPEN_MODES.includes(mode)) throw new BrainError("that is not a way to open a note");
-  const entry = entryIn(root, path);
+  const rootReveal = path === "" && mode === "reveal";
+  if (path === "" && !rootReveal) throw new BrainError("that is not an entry in this vault");
+  const absolute = rootReveal ? vaultOf(root) : entryIn(root, path).absolute;
   if ((options.platform ?? process.platform) !== "darwin") {
     throw new BrainError("opening a note outside this app is a macOS feature");
   }
   const args = mode === "reveal"
-    ? ["-R", entry.absolute]
+    ? ["-R", absolute]
     : mode === "default"
-      ? [entry.absolute]
-      : [`obsidian://open?path=${encodeURIComponent(entry.absolute)}`];
+      ? [absolute]
+      : [`obsidian://open?path=${encodeURIComponent(absolute)}`];
   (options.spawn ?? launch)("/usr/bin/open", args);
   return { ok: true };
 }

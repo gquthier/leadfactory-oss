@@ -158,6 +158,15 @@ describe("the Software company template", () => {
 
     const graph = scanVault({ id: "software", label: "Software", path: vault }).graph;
     expect(graph.nodes.filter((node) => node.ghost)).toEqual([]);
+    expect(graph.edges.length).toBeGreaterThan(0);
+    for (const edge of [
+      { source: "AGENTS.md", target: "MISSION.md" },
+      { source: "AGENTS.md", target: "Company.md" },
+      { source: "AGENTS.md", target: "Agents/TEAM.md" },
+      { source: "AGENTS.md", target: "knowledge/KNOWLEDGE-MAP.md" },
+      { source: "processes/feature.md", target: "templates/roadmap.md" },
+      { source: "processes/handoff.md", target: "templates/handoff.md" },
+    ]) expect(graph.edges).toContainEqual(edge);
     expect(readFileSync(join(vault, "scripts", "ops.mjs"), "utf8")).toBe(OPS_SCRIPT);
     expect(statSync(join(vault, "scripts", "ops.mjs")).mode & 0o111).toBe(0);
 

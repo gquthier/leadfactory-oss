@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { scanVault } from "../src/harness/brain.js";
 import { validateTemplate } from "../src/harness/company-os.js";
 import { LocalBizosHarness } from "../src/harness/harness.js";
 import { OPS_SCRIPT } from "../src/harness/template-ops-script.js";
@@ -92,6 +93,16 @@ describe("Service-based Business company template", () => {
     expect(notes.get("Rules.md")).toMatch(/three additional turns|3 continuations/i);
     expect(notes.get("Rules.md")).toMatch(/interrupted.*not.*automatic/is);
     expect(notes.get("Rules.md")).not.toMatch(/24\/7|always online/i);
+
+    const vault = join(root, "service-template");
+    mkdirSync(vault, { recursive: true });
+    for (const note of SERVICE_BASED_BUSINESS.notes) {
+      mkdirSync(join(vault, note.path, ".."), { recursive: true });
+      writeFileSync(join(vault, note.path), note.text);
+    }
+    const graph = scanVault({ id: "service", label: "Service", path: vault }).graph;
+    expect(graph.nodes.filter((node) => node.ghost)).toEqual([]);
+    expect(graph.edges).toContainEqual({ source: "AGENTS.md", target: "Start here.md" });
 
     for (const bot of SERVICE_BASED_BUSINESS.bots) {
       expect(notes.get(`Agents/${bot.name}/AGENTS.md`)).toContain(`${bot.name}.md`);

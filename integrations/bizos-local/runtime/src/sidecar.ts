@@ -236,6 +236,11 @@ function vaultPath(value: unknown, field: string): string {
   return value;
 }
 
+function brainOpenPath(value: unknown, mode: string): string {
+  if (value === "" && mode === "reveal") return "";
+  return requiredString(value, "path", 1024);
+}
+
 function stringList(value: unknown, field: string, max = 64): string[] {
   if (!Array.isArray(value) || value.length > max || value.some((item) => typeof item !== "string" || !item)) {
     throw new HttpError(400, "invalid_payload", `${field} must be a bounded string array.`);
@@ -1569,7 +1574,7 @@ export class CollaborationFacade {
     }
     return this.brainCall("lbz:brain:open", [
       requiredString(input.root, "root", 64),
-      requiredString(input.path, "path", 1024),
+      brainOpenPath(input.path, mode),
       mode,
     ]);
   }

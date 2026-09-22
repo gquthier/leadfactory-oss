@@ -330,6 +330,13 @@ function asVaultPath(value: unknown, field: string): string {
   return value;
 }
 
+/** Only Finder reveal may target the vault itself. Missing values and blank
+ * paths for the other open modes remain malformed transport payloads. */
+function asBrainOpenPath(value: unknown, mode: typeof BRAIN_OPEN_MODES[number]): string {
+  if (value === "" && mode === "reveal") return "";
+  return asString(value, "path", 1024);
+}
+
 /** A note's whole text. Empty is a real note; the byte cap is the harness's
  * (`MAX_NOTE_BYTES`), this is the character guard before it. */
 function asNoteText(value: unknown): string {
@@ -787,12 +794,14 @@ export function buildHandlers(
       ),
     "lbz:brain:trash": (args) =>
       harness.brain.trash(asString(at(args, 0), "rootId", 64), asString(at(args, 1), "path", 1024)),
-    "lbz:brain:open": (args) =>
-      harness.brain.open(
+    "lbz:brain:open": (args) => {
+      const mode = asEnum(at(args, 2), "mode", BRAIN_OPEN_MODES);
+      return harness.brain.open(
         asString(at(args, 0), "rootId", 64),
-        asString(at(args, 1), "path", 1024),
-        asEnum(at(args, 2), "mode", BRAIN_OPEN_MODES),
-      ),
+        asBrainOpenPath(at(args, 1), mode),
+        mode,
+      );
+    },
     // The template catalogue. An id is one of the built-in ones and nothing
     // else: there is no path, no pack and no name in the payload, so a
     // renderer cannot make the harness write anything it does not ship.

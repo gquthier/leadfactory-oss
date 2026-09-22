@@ -16,6 +16,26 @@ The desktop shell is distributed with the corresponding sources alongside the ap
 
 A model and external accounts are supplied by the user. Inference through a personal remote provider is not offline inference. Profiles and client databases must never be added to this repository.
 
+## Second-brain links and Finder reveal
+
+The local graph resolves explicit wiki and Markdown links, plus deterministic
+references to existing `.md`, `.markdown` and `.txt` files. Filename references
+may be exact inline-code spans or explicit paths in prose. Filename mention
+resolution checks the linking note's folder, then the vault root; a bare mention
+links only when the remaining basename match is unique. Explicit wiki links keep
+their legacy bare-basename fallback. The graph does not infer links from
+headings, role names or semantic similarity, and an unresolved filename mention
+does not create a ghost node. Code blocks, indented examples, HTML comments,
+URLs, paths outside the vault and files excluded from the vault index are
+ignored.
+
+The brain open endpoint may reveal the selected vault in Finder only with
+`mode: "reveal"` and the exact empty path `""`. The runtime resolves the opaque
+root id to its already authorized canonical vault and calls `/usr/bin/open` with
+`["-R", vault]`. Empty paths remain invalid for default-app and Obsidian opens,
+and for note read, rename and trash operations. Revealing is also available for
+a vault shared read-only because it does not mutate the vault.
+
 ## Native Ollama connector
 
 The local sidecar can call an already running Ollama server directly at

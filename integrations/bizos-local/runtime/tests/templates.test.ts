@@ -148,6 +148,8 @@ describe("the Lead Gen Agency pack", () => {
     const scan = scanVault({ id: "v", label: "Agency", path: vault });
     expect(scan.notes).toHaveLength(41);
     expect(scan.graph.nodes.filter((node) => node.ghost)).toEqual([]);
+    expect(scan.graph.edges).toContainEqual({ source: "AGENTS.md", target: "Start here.md" });
+    expect(scan.graph.edges).toContainEqual({ source: "Start here.md", target: "Processes/Acquisition.md" });
     expect(readFileSync(join(vault, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
     for (const note of LEAD_GEN_AGENCY.notes) {
       expect(note.text).not.toMatch(/api[_-]?key|sk-[a-z0-9]{8}|Bearer /i);
@@ -1039,5 +1041,36 @@ describe("the bridge and the sidecar", () => {
     expect(await facade.applyBrainTemplate({ id: "lead-gen-agency" })).toMatchObject({ rootId: "vault:lead-gen-agency", created: true });
     expect(await facade.brainTemplates()).toEqual({ templates: [] });
     expect(calls).toEqual(["apply:lead-gen-agency", "list"]);
+  });
+
+  it("validates vault-root reveal at the HTTP facade before invoking IPC", async () => {
+    const calls: unknown[][] = [];
+    const facade = new CollaborationFacade(
+      { brain: { open: async (...args: unknown[]) => { calls.push(args); return { ok: true }; } } } as unknown as LocalBizosHarness,
+      "test",
+      {} as never,
+      emptyDurableIndex(),
+    );
+    await expect(facade.openBrainEntry({ root: "brain", path: "", mode: "reveal" })).resolves.toEqual({ ok: true });
+    expect(calls).toEqual([["brain", "", "reveal"]]);
+    for (const payload of [
+      { root: "brain", path: "", mode: "default" },
+      { root: "brain", path: "", mode: "obsidian" },
+      { root: "brain", mode: "reveal" },
+      { root: "brain", path: null, mode: "reveal" },
+      { root: "brain", path: 0, mode: "reveal" },
+    ]) {
+      try {
+        facade.openBrainEntry(payload);
+        expect.fail("invalid open payload was accepted");
+      } catch (error) {
+        expect(error).toMatchObject({ status: 400, code: "invalid_payload" });
+      }
+    }
+    expect(calls).toHaveLength(1);
+
+    const realFacade = new CollaborationFacade(harnessFor(), "test", {} as never, emptyDurableIndex());
+    await expect(realFacade.openBrainEntry({ root: "unknown", path: "", mode: "reveal" }))
+      .rejects.toMatchObject({ status: 404, code: "not_found" });
   });
 });
