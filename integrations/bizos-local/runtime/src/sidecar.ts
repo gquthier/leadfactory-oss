@@ -683,13 +683,15 @@ export class CollaborationFacade {
   }
 
   async bootstrap() {
-    const [bots, groups, plans, settings, quickChats] = await Promise.all([
+    const [bots, groups, plans, settings, quickChats, inference] = await Promise.all([
       this.invoke<Bot[]>("lbz:bots:list"),
       this.invoke<Group[]>("lbz:groups:list"),
       this.invoke<PublicPlan[]>("lbz:plans:list"),
       this.invoke<RuntimeSettings>("lbz:runtime:getSettings"),
       this.harness.quickChats.list(),
+      this.invoke<{ providers: Array<{ id: string; kind: string }> }>("lbz:inference:list"),
     ]);
+    const selectedExternal = inference.providers.find(provider => provider.id === settings.local.inferenceProviderId);
     const visibleBots = bots.filter((bot) => !bot.archived);
     const visibleGroups = groups.filter((group) => !group.archived);
     const threads = await Promise.all([
@@ -704,16 +706,16 @@ export class CollaborationFacade {
         instanceId: this.instanceId,
         workspaceId: this.workspaceId,
         persistence: "device" as const,
-        runtime: "byo-cli" as const,
+        runtime: "byo-cli-and-ollama" as const,
         cloudOrgId: null,
       },
       session: { userId: this.userId, workspaceId: this.workspaceId, access: "owner" as const },
       capabilities: LOCAL_BACKEND_CAPABILITIES,
       providers: {
         supported: LOCAL_PROVIDERS,
-        configured: [...new Set(plans.filter((plan) => plan.status !== "disconnected").map((plan) => plan.provider))],
-        selected: settings.local.provider ?? null,
-        recruitment: { codex: true, claude: true },
+        configured: [...new Set([...plans.filter((plan) => plan.status !== "disconnected").map((plan) => plan.provider), ...(inference.providers.some(provider => provider.kind === "ollama") ? ["ollama"] : [])])],
+        selected: selectedExternal?.kind === "ollama" ? "ollama" : settings.local.provider ?? null,
+        recruitment: { codex: true, claude: true, ollama: true },
       },
       humans: [{ userId: this.userId, displayName: "Local owner", email: null, isSelf: true }],
       agents: visibleBots.map((bot) => this.agent(bot, true)),
@@ -827,6 +829,8 @@ export class CollaborationFacade {
       agentId: run.threadId.startsWith("chat:") ? null : this.agentId(run.botId),
       triggerMessageId: this.messageId(triggerOverride ?? this.index.runTriggers[run.id] ?? run.messageId ?? `trigger-${run.id}`),
       state,
+      ...(run.inference ? { inference: run.inference } : {}),
+      ...(run.usage ? { usage: run.usage } : {}),
       error: run.error ?? (run.state === "cancelled" ? "cancelled" : null),
       createdAt: run.startedAt,
       updatedAt: run.endedAt ?? run.startedAt,
@@ -1185,7 +1189,7 @@ export class CollaborationFacade {
     const source = settings.local.inferenceProviderId ? "provider" : settings.local.activePlanId ? "plan" : "auto";
     return {
       mode: "local-harness", backendMode: "local", settings, plans, models, tools,
-      providers: { supported: LOCAL_PROVIDERS, recruitment: { codex: true, claude: true } },
+      providers: { supported: LOCAL_PROVIDERS, recruitment: { codex: true, claude: true, ollama: true } },
       inference: {
         source,
         planId: settings.local.activePlanId ?? null,
@@ -1647,12 +1651,18 @@ export class CollaborationFacade {
       }
       const recruiter = bots.find((candidate) => candidate.id === capability.botId && !candidate.archived);
       if (!recruiter) throw new HttpError(404, "not_found", "Recruiting agent no longer exists.");
+      const sourceRun = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
+      const observedBinding = sourceRun?.inference?.kind === "ollama"
+        ? { providerId: sourceRun.inference.providerId, model: sourceRun.inference.model } : undefined;
       const planned = previous?.state === "pending" && previous.plan ? previous.plan : {
         botId: bot?.id ?? recoverableUncreatedRole?.botId ?? newId("bot"),
         groupId: existingGroup?.id ?? recoverableUncreatedRole?.groupId ?? newId("grp"),
         messageId: newMessageId(),
         botCreated: Boolean(bot),
+        ...(recoverableUncreatedRole?.ollamaBinding ?? observedBinding
+          ? { ollamaBinding: recoverableUncreatedRole?.ollamaBinding ?? observedBinding } : {}),
       };
+      const inheritedOllama = planned.ollamaBinding;
       if (previous?.state === "pending") {
         if (boundRole && (boundRole.botId !== planned.botId || boundRole.groupId !== planned.groupId)) {
           throw new HttpError(409, "idempotency_in_doubt", "The reserved role identity no longer matches the pending recruitment.");
@@ -1694,7 +1704,8 @@ export class CollaborationFacade {
           instructions,
           notifyOnFinish: true,
           ...(blueprint ? { roleSlug: blueprint.slug } : {}),
-          ...(recruiter.planId ? { planId: recruiter.planId } : {}),
+          ...(inheritedOllama ? { providerId: inheritedOllama.providerId, model: inheritedOllama.model }
+            : recruiter.planId ? { planId: recruiter.planId } : {}),
         }, planned.botId);
       } else {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the role assignment could be updated.");
@@ -1703,7 +1714,9 @@ export class CollaborationFacade {
           title: appliedTitle,
           description: appliedDescription,
           instructions,
-          ...(recruiter.planId ? { planId: recruiter.planId } : {}),
+          ...(!bot.providerId && !bot.planId && inheritedOllama
+            ? { providerId: inheritedOllama.providerId, model: inheritedOllama.model }
+            : !bot.providerId && !bot.planId && recruiter.planId ? { planId: recruiter.planId } : {}),
         });
       }
       await this.revalidateActiveTeamRun(capability, "Recruitment stopped while the agent was being prepared.");
@@ -2261,9 +2274,9 @@ async function serve(): Promise<void> {
         workspaceDir,
         ...(sharedBrainPath ? { sharedBrainPath } : {}),
         sandbox,
-        supportedProviders: ["codex", "claude", "cursor"],
+        supportedProviders: ["codex", "claude", "cursor", "ollama"],
         peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name })),
-        recruitment: "autonomous-codex-claude",
+        recruitment: "autonomous-local-tools",
       }),
   });
   // The packs share this harness: their agents are roster bots the generic

@@ -1,17 +1,18 @@
-// External inference providers — an API key instead of a ChatGPT / Claude
-// plan.
+// External inference providers. Ollama uses its native loopback API; the
+// other kinds retain the Codex OpenAI-compatible bridge.
 //
 // Codex CLI can talk to any OpenAI-compatible endpoint through its
 // `model_providers` configuration (`base_url`, `env_key`, `wire_api`). That
-// is the whole trick here: a provider the user adds in Settings → Plans &
-// usage becomes a set of `-c` overrides on the codex turn, with the key
-// travelling in the child environment under the variable `env_key` names —
-// never in argv. OpenRouter, Groq, Together, a local Ollama: same path.
+// is the bridge for remote OpenAI-compatible providers: a provider the user
+// adds in Settings → Plans & usage becomes `-c` overrides on a Codex turn,
+// with the key travelling in the child environment, never argv. Ollama
+// bypasses that bridge and calls its loopback native API directly.
 //
 // `providers.json` (0600) holds the keys, next to `apps.json`. Nothing here
 // touches the cloud runtime or a BizOS credential: `local-bizos-oss`.
 import { newId } from "./ids.js";
 import type { Storage } from "./storage.js";
+import { normalizeOllamaUrl, probeOllama, type OllamaModelDetail } from "./ollama.js";
 
 export const PROVIDERS_FILE = "providers.json";
 export const MAX_INFERENCE_PROVIDERS = 12;
@@ -50,11 +51,11 @@ export const INFERENCE_PRESETS: ReadonlyArray<InferencePreset> = [
     kind: "ollama",
     label: "Ollama on this Mac",
     blurb: "Models that run on this computer, no key, no network.",
-    baseUrl: "http://127.0.0.1:11434/v1",
+    baseUrl: "http://127.0.0.1:11434",
     envKey: "OLLAMA_API_KEY",
     wireApi: "chat",
     needsKey: false,
-    model: "llama3.2",
+    model: "",
     docs: "https://ollama.com",
   },
   {
@@ -82,7 +83,7 @@ export interface InferenceProvider {
   model: string;
   createdAt: string;
   updatedAt: string;
-  lastTest?: { at: string; ok: boolean; models: string[]; error?: string };
+  lastTest?: { at: string; ok: boolean; models: string[]; modelDetails?: OllamaModelDetail[]; error?: string };
 }
 
 export type PublicInferenceProvider = Omit<InferenceProvider, "apiKey"> & { hasKey: boolean };
@@ -124,6 +125,9 @@ export function presetFor(kind: InferenceKind): InferencePreset {
 }
 
 export function validateBaseUrl(raw: string, kind: InferenceKind): string {
+  if (kind === "ollama") {
+    try { return normalizeOllamaUrl(raw); } catch (error) { throw new InferenceError(error instanceof Error ? error.message : String(error)); }
+  }
   let url: URL;
   try {
     url = new URL(raw.trim());
@@ -133,7 +137,7 @@ export function validateBaseUrl(raw: string, kind: InferenceKind): string {
   if (url.username || url.password || url.search || url.hash) throw new InferenceError("the API address must be plain: no credentials, no query");
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
-    throw new InferenceError(kind === "ollama" ? "Ollama is reached over http on this Mac only" : "a remote API must use https");
+    throw new InferenceError("a remote API must use https");
   }
   return url.toString().replace(/\/$/, "");
 }
@@ -159,7 +163,7 @@ function normalizeProvider(raw: unknown): InferenceProvider | null {
     id: raw.id,
     kind,
     label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim().slice(0, 60) : preset.label,
-    baseUrl: typeof raw.baseUrl === "string" ? raw.baseUrl : preset.baseUrl,
+    baseUrl: typeof raw.baseUrl === "string" ? (kind === "ollama" ? (() => { try { return normalizeOllamaUrl(raw.baseUrl as string); } catch { return raw.baseUrl as string; } })() : raw.baseUrl) : preset.baseUrl,
     envKey,
     wireApi: raw.wireApi === "responses" ? "responses" : "chat",
     apiKey: typeof raw.apiKey === "string" ? raw.apiKey : "",
@@ -172,6 +176,7 @@ function normalizeProvider(raw: unknown): InferenceProvider | null {
             at: raw.lastTest.at,
             ok: raw.lastTest.ok === true,
             models: Array.isArray(raw.lastTest.models) ? raw.lastTest.models.filter((m): m is string => typeof m === "string") : [],
+            ...(Array.isArray(raw.lastTest.modelDetails) ? { modelDetails: raw.lastTest.modelDetails.filter((m): m is OllamaModelDetail => isRecord(m) && typeof m.id === "string" && Array.isArray(m.capabilities) && (m.locality === "local" || m.locality === "remote" || m.locality === "unknown") && typeof m.chat === "boolean" && typeof m.tools === "boolean").slice(0, 200) } : {}),
             ...(typeof raw.lastTest.error === "string" ? { error: raw.lastTest.error } : {}),
           },
         }
@@ -242,7 +247,11 @@ export class InferenceStore {
       if (!label) throw new InferenceError("a provider needs a name");
       provider.label = label;
     }
-    if (patch.baseUrl !== undefined) provider.baseUrl = validateBaseUrl(patch.baseUrl, provider.kind);
+    if (patch.baseUrl !== undefined) {
+      const nextUrl = validateBaseUrl(patch.baseUrl, provider.kind);
+      if (provider.kind === "ollama" && nextUrl !== provider.baseUrl) delete provider.lastTest;
+      provider.baseUrl = nextUrl;
+    }
     if (patch.apiKey !== undefined) provider.apiKey = validateKey(patch.apiKey);
     if (patch.model !== undefined) provider.model = validateModel(patch.model) || presetFor(provider.kind).model;
     provider.updatedAt = this.nowIso();
@@ -250,13 +259,14 @@ export class InferenceStore {
     return { ...provider };
   }
 
-  recordTest(id: string, result: { ok: boolean; models: string[]; error?: string }): InferenceProvider {
+  recordTest(id: string, result: { ok: boolean; models: string[]; modelDetails?: OllamaModelDetail[]; error?: string }): InferenceProvider {
     const provider = this.providers.find((p) => p.id === id);
     if (!provider) throw new InferenceError("that provider is not added");
     provider.lastTest = {
       at: this.nowIso(),
       ok: result.ok,
       models: result.models.slice(0, 200),
+      ...(result.modelDetails ? { modelDetails: result.modelDetails.slice(0, 200) } : {}),
       ...(result.error ? { error: result.error.slice(0, 400) } : {}),
     };
     this.persist();
@@ -287,7 +297,22 @@ export interface CodexModelProvider {
   model: string;
 }
 
+export interface OllamaExecutionProvider {
+  kind: "ollama";
+  providerId: string;
+  baseUrl: string;
+  model: string;
+}
+export type ExternalExecutionProvider = ({ kind: "codex" } & CodexModelProvider) | OllamaExecutionProvider;
+
+export function executionProviderFor(provider: InferenceProvider): ExternalExecutionProvider {
+  return provider.kind === "ollama"
+    ? { kind: "ollama", providerId: provider.id, baseUrl: normalizeOllamaUrl(provider.baseUrl), model: provider.model }
+    : { kind: "codex", ...codexModelProviderFor(provider) };
+}
+
 export function codexModelProviderFor(provider: InferenceProvider): CodexModelProvider {
+  if (provider.kind === "ollama") throw new InferenceError("Ollama uses the native local driver.");
   const id = `bizos_${provider.kind.replace(/[^a-z0-9]/g, "_")}_${provider.id.slice(4, 12)}`;
   if (!CONFIG_ID.test(id)) throw new InferenceError("provider id is not a config key");
   return {
@@ -306,6 +331,7 @@ export function codexModelProviderFor(provider: InferenceProvider): CodexModelPr
 export interface InferenceProbe {
   ok: boolean;
   models: string[];
+  modelDetails?: OllamaModelDetail[];
   error?: string;
 }
 
@@ -313,6 +339,7 @@ export async function probeInferenceProvider(
   provider: Pick<InferenceProvider, "baseUrl" | "apiKey" | "kind">,
   options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): Promise<InferenceProbe> {
+  if (provider.kind === "ollama") return probeOllama(provider.baseUrl, options);
   const fetchImpl = options.fetchImpl ?? fetch;
   try {
     const response = await fetchImpl(`${provider.baseUrl.replace(/\/$/, "")}/models`, {
@@ -335,9 +362,7 @@ export async function probeInferenceProvider(
     return {
       ok: false,
       models: [],
-      error: provider.kind === "ollama" && /ECONNREFUSED|fetch failed|timeout/i.test(message)
-        ? "Ollama is not running on this Mac (start it, then check again)"
-        : message,
+      error: message,
     };
   }
 }

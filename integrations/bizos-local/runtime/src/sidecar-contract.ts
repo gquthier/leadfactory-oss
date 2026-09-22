@@ -18,7 +18,7 @@ export const LOCAL_BACKEND_CAPABILITIES = {
   sharedWorkspaceContext: false,
 } as const;
 
-export const LOCAL_PROVIDERS = ["codex", "claude", "cursor"] as const;
+export const LOCAL_PROVIDERS = ["codex", "claude", "cursor", "ollama"] as const;
 
 export interface DurableVoiceBinding {
   planId: string;
@@ -132,6 +132,7 @@ export interface DurableRecruitmentPlan {
    * failed before effect and may be retried; true plus a missing bot is a
    * deletion and must not be resurrected. */
   botCreated?: boolean;
+  ollamaBinding?: { providerId: string; model: string };
 }
 
 export interface LocalTeamEvent {
@@ -220,7 +221,10 @@ const ROLE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function validRecruitmentPlan(value: unknown): value is DurableRecruitmentPlan {
   return isRecord(value) && [value.botId, value.groupId, value.messageId]
     .every((entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 160)
-    && (value.botCreated === undefined || typeof value.botCreated === "boolean");
+    && (value.botCreated === undefined || typeof value.botCreated === "boolean")
+    && (value.ollamaBinding === undefined || (isRecord(value.ollamaBinding)
+      && typeof value.ollamaBinding.providerId === "string" && /^prv_[a-z0-9]{6,40}$/.test(value.ollamaBinding.providerId)
+      && typeof value.ollamaBinding.model === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,119}$/.test(value.ollamaBinding.model)));
 }
 
 function validRecruitmentResult(value: unknown): value is RecruitmentResult {

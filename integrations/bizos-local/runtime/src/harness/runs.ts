@@ -44,7 +44,7 @@ export class RunStore {
     return { ...run };
   }
 
-  update(id: string, patch: Partial<Pick<Run, "state" | "error" | "messageId" | "task">>): Run | undefined {
+  update(id: string, patch: Partial<Pick<Run, "state" | "error" | "messageId" | "task" | "inference" | "usage">>): Run | undefined {
     const index = this.runs.findIndex((run) => run.id === id);
     const current = this.runs[index];
     if (index < 0 || !current) return undefined;

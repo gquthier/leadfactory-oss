@@ -334,6 +334,8 @@ export interface Run {
   messageId?: string;
   routineId?: string;
   task?: import("./task.js").TaskCheckpoint;
+  inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" };
+  usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
 }
 
 export type RoutineFrequency = "once" | "daily" | "interval";

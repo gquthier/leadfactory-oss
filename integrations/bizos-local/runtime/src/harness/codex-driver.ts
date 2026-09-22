@@ -161,6 +161,7 @@ export type RuntimeEvent =
   | { type: "request.resolved"; requestId: string; behavior: RequestBehavior; source: RequestSource }
   | { type: "turn.retrying"; attempt: number; delayMs: number; reason: string }
   | { type: "token-usage"; input: number; output: number; cachedInput?: number }
+  | { type: "ollama.model.verified" }
   | { type: "runtime.error"; message: string; setup?: boolean }
   | { type: "turn.completed"; ok: boolean; stopReason: string | null };
 

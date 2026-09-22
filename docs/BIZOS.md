@@ -50,6 +50,27 @@ Les skills locaux peuvent être adaptés dans `skills/` : les agents lisent cett
 
 Les données embarquées se trouvent sous `<coffre>/Apps/LeadFactory/data` ou `<coffre>/Apps/Ecommerce/data`. Pour sauvegarder, utilisez l’export JSON du dashboard ; pour copier manuellement l’ensemble du coffre, fermez d’abord BizOS et son runtime. Conservez la copie hors des dépôts publics.
 
+## Ollama dans BizOS local
+
+Dans **Paramètres → Plans et utilisation**, ajoutez un connecteur Ollama pointant vers
+le serveur déjà lancé sur cette machine (`http://127.0.0.1:11434` par défaut),
+puis lancez le contrôle des modèles. BizOS lit les modèles installés via
+`/api/tags` et leurs capacités via `/api/show`. Choisissez explicitement un
+modèle local compatible chat pour les discussions rapides, ou un modèle qui
+annonce aussi la capacité `tools` pour les agents. Aucun modèle n’est choisi ou
+téléchargé automatiquement ; une sélection supprimée ou devenue distante
+échoue avec une erreur visible.
+
+Les tours Ollama appellent directement `/api/chat` sur l’adresse loopback.
+Ils n’ont besoin ni de CLI Codex/Claude/Cursor, ni de compte, ni de clé API.
+Les agents peuvent utiliser les outils métier et d’équipe que ce runtime leur
+monte réellement, avec les autorisations et STOP existants. Les discussions
+rapides restent textuelles ; Ollama ne reçoit pas de shell, navigateur,
+lecteur de fichiers, applications MCP ou pièces jointes dans ce lot. Les
+routines et les agents recrutés gardent la sélection explicite du modèle.
+Chaque run expose le connecteur et le modèle utilisés, ainsi que les compteurs
+de tokens réellement fournis par Ollama, sans estimation de coût.
+
 ## Tâches vocales locales
 
 La preview vocale délègue chaque demande finalisée à un agent local réel. Le

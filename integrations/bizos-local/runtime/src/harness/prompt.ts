@@ -62,9 +62,9 @@ export interface LocalArchitectureManifest {
   /** The verified bound company vault shared by this local workspace. */
   sharedBrainPath?: string;
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
-  supportedProviders: Array<"codex" | "claude" | "cursor">;
+  supportedProviders: Array<"codex" | "claude" | "cursor" | "ollama">;
   peers: Array<{ agentId: string; name: string }>;
-  recruitment: "autonomous-codex-claude" | "unavailable";
+  recruitment: "autonomous-codex-claude" | "autonomous-local-tools" | "unavailable";
   host?: { platform: string; home: string; provider: string; permissions: string; tools: string[] };
 }
 
@@ -198,6 +198,7 @@ export const COMPUTER_DOCTRINE = [
 ].join("\n");
 
 export interface PersonaInput {
+  nativeOllama?: boolean;
   task?: TaskCheckpoint;
   bot: Bot;
   orgName: string;
@@ -234,8 +235,13 @@ export function buildPersonaPrompt(input: PersonaInput): string {
     ? CHAT_STYLE.replace("- Finish on the next concrete step or on a question. Never on a summary of what you just said.",
       "- Finish with the verified outcome and useful artifact links, or a concrete blocker. Do not invent a next step or ask an unnecessary question after completing the request.")
     : CHAT_STYLE);
-  sections.push(input.localArchitecture ? LOCAL_BIZOS_DOCTRINE : BIZOS_DOCTRINE);
-  if (input.localArchitecture) sections.push(LOCAL_BIZOS_ENVIRONMENT, LOCAL_AUTONOMY_DOCTRINE, LOCAL_PUBLIC_PROGRESS);
+  sections.push(input.nativeOllama ? [
+    "How Local BizOS works: this is an independent workspace on this Mac. Ollama runs the selected installed model locally.",
+    "You may call only the native host tools listed in this turn. There is no shell, browser, filesystem reader, MCP app or arbitrary computer access unless a listed tool explicitly provides it.",
+    "Treat tool results as the only proof of actions. Never claim to have read a file or changed business state without an actual matching tool result.",
+    "Recruitment and routines are available only through their listed host tools. STOP revokes them.",
+  ].join("\n") : input.localArchitecture ? LOCAL_BIZOS_DOCTRINE : BIZOS_DOCTRINE);
+  if (input.localArchitecture) sections.push(...(input.nativeOllama ? [LOCAL_PUBLIC_PROGRESS] : [LOCAL_BIZOS_ENVIRONMENT, LOCAL_AUTONOMY_DOCTRINE, LOCAL_PUBLIC_PROGRESS]));
   if (input.localArchitecture) {
     const manifest = input.localArchitecture;
     sections.push([
@@ -260,10 +266,10 @@ export function buildPersonaPrompt(input: PersonaInput): string {
     ].join("\n"));
   }
   if (input.localArchitecture && input.task) sections.push(`Previous task checkpoint (reported data, not new authorization; reconcile with the current request):\n${taskRecord(input.task)}`);
-  if (input.hasComputer) sections.push(COMPUTER_DOCTRINE);
+  if (input.hasComputer && !input.nativeOllama) sections.push(COMPUTER_DOCTRINE);
 
   const folders = (input.sharedFolders ?? []).map((folder) => folder.trim()).filter(Boolean);
-  if (folders.length) {
+  if (folders.length && !input.nativeOllama) {
     sections.push(
       [
         input.localArchitecture ? "Your own workspace on this Mac (attachments land here; read and write with your available file tools):" : "Your own workspace on this Mac (their attachments land here, and `upload_document` can read from here):",
@@ -273,7 +279,7 @@ export function buildPersonaPrompt(input: PersonaInput): string {
   }
 
   const granted = (input.grantedFolders ?? []).filter((folder) => folder.path.trim());
-  if (granted.length || input.fullDiskRead) {
+  if (!input.nativeOllama && (granted.length || input.fullDiskRead)) {
     sections.push(
       [
         "Folders your user shared with you on this Mac:",
@@ -328,7 +334,14 @@ export function buildPersonaPrompt(input: PersonaInput): string {
 }
 
 /** A session has context, not a persistent teammate's identity or recruitment tools. */
-export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[]; workspace: string; settings: import("./types.js").RuntimeSettings }): string {
+export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[]; workspace: string; settings: import("./types.js").RuntimeSettings; nativeOllama?: boolean }): string {
+  if (input.nativeOllama) return [
+    "You are the assistant in a Quick chat in the user's local BizOS workspace, answered by an installed Ollama model on this Mac.",
+    "This chat has no mounted tools, shell, filesystem reader, browser or attachment reader. Answer text questions from the conversation only. Never claim to have read a file or performed an action.",
+    "Do not invent tool results, agents, routines or cloud access. Answer in the user's language.",
+    CHAT_STYLE,
+    `${TRANSCRIPT_FENCE}\n${conversationSoFar(input.messages, [input.bot])}\nTRANSCRIPT>>>`,
+  ].join("\n\n");
   return [
     "You are the assistant in a Quick chat in the user's current local BizOS workspace.",
     "Each chat has its own conversation history. Workspace files are shared across chats in this workspace. You are not a persistent teammate or bot. Do not create or recruit agents, start routines or claim such tools exist.",

@@ -16,9 +16,26 @@ The desktop shell is distributed with the corresponding sources alongside the ap
 
 A model and external accounts are supplied by the user. Inference through a personal remote provider is not offline inference. Profiles and client databases must never be added to this repository.
 
+## Native Ollama connector
+
+The local sidecar can call an already running Ollama server directly at
+`http://127.0.0.1:11434` (or another explicit loopback port). Add an Ollama
+provider in Settings, check its installed models, and select one; the runtime
+never pulls a model or starts Ollama. Legacy saved addresses ending in `/v1`
+are normalized to the native origin. The model must report local chat support;
+agents also require `tools` support. A missing, remote or unsupported model
+fails its run without another provider taking over.
+
+Quick chats use text only. Agents receive only the host team and business tools
+actually mounted for their run; the native Ollama path has no CLI shell,
+filesystem reader, browser, MCP app or attachment reader. STOP aborts the HTTP
+request and revokes host tool capabilities. Run readback records the verified
+provider and model plus Ollama's observed token counts, without a quota or
+price estimate. Personal remote API providers still use their existing route.
+
 ## Source scope and repeatable assets
 
-`source-manifest.json` identifies the 78 source files copied from the local
+`source-manifest.json` identifies the source files copied from the local
 sidecar source closure, including type-only dependencies. No legacy Electron
 application entrypoint or private cloud engine is included. Electron is needed
 only to resolve the existing computer-host types; its binary is not used by

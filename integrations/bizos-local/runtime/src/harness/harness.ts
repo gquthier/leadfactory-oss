@@ -138,7 +138,7 @@ import { readClaudeUsage } from "./claude-usage.js";
 /** How long a plan's reported usage is trusted before the CLI is asked again. */
 const USAGE_CACHE_MS = 5 * 60_000;
 import {
-  codexModelProviderFor,
+  executionProviderFor,
   INFERENCE_PRESETS,
   InferenceError,
   InferenceStore,
@@ -273,6 +273,7 @@ export interface HarnessOptions {
   deniedDirs?: string[];
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
+  startOllamaTurn?: DispatchDependencies["startOllamaTurn"];
   retryScale?: number;
   /** The build's version, as this machine reports it to the device registry. */
   appVersion?: string;
@@ -349,6 +350,7 @@ export interface LocalToolsStatus extends LocalToolAvailability {
     codex: LocalToolAvailability;
     claude: LocalToolAvailability;
     cursor: LocalToolAvailability;
+    ollama: LocalToolAvailability;
   };
   contexts: {
     agents: LocalToolAvailability;
@@ -373,14 +375,17 @@ export function describeLocalToolsStatus(options: Pick<
     code: "unsupported",
     reason: "Cursor does not support Local BizOS team tools.",
   };
-  const available = codex.available || claude.available;
+  const ollama: LocalToolAvailability = options.localTeamTools
+    ? { available: true, code: "ready", reason: null }
+    : { available: false, code: "not_registered", reason: "Ollama host team tools are not registered in this local harness." };
+  const available = codex.available || claude.available || ollama.available;
   const agents: LocalToolAvailability = available
     ? { available: true, code: "ready", reason: null }
     : { available: false, code: "no_local_team_transport", reason: "No Local BizOS agent team-tool transport is registered and usable." };
   return {
     scope: "local",
     ...agents,
-    transports: { codex, claude, cursor },
+    transports: { codex, claude, cursor, ollama },
     contexts: {
       agents,
       quickChats: {
@@ -561,7 +566,7 @@ export class LocalBizosHarness {
       planProviderOf: (planId) => this.planRegistry.get(planId)?.provider ?? null,
       inferenceProviderById: (id) => {
         const provider = this.inferenceStore.get(id);
-        return provider ? codexModelProviderFor(provider) : null;
+        return provider ? executionProviderFor(provider) : null;
       },
       failoverPlan: ({ cursorKey, failedPlanId, preferredProvider }) =>
         routeFailover({
@@ -581,7 +586,7 @@ export class LocalBizosHarness {
         const id = this.settingsStore.get().local.inferenceProviderId;
         if (!id) return null;
         const provider = this.inferenceStore.get(id);
-        return provider ? codexModelProviderFor(provider) : null;
+        return provider ? executionProviderFor(provider) : null;
       },
       mcpServers: (bot, context) => {
         const access = this.settingsStore.get().access;
@@ -648,6 +653,7 @@ export class LocalBizosHarness {
       // clears `running`, but only for the run that actually holds it.
       onRoutineIdle: (routineId, runId) => this.scheduler.settle(routineId, runId),
       ...(options.startTurn ? { startTurn: options.startTurn } : {}),
+      ...(options.startOllamaTurn ? { startOllamaTurn: options.startOllamaTurn } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
       ...(options.retryScale ? { retryScale: options.retryScale } : {}),
     });
@@ -1389,10 +1395,12 @@ export class LocalBizosHarness {
     update: async (id: string, patch: InferenceProviderPatch): Promise<PublicInferenceProvider> =>
       toPublicProvider(this.inferenceStore.update(id, patch)),
     remove: async (id: string): Promise<{ removed: boolean }> => {
-      const removed = this.inferenceStore.remove(id);
-      if (removed && this.settingsStore.get().local.inferenceProviderId === id) {
-        this.settingsStore.set({ local: { inferenceProviderId: null } });
+      const selected = this.settingsStore.get().local.inferenceProviderId === id;
+      if (this.inferenceStore.get(id)?.kind === "ollama" && selected) {
+        throw new InferenceError("Choose another inference source before removing the selected Ollama connector.");
       }
+      const removed = this.inferenceStore.remove(id);
+      if (removed && selected) this.settingsStore.set({ local: { inferenceProviderId: null } });
       return { removed };
     },
     /** Lists the endpoint's models with the stored key — what a turn will be able to use. */

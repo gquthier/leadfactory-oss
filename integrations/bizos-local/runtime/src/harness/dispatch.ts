@@ -51,7 +51,8 @@ import type { GroupStore } from "./groups.js";
 import { newAskId } from "./ids.js";
 import { resolveGroupTargets } from "./mentions.js";
 import { findMentionedBotIds } from "./mentions.js";
-import type { CodexModelProvider } from "./inference.js";
+import type { ExternalExecutionProvider, OllamaExecutionProvider } from "./inference.js";
+import { startOllamaTurn as defaultStartOllamaTurn, type OllamaTurnInput } from "./ollama-driver.js";
 import type { ConnectedPlan, PlanProvider } from "./plan-types.js";
 import { buildQuickChatPrompt, buildPersonaPrompt, type LocalArchitectureManifest } from "./prompt.js";
 import { redactSecretsInText } from "./redact.js";
@@ -189,9 +190,9 @@ export interface DispatchDependencies {
   mcpServers(bot: Bot, context: TurnContext): Record<string, McpServerSpec>;
   /** The external API-key provider chosen in Settings, when one is: it
    * answers through the codex CLI with `model_providers`, no plan involved. */
-  inferenceProvider?(): CodexModelProvider | null;
+  inferenceProvider?(): ExternalExecutionProvider | null;
   /** A bot's own external provider, by id; null when it no longer exists. */
-  inferenceProviderById?(id: string): CodexModelProvider | null;
+  inferenceProviderById?(id: string): ExternalExecutionProvider | null;
   /** Which family a plan belongs to, for a bot pinned to one. */
   planProviderOf?(planId: string): PlanProvider | null;
   /** Local host-side tools. The callback captures this exact active run. */
@@ -226,6 +227,7 @@ export interface DispatchDependencies {
   startClaudeTurn?: (input: ClaudeTurnInput) => CodexTurnHandle;
   /** Test seam for Cursor print-mode turns. */
   startCursorTurn?: (input: CursorTurnInput) => CodexTurnHandle;
+  startOllamaTurn?: (input: OllamaTurnInput) => CodexTurnHandle;
   environment?: Record<string, string | undefined>;
   retryScale?: number;
 }
@@ -254,6 +256,7 @@ interface QueuedTurn {
   /** Present when a teammate handed this turn over. */
   fromBotId?: string;
   executionPolicy?: TurnExecutionPolicy;
+  ollamaBinding?: OllamaExecutionProvider;
 }
 
 interface ActiveTurn extends QueuedTurn {
@@ -998,15 +1001,26 @@ export class Dispatcher {
     // `PermissionPolicy`.
     const skipPermissions = settings.local.permissions === "skip-all";
     const cursorKey = `${threadId}|${bot.id}`;
-    // The bot's own choices (Agent settings) come before the global ones
-    // (Plans & usage). A plan or provider that no longer exists is ignored.
+    // An explicit external binding must remain exact even after deletion.
     const strictBinding = queued.executionPolicy?.source === "voice" ? queued.executionPolicy.binding : null;
     const ownPlanProvider = strictBinding ? null : bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
     const preferredProvider = strictBinding?.provider ?? ownPlanProvider ?? settings.local.provider;
     // An external endpoint answers through codex and needs no plan at all;
     // otherwise the router picks among the connected plans.
-    const ownExternal = strictBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
-    const external = strictBinding ? null : ownExternal ?? (bot.planId && ownPlanProvider ? null : (this.deps.inferenceProvider?.() ?? null));
+    let ownExternal: ExternalExecutionProvider | null = null;
+    let globalExternal: ExternalExecutionProvider | null = null;
+    try {
+      ownExternal = strictBinding || queued.ollamaBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
+      globalExternal = strictBinding || queued.ollamaBinding || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
+    } catch (error) {
+      this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error)); return;
+    }
+    if (!strictBinding && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
+    const globalProviderId = settings.local.inferenceProviderId;
+    const external = strictBinding ? null : queued.ollamaBinding ?? ownExternal ?? (bot.planId && ownPlanProvider ? null : globalExternal);
+    if (!strictBinding && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
+      this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Settings."); return;
+    }
     const plan = external
       ? null
       : this.deps.resolvePlan?.({
@@ -1019,11 +1033,18 @@ export class Dispatcher {
       this.abandon(queued, bot.id, "The voice task's selected personal plan is no longer available.");
       return;
     }
-    const provider: PlanProvider = external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
+    const provider: PlanProvider | "ollama" = external?.kind === "ollama" ? "ollama" : external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
+    const family = plan?.provider ?? preferredProvider;
+    const model = external
+      ? (queued.ollamaBinding?.model || bot.model?.trim() || external.model || undefined)
+      : (modelForFamily(family, bot.model) ?? modelForFamily(family, settings.local.model));
+    if (provider === "ollama" && !model) { this.abandon(queued, bot.id, "Select an installed Ollama model in Settings."); return; }
 
     let cli: string;
     try {
-      if (provider === "claude") {
+      if (provider === "ollama") {
+        cli = "";
+      } else if (provider === "claude") {
         if (!this.deps.claudePath) throw new Error("`claude` isn't configured for this runtime");
         cli = this.deps.claudePath();
       } else if (provider === "cursor") {
@@ -1045,6 +1066,9 @@ export class Dispatcher {
     const writableRoots = shared.folders
       .filter((folder) => folder.mode === "read-write")
       .map((folder) => folder.path);
+    if (provider === "ollama" && queued.attachments?.length) {
+      this.abandon(queued, bot.id, "Ollama attachments are not supported in this local runtime."); return;
+    }
     const attached = this.materialize(bot, queued.attachments ?? []);
     const message = this.deps.threads.append(threadId, {
       role: "bot",
@@ -1076,10 +1100,6 @@ export class Dispatcher {
     const policyKey = `${cursorKey}|policy`;
     // Under an external provider the plan's model id means nothing: the
     // provider's own default model answers unless the bot names one.
-    const family = plan?.provider ?? preferredProvider;
-    const model = external
-      ? (bot.model ?? external.model ?? undefined)
-      : (modelForFamily(family, bot.model) ?? modelForFamily(family, settings.local.model));
     // Mounted once, used for the fingerprint and the start alike: a tool
     // that appeared since the thread began (a new team tool, an app the
     // person added) must start a fresh thread, or a resumed one never sees it.
@@ -1089,7 +1109,7 @@ export class Dispatcher {
     // else. Mounting none is honest — and the persona below is built from
     // this same empty surface, so a Cursor turn is never told it has team
     // tools it cannot call.
-    const mountedServers = provider === "cursor" ? {} : this.deps.mcpServers(bot, runContext);
+    const mountedServers = provider === "cursor" || provider === "ollama" ? {} : this.deps.mcpServers(bot, runContext);
     const dynamicTools = provider === "cursor" ? undefined : this.deps.dynamicTools?.(bot, runContext);
     const toolSurface = [
       ...Object.keys(mountedServers).map((name) => `mcp:${name}`),
@@ -1108,10 +1128,11 @@ export class Dispatcher {
       model: model ?? null,
       cwd: this.deps.workspaceFor(bot),
       planId: plan?.id ?? null,
-      providerId: external?.id ?? null,
+      providerId: external?.kind === "ollama" ? external.providerId : external?.id ?? null,
+      ...(external?.kind === "ollama" ? { baseUrl: external.baseUrl } : {}),
       tools: toolSurface,
     });
-    const resumeCursor =
+    const resumeCursor = provider === "ollama" ? null :
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
     const persona = this.personaFor(bot, threadId, {
       replayHistory: !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
@@ -1120,6 +1141,7 @@ export class Dispatcher {
 
     const turn: ActiveTurn = {
       ...queued,
+      ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
       policyFingerprint,
       handle: undefined as unknown as CodexTurnHandle,
       message,
@@ -1160,7 +1182,14 @@ export class Dispatcher {
     };
 
     let handle: CodexTurnHandle;
-    if (provider === "cursor") {
+    if (provider === "ollama" && external?.kind === "ollama") {
+      handle = (this.deps.startOllamaTurn ?? defaultStartOllamaTurn)({
+        baseUrl: external.baseUrl, model: model!, system: persona, text: turnText,
+        threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
+        dynamicTools: dynamicTools ?? [],
+        onEvent: (event) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
+      });
+    } else if (provider === "cursor") {
       const start = this.deps.startCursorTurn ?? defaultStartCursorTurn;
       // Built by hand rather than spread from `common`: cursor-agent takes
       // no reasoning effort, no MCP config and no approval callback, and a
@@ -1206,7 +1235,7 @@ export class Dispatcher {
         ...common,
         ...(attached.input.length ? { extraInput: attached.input } : {}),
         ...(writableRoots.length ? { writableRoots } : {}),
-        ...(external ? { modelProvider: external } : {}),
+        ...(external?.kind === "codex" ? { modelProvider: external } : {}),
         mcpServers: dynamicTools ? codexServers : mountedServers,
         ...(dynamicTools ? { dynamicTools } : {}),
         isAlwaysAllowed: skipPermissions
@@ -1339,7 +1368,7 @@ export class Dispatcher {
     if (threadId.startsWith("chat:")) {
       const messages = this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages
         .filter(row => row.id !== runtime.excludeMessageId);
-      return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings() });
+      return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings(), nativeOllama: runtime.provider === "ollama" });
     }
     const target: ThreadTarget = threadId.startsWith("group:")
       ? { groupId: threadId.slice(6) }
@@ -1366,6 +1395,7 @@ export class Dispatcher {
     const previousTask = architecture ? this.deps.runs.list(200).find(run => run.threadId === threadId && run.botId === bot.id && run.task)?.task : undefined;
     return buildPersonaPrompt({
       bot,
+      nativeOllama: runtime.provider === "ollama",
       orgName: this.deps.orgName(),
       ...(group
         ? {
@@ -1380,9 +1410,9 @@ export class Dispatcher {
       since: since.filter((row) => row.blocks.length > 0),
       roster,
       sharedFolders: [this.deps.workspaceFor(bot)],
-      ...(shared.folders.length ? { grantedFolders: shared.folders } : {}),
-      ...(shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(this.deps.hasComputer?.(bot) ? { hasComputer: true } : {}),
+      ...(runtime.provider !== "ollama" && shared.folders.length ? { grantedFolders: shared.folders } : {}),
+      ...(runtime.provider !== "ollama" && shared.fullDiskRead ? { fullDiskRead: true } : {}),
+      ...(runtime.provider !== "ollama" && this.deps.hasComputer?.(bot) ? { hasComputer: true } : {}),
       ...(architecture ? { localArchitecture: {
         ...architecture,
         sandbox: settings.local.permissions === "skip-all" ? "danger-full-access" as const : settings.local.sandbox,
@@ -1429,6 +1459,11 @@ export class Dispatcher {
 
 
     switch (event.type) {
+      case "ollama.model.verified":
+        if (turn.ollamaBinding) this.deps.runs.update(turn.runId, { inference: {
+          kind: "ollama", providerId: turn.ollamaBinding.providerId, model: turn.ollamaBinding.model, locality: "local",
+        } });
+        break;
       case "session.started":
         if (event.sessionId && !turn.discarded) {
           this.cursors[cursorKey] = event.sessionId;
@@ -1594,6 +1629,18 @@ export class Dispatcher {
         });
         this.persist(turn);
         break;
+
+      case "token-usage": {
+        if (!this.deps.runs.get(turn.runId)?.inference) break;
+        const previous = this.deps.runs.get(turn.runId)?.usage;
+        this.deps.runs.update(turn.runId, { usage: {
+          inputTokens: (previous?.inputTokens ?? 0) + event.input,
+          outputTokens: (previous?.outputTokens ?? 0) + event.output,
+          ...((previous?.cachedInputTokens !== undefined || event.cachedInput !== undefined)
+            ? { cachedInputTokens: (previous?.cachedInputTokens ?? 0) + (event.cachedInput ?? 0) } : {}),
+        } });
+        break;
+      }
 
       case "runtime.error": {
         // Whatever the CLI printed reaches a persisted block and the
