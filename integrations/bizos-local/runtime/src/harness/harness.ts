@@ -1455,9 +1455,9 @@ export class LocalBizosHarness {
    * current turn. A missing folder, link at the vault itself (or at the
    * managed `vaults/` parent), or a changed real path returns no capability.
    * No other installed/historical vault is considered. */
-  private verifiedBoundVaultPath(bot?: Bot): string | undefined {
+  private verifiedBoundVaultPath(bot?: Bot, expectedBinding?: WorkspaceBinding): string | undefined {
     if (bot?.id.startsWith("qchat_")) return undefined;
-    const binding = this.bindingOrNull();
+    const binding = expectedBinding ?? this.bindingOrNull();
     if (!binding) return undefined;
     try {
       const managed = LocalBizosHarness.managedBinding(binding);
@@ -2012,6 +2012,13 @@ export class LocalBizosHarness {
    */
   readonly workspaceTemplate = {
     current: (): WorkspaceBinding | null => this.bindingOf(),
+    /** A read-only dashboard may use only the current, verified vault. */
+    verifiedCurrent: (): WorkspaceBinding | null => {
+      const binding = this.bindingOf();
+      if (!binding) return null;
+      if (this.verifiedBoundVaultPath(undefined, binding) !== binding.path) throw new SettingsError("Bound vault is unavailable");
+      return binding;
+    },
     get: async (): Promise<WorkspaceTemplateProjection> => {
       const binding = this.bindingOf();
       return {

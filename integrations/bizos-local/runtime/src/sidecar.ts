@@ -68,6 +68,7 @@ import { publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, 
 import { pairingAdminRoute } from "./mobile/admin-routes.js";
 import { createMobileBackend } from "./mobile/backend.js";
 import { RelayConnector } from "./mobile/connector.js";
+import { readLocalDashboardSummary } from "./dashboard-summary.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_ROOT_VARIABLE = "LOCALBIZOS_SIDECAR_STATE";
@@ -1227,6 +1228,14 @@ export class CollaborationFacade {
   }
 
   bots() { return this.invoke<Bot[]>("lbz:bots:list"); }
+  localDashboardSummary() {
+    return readLocalDashboardSummary({
+      workspaceId: this.workspaceId,
+      binding: () => this.harness.workspaceTemplate.verifiedCurrent(),
+      bots: () => this.bots(),
+      routines: async () => (await this.crons()).items,
+    });
+  }
   async createBot(raw: unknown) {
     const bot = await this.invoke<Bot>("lbz:bots:create", [raw]);
     const bootstrap = await this.bootstrap();
@@ -2000,6 +2009,7 @@ async function serve(): Promise<void> {
         return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
       if (url.pathname === "/api/local/quick-chats" && method === "GET") return sendJson(response, 200, await facade.quickChats("list"));
       if (url.pathname === "/api/local/quick-chats" && method === "POST") return sendJson(response, 201, await facade.createQuickChat(await bodyOf(request)));
       const quickChat = /^\/api\/local\/quick-chats\/(qchat_[a-f0-9]{32})(?:\/(messages|stop|answer))?$/.exec(url.pathname);

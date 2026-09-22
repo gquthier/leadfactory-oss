@@ -36,6 +36,25 @@ root id to its already authorized canonical vault and calls `/usr/bin/open` with
 and for note read, rename and trash operations. Revealing is also available for
 a vault shared read-only because it does not mutate the vault.
 
+## Local dashboard summary
+
+`GET /api/local/dashboard-summary` uses the sidecar's existing bearer token and
+projects only the current verified local workspace. It reads bounded, fixed
+files in the bound vault; it never installs or opens a business cockpit, mints
+a dashboard ticket, runs an ops script, or calls a cloud/third-party service.
+Agency and legacy E-commerce counts come from their persisted local cockpit
+records. Service and Software counts come from initialized `state/*.jsonl`
+operational logs. Agents and routines come from the runtime roster. Lists are
+capped at eight items and contain no contacts, note bodies, connection data,
+credentials or vault paths.
+
+Each section reports `ready`, `empty`, `unavailable`, or `error`. `empty` means
+an initialized source was read successfully and has no records; a missing or
+unsafe source is never displayed as zero. E-commerce finance is explicitly
+the sum of manually entered metrics in the profile's currency over all
+recorded dates, with no profit calculation. Email and finance for other
+templates are unavailable until a dedicated local data source exists.
+
 ## Native Ollama connector
 
 The local sidecar can call an already running Ollama server directly at

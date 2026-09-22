@@ -89,6 +89,10 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
   it("serves status, install, open behind the desktop bearer, and closes everything with the sidecar", async () => {
     // Auth guard untouched: no bearer, no answer.
     expect((await api("GET", "/api/local/agency", undefined, "")).status).toBe(401);
+    expect((await api("GET", "/api/local/dashboard-summary", undefined, "")).status).toBe(401);
+    const unboundSummary = await api("GET", "/api/local/dashboard-summary");
+    expect(unboundSummary.status).toBe(200);
+    expect(unboundSummary.body).toMatchObject({ version: 1, templateId: null, business: { state: "unavailable" }, finance: { state: "unavailable" } });
 
     const before = await api("GET", "/api/local/agency");
     expect(before.status).toBe(200);
@@ -133,6 +137,9 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       expect(bot.slug).toBeTruthy();
     }
     expect(installed.body.teamThreadId).toBeNull();
+    const summary = await api("GET", "/api/local/dashboard-summary");
+    expect(summary.status).toBe(200);
+    expect(summary.body).toMatchObject({ version: 1, templateId: "lead-gen-agency", agents: { total: 1 }, finance: { state: "unavailable" } });
     // The bound vault is the one path the desktop is told; nothing else of
     // this Mac (its state root, its home) leaks into the contract.
     expect(JSON.stringify({ ...installed.body, vaultPath: null })).not.toContain(temp);

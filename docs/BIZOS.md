@@ -36,6 +36,15 @@ Les anciens espaces liés à Company OS ou E-commerce conservent leur identifian
 
 ## Dashboard intégré et agents
 
+Le tableau de bord natif local lit un résumé borné de l'espace actuellement
+lié via `GET /api/local/dashboard-summary`, derrière le jeton du sidecar.
+Les comptes Agence et E-commerce proviennent de leurs fiches locales ; les
+résumés Service et Software proviennent des journaux structurés initialisés
+dans le coffre. Les agents et routines sont ceux réellement enregistrés.
+Les montants E-commerce sont uniquement des relevés saisis à la main, avec
+leur devise ; les autres finances et l'email restent indisponibles sans source
+locale native. Une source absente ou invalide ne devient jamais un faux zéro.
+
 Lead Gen Agency conserve son cockpit métier intégré ; les anciens espaces E-commerce conservent le leur. Service-based Business et Software fonctionnent avec CEO, les spécialistes recrutés au besoin et **Second cerveau → Dossier** ; ce lot ne leur invente pas de CRM ou de dashboard métier. Leur note **Start here** recueille les faits de l’activité. Configurez votre modèle personnel dans les réglages BizOS puis donnez une mission à CEO dans Discussions.
 
 Dans un coffre lié, chaque agent démarre dans `Agents/<Nom>` et reçoit le chemin vérifié du coffre commun comme racine de travail partagée. Un agent recruté rejoint ce même coffre même si un ancien dossier de travail global est configuré. Cette autorisation concerne uniquement le coffre explicitement lié à cet OS local ; aucun autre coffre historique ni la racine d’état du runtime n’est ajouté.
