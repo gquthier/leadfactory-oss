@@ -122,7 +122,9 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     expect(existsSync(join(vault, "AGENTS.md"))).toBe(true);
     expect(existsSync(join(vault, "skills"))).toBe(true);
     expect(installed.body.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(installed.body.bots).toHaveLength(6);
+    expect(installed.body.bots).toHaveLength(1);
+    expect(installed.body.bots[0]).toMatchObject({ name: "CEO", slug: "ceo" });
+    expect(existsSync(join(vault, "Roles", "strategist", "system.md"))).toBe(true);
     const prefix = `local:${descriptor.instanceId}:`;
     for (const bot of installed.body.bots as Array<{ id: string; name: string; slug: string; threadId: string }>) {
       expect(bot.id.startsWith(`${prefix}agent:`)).toBe(true);
@@ -130,7 +132,7 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       expect(bot.name).toBeTruthy();
       expect(bot.slug).toBeTruthy();
     }
-    expect(installed.body.teamThreadId.startsWith(`${prefix}thread:group:`)).toBe(true);
+    expect(installed.body.teamThreadId).toBeNull();
     // The bound vault is the one path the desktop is told; nothing else of
     // this Mac (its state root, its home) leaks into the contract.
     expect(JSON.stringify({ ...installed.body, vaultPath: null })).not.toContain(temp);
@@ -178,11 +180,13 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       expect(agentIds).toContain(bot.id);
       expect(threadIds).toContain(bot.threadId);
     }
-    expect(threadIds).toContain(installed.body.teamThreadId);
+    expect(agentIds).toHaveLength(1);
+    expect(threadIds).toHaveLength(1);
     const director = (bootstrap.body.threads as Array<{ id: string; lastMessage: { content: string } | null }>)
       .find((thread) => thread.id === (installed.body.bots as Array<{ threadId: string }>)[0]!.threadId)!;
     // The pack's own welcome, and an honest one: it claims no work ran.
-    expect(director.lastMessage?.content).toContain("No client work has run yet");
+    expect(director.lastMessage?.content).toContain("only active agent");
+    expect(director.lastMessage?.content).toContain("no team or external action has started yet");
 
     // Internal tool door: no capability, no answer.
     const noCapability = await fetch(new URL("/api/internal/local-team/agency", descriptor.origin), {
