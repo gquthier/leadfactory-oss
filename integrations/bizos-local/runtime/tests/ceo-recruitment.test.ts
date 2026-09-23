@@ -263,6 +263,81 @@ describe("CEO on-demand recruitment", () => {
     expect(recovered.dispatch.status).toBe("started");
   });
 
+  it("reuses the submitted avatar job when the same recruitment recovers after group creation failed", async () => {
+    const f = await fixture();
+    await f.harness.bots.setAvatar(f.ceoId, { dataUrl: PNG });
+    const source = await activeCeoCapability(f);
+    const createGroup = f.harness.groups.create;
+    Object.defineProperty(f.harness.groups, "create", {
+      configurable: true,
+      value: async () => { throw new Error("fixture group creation failed after bot persistence"); },
+    });
+    const request = {
+      role_slug: "creative",
+      initial_task: "Dispatch once after recovery.",
+      avatar_prompt: "Fictional adult creative director, solid orange background.",
+    };
+    await expect(f.facade.recruit(source.capability, request)).rejects.toThrow("fixture group creation failed after bot persistence");
+    const botId = f.index.roleBindings["lead-gen-agency:creative"]!.botId;
+    const claimed = f.harness.avatarGeneration.claim("desktop-main", true).job!;
+    expect(claimed).toMatchObject({ botId, state: "submitting", prompt: request.avatar_prompt });
+    f.harness.avatarGeneration.report({
+      jobId: claimed.id,
+      leaseToken: claimed.leaseToken,
+      event: "submitted",
+      taskId: "kie-paid-task-once",
+    });
+
+    Object.defineProperty(f.harness.groups, "create", { configurable: true, value: createGroup });
+    const recovered = await f.facade.recruit(source.capability, request);
+    expect(recovered.agent.agentId).toBe(`local:${INSTANCE}:agent:${botId}`);
+    const rows = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+    expect(rows.find((row) => row.id === botId)?.avatarGenerationInternal).toMatchObject({
+      jobId: claimed.id,
+      state: "submitted",
+      taskId: "kie-paid-task-once",
+      prompt: request.avatar_prompt,
+    });
+  });
+
+  it("reuses a submitted avatar job when a later recruitment run repeats the identical explicit prompt", async () => {
+    const f = await fixture();
+    await f.harness.bots.setAvatar(f.ceoId, { dataUrl: PNG });
+    const avatarPrompt = "Fictional adult creative director, solid orange background.";
+    const firstSource = await activeCeoCapability(f);
+    const first = await f.facade.recruit(firstSource.capability, {
+      role_slug: "creative",
+      initial_task: "Draft once.",
+      avatar_prompt: avatarPrompt,
+    });
+    const botId = first.agent.agentId.split(":agent:")[1]!;
+    const claimed = f.harness.avatarGeneration.claim("desktop-main", true).job!;
+    expect(claimed).toMatchObject({ botId, prompt: avatarPrompt, state: "submitting" });
+    f.harness.avatarGeneration.report({
+      jobId: claimed.id,
+      leaseToken: claimed.leaseToken,
+      event: "submitted",
+      taskId: "kie-stable-task",
+    });
+    finish(f.turns[1]!);
+    finish(f.turns[0]!);
+
+    const secondSource = await activeCeoCapability(f);
+    const repeated = await f.facade.recruit(secondSource.capability, {
+      role_slug: "creative",
+      initial_task: "Review once.",
+      avatar_prompt: avatarPrompt,
+    });
+    expect(repeated.agent.agentId).toBe(first.agent.agentId);
+    const rows = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+    expect(rows.find((row) => row.id === botId)?.avatarGenerationInternal).toMatchObject({
+      jobId: claimed.id,
+      state: "submitted",
+      taskId: "kie-stable-task",
+      prompt: avatarPrompt,
+    });
+  });
+
   it("copies the recruiter's trusted personal native plan pin to a new role", async () => {
     const f = await fixture();
     await f.harness.bots.update(f.ceoId, { planId: "pln_fixture_primary" });

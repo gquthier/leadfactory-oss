@@ -134,6 +134,14 @@ export function publicAvatarGeneration(value: InternalAvatarGeneration | undefin
   return { status: value.state, ...(value.errorCode ? { errorCode: value.errorCode } : {}) };
 }
 
+function cloneBot(bot: Bot): Bot {
+  return {
+    ...bot,
+    ...(bot.avatarGeneration ? { avatarGeneration: { ...bot.avatarGeneration } } : {}),
+    ...(bot.avatarGenerationInternal ? { avatarGenerationInternal: { ...bot.avatarGenerationInternal } } : {}),
+  };
+}
+
 export function normalizeBot(raw: unknown, index: number): Bot | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
@@ -184,15 +192,22 @@ export class BotStore {
   list(): Bot[] {
     return this.bots.map((bot, index) => ({ bot, index }))
       .sort((a, b) => a.bot.sortOrder - b.bot.sortOrder || a.index - b.index)
-      .map(({ bot }) => ({ ...bot }));
+      .map(({ bot }) => cloneBot(bot));
   }
 
   get(id: string): Bot | undefined {
     const found = this.bots.find((bot) => bot.id === id);
-    return found ? { ...found } : undefined;
+    return found ? cloneBot(found) : undefined;
   }
 
-  private persist(): void { this.storage.writeJson(BOTS_FILE, this.bots); }
+  /** Persist first, then publish the candidate in memory. A failed atomic
+   * write leaves the live roster and every provider lease untouched. */
+  private commit(candidate: Bot[]): void {
+    this.storage.writeJson(BOTS_FILE, candidate);
+    this.bots = candidate;
+  }
+
+  private candidate(): Bot[] { return this.bots.map(cloneBot); }
 
   create(input: CreateBotInput, id?: string): Bot {
     const name = trimmed(input.name, 60);
@@ -226,9 +241,8 @@ export class BotStore {
       sortOrder: this.bots.reduce((highest, row) => Math.max(highest, row.sortOrder + 1), 0),
       createdAt,
     };
-    this.bots.push(bot);
-    this.persist();
-    return { ...bot };
+    this.commit([...this.bots, bot]);
+    return cloneBot(bot);
   }
 
   update(id: string, patch: UpdateBotInput): Bot {
@@ -237,9 +251,10 @@ export class BotStore {
     if (index < 0 || !current) throw new Error("bot not found");
     const next = normalizeBot({ ...current, ...patch, id: current.id }, index);
     if (!next) throw new Error("invalid bot patch");
-    this.bots[index] = next;
-    this.persist();
-    return { ...next };
+    const candidate = this.candidate();
+    candidate[index] = next;
+    this.commit(candidate);
+    return cloneBot(next);
   }
 
   setStatus(id: string, status: BotStatus, lastMessagePreview?: string): Bot | undefined {
@@ -247,25 +262,25 @@ export class BotStore {
     const current = this.bots[index];
     if (index < 0 || !current) return undefined;
     const next: Bot = { ...current, status, ...(lastMessagePreview ? { lastMessagePreview: lastMessagePreview.slice(0, 200) } : {}) };
-    this.bots[index] = next;
-    this.persist();
-    return { ...next };
+    const candidate = this.candidate();
+    candidate[index] = next;
+    this.commit(candidate);
+    return cloneBot(next);
   }
 
   resetTransient(): void {
     let changed = false;
-    this.bots = this.bots.map((bot) => {
+    const candidate: Bot[] = this.bots.map((bot) => {
       if (bot.status === "idle") return bot;
       changed = true;
       return { ...bot, status: "idle" };
     });
-    if (changed) this.persist();
+    if (changed) this.commit(candidate);
   }
 
   remove(id: string): void {
-    const before = this.bots.length;
-    this.bots = this.bots.filter((bot) => bot.id !== id);
-    if (this.bots.length !== before) this.persist();
+    const candidate = this.bots.filter((bot) => bot.id !== id);
+    if (candidate.length !== this.bots.length) this.commit(candidate);
   }
 
   duplicate(id: string, duplicateId = newId("bot")): Bot {
@@ -286,9 +301,8 @@ export class BotStore {
     delete copy.avatarGeneration;
     delete copy.avatarGenerationInternal;
     if (!copy.avatarUrl) copy.avatarGenerationInternal = newGeneration(copy.id, undefined, copy.color, createdAt);
-    this.bots.push(copy);
-    this.persist();
-    return { ...copy };
+    this.commit([...this.bots, copy]);
+    return cloneBot(copy);
   }
 
   setAvatar(id: string, avatar: { dataUrl: string } | { url: string } | null): Bot {
@@ -314,9 +328,10 @@ export class BotStore {
       next.avatarUrl = avatar.url;
       next.avatarKind = "generated";
     }
-    this.bots[index] = next;
-    this.persist();
-    return { ...next };
+    const candidate = this.candidate();
+    candidate[index] = next;
+    this.commit(candidate);
+    return cloneBot(next);
   }
 
   generateAvatar(id: string, prompt?: string): Bot {
@@ -326,15 +341,28 @@ export class BotStore {
     const revision = (current.avatarGenerationInternal?.revision ?? 0) + 1;
     const next: Bot = { ...current, avatarGenerationInternal: newGeneration(id, prompt, current.color, this.clock.nowIso(), revision) };
     delete next.avatarGeneration;
-    this.bots[index] = next;
-    this.persist();
-    return { ...next };
+    const candidate = this.candidate();
+    candidate[index] = next;
+    this.commit(candidate);
+    return cloneBot(next);
+  }
+
+  /** Recruitment is idempotent across runs for the same explicit visual
+   * intent. The settings retry route deliberately calls generateAvatar
+   * directly, so a person can still regenerate with identical text. */
+  ensureAvatarIntent(id: string, prompt: string): Bot {
+    const current = this.bots.find((bot) => bot.id === id);
+    if (!current) throw new Error("bot not found");
+    const normalizedPrompt = generationPrompt(prompt, current.color);
+    if (current.avatarGenerationInternal?.prompt === normalizedPrompt) return cloneBot(current);
+    return this.generateAvatar(id, normalizedPrompt);
   }
 
   claimAvatar(workerId: string, configured: boolean): { job: AvatarWorkerJob | null } {
     const nowMs = this.clock.now().getTime();
+    const candidate = this.candidate();
     let changed = false;
-    for (const bot of this.bots) {
+    for (const bot of candidate) {
       const job = bot.avatarGenerationInternal;
       if (!job?.active) continue;
       const expired = job.leaseExpiresAt !== undefined && Date.parse(job.leaseExpiresAt) <= nowMs;
@@ -357,7 +385,7 @@ export class BotStore {
       }
     }
     if (!configured) {
-      for (const bot of this.bots) {
+      for (const bot of candidate) {
         const job = bot.avatarGenerationInternal;
         if (job?.active && job.state === "pending") {
           job.state = "needs_configuration";
@@ -365,18 +393,18 @@ export class BotStore {
           changed = true;
         }
       }
-      if (changed) this.persist();
+      if (changed) this.commit(candidate);
       return { job: null };
     }
-    const bot = this.bots.find((candidate) => {
-      const job = candidate.avatarGenerationInternal;
+    const bot = candidate.find((row) => {
+      const job = row.avatarGenerationInternal;
       if (!job?.active) return false;
       if (job.state === "pending" || job.state === "needs_configuration") return !job.leaseToken;
       return job.state === "submitted" && (!job.leaseToken || job.leaseWorkerId === workerId);
     });
     const job = bot?.avatarGenerationInternal;
     if (!bot || !job) {
-      if (changed) this.persist();
+      if (changed) this.commit(candidate);
       return { job: null };
     }
     if (job.state === "pending" || job.state === "needs_configuration") job.state = "submitting";
@@ -384,7 +412,7 @@ export class BotStore {
     job.leaseWorkerId = workerId;
     job.leaseExpiresAt = new Date(nowMs + AVATAR_WORKER_LEASE_MS).toISOString();
     job.updatedAt = this.clock.nowIso();
-    this.persist();
+    this.commit(candidate);
     return { job: {
       id: job.jobId,
       botId: bot.id,
@@ -397,7 +425,8 @@ export class BotStore {
   }
 
   reportAvatar(input: AvatarWorkerReport): { ok: true; applied: boolean; status: "submitted" | "ready" | "failed" | "submission_unknown" } {
-    const bot = this.bots.find((candidate) => candidate.avatarGenerationInternal?.jobId === input.jobId);
+    const candidate = this.candidate();
+    const bot = candidate.find((row) => row.avatarGenerationInternal?.jobId === input.jobId);
     const job = bot?.avatarGenerationInternal;
     if (!bot || !job) throw new AvatarGenerationError("avatar_job_not_found", "Avatar generation job was not found.");
     if (!job.leaseToken || job.leaseToken !== input.leaseToken || !job.leaseExpiresAt
@@ -417,7 +446,7 @@ export class BotStore {
       job.taskId = input.taskId;
       job.state = "submitted";
       clearLease();
-      this.persist();
+      this.commit(candidate);
       return { ok: true, applied: job.active, status: "submitted" };
     }
     if (input.event === "ready") {
@@ -430,13 +459,13 @@ export class BotStore {
         bot.avatarUrl = avatar.dataUrl;
         bot.avatarKind = "generated";
       }
-      this.persist();
+      this.commit(candidate);
       return { ok: true, applied, status: "ready" };
     }
     job.state = input.event;
     job.errorCode = input.event === "submission_unknown" ? input.errorCode ?? "submission_outcome_unknown" : input.errorCode;
     clearLease();
-    this.persist();
+    this.commit(candidate);
     return { ok: true, applied: job.active, status: input.event };
   }
 }

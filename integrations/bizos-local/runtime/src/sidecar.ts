@@ -1843,12 +1843,16 @@ export class CollaborationFacade {
         this.index.roleAffiliations[bot.id] = { templateId: blueprint.templateId, roleSlug: blueprint.slug };
         this.persistIndex(this.index);
       }
-      if (avatar && !createdNow) {
+      // A pending recruitment is a recovery of the SAME fingerprint and
+      // stable plan. Creation already persisted its upload/job atomically;
+      // applying the visual intent again could replace a submitted job and
+      // authorize a second paid POST.
+      if (!previous && avatar && !createdNow) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the avatar could be set.");
         bot = await this.harness.bots.setAvatar(bot.id, { dataUrl: avatar.dataUrl });
-      } else if (avatarPrompt && !createdNow) {
+      } else if (!previous && avatarPrompt && !createdNow) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before avatar generation could be requested.");
-        bot = await this.harness.avatarGeneration.generate(bot.id, avatarPrompt);
+        bot = await this.harness.avatarGeneration.ensureIntent(bot.id, avatarPrompt);
       }
       let group = existingGroup ?? groups.find((candidate) => candidate.id === planned.groupId && !candidate.archived);
       if (!group) {

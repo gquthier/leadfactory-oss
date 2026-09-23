@@ -75,6 +75,19 @@ describe("durable automatic avatar generation", () => {
     expect(resumed).toMatchObject({ id: first.id, taskId: "kie-task-1", state: "submitted" });
   });
 
+  it("lets the explicit settings action regenerate with the same prompt", async () => {
+    const { root, harness } = fixture();
+    const prompt = "Fictional adult botanist in a green studio.";
+    const bot = await harness.bots.create({ name: "Ada", avatarPrompt: prompt });
+    const persistedJobId = () => {
+      const rows = JSON.parse(readFileSync(join(root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+      return rows.find((row) => row.id === bot.id)?.avatarGenerationInternal?.jobId as string;
+    };
+    const firstJobId = persistedJobId();
+    await harness.avatarGeneration.generate(bot.id, prompt);
+    expect(persistedJobId()).not.toBe(firstJobId);
+  });
+
   it("never retries an uncertain paid submission after a restart", async () => {
     const { root, clock, harness } = fixture();
     await harness.bots.create({ name: "Ada" });
@@ -104,6 +117,78 @@ describe("durable automatic avatar generation", () => {
     const retry = await harness.avatarGeneration.generate(bot.id, "A fictional adult engineer on a blue background.");
     expect(retry.avatarGeneration).toEqual({ status: "pending" });
     expect(retry.avatarKind).toBe("upload");
+  });
+
+  it("keeps the old image and lease live when persisting a ready report fails", async () => {
+    const { harness } = fixture();
+    const bot = await harness.bots.create({ name: "Ada", avatarDataUrl: PNG });
+    await harness.avatarGeneration.generate(bot.id, "Fictional adult engineer on a blue background.");
+    const claimed = harness.avatarGeneration.claim("desktop-main", true).job!;
+    const writeJson = harness.storage.writeJson.bind(harness.storage);
+    let fail = true;
+    Object.defineProperty(harness.storage, "writeJson", {
+      configurable: true,
+      value: (name: string, value: unknown) => {
+        if (fail && name === "bots.json") {
+          fail = false;
+          throw new Error("simulated bots persistence failure");
+        }
+        return writeJson(name, value);
+      },
+    });
+    try {
+      expect(() => harness.avatarGeneration.report({
+        jobId: claimed.id, leaseToken: claimed.leaseToken, event: "ready", dataUrl: PNG,
+      })).toThrow("simulated bots persistence failure");
+      expect((await harness.bots.list())[0]).toMatchObject({
+        avatarKind: "upload", avatarUrl: PNG, avatarGeneration: { status: "submitting" },
+      });
+    } finally {
+      Object.defineProperty(harness.storage, "writeJson", { configurable: true, value: writeJson });
+    }
+    expect(harness.avatarGeneration.report({
+      jobId: claimed.id, leaseToken: claimed.leaseToken, event: "ready", dataUrl: PNG,
+    })).toMatchObject({ ok: true, applied: true, status: "ready" });
+    expect((await harness.bots.list())[0]).toMatchObject({ avatarKind: "generated", avatarGeneration: { status: "ready" } });
+  });
+
+  it("does not publish a claimed background job when its lease write fails", async () => {
+    const { harness } = fixture();
+    await harness.bots.create({ name: "Ada" });
+    const writeJson = harness.storage.writeJson.bind(harness.storage);
+    Object.defineProperty(harness.storage, "writeJson", {
+      configurable: true,
+      value: (name: string, value: unknown) => {
+        if (name === "bots.json") throw new Error("simulated claim persistence failure");
+        return writeJson(name, value);
+      },
+    });
+    try {
+      expect(() => harness.avatarGeneration.claim("desktop-main", true)).toThrow("simulated claim persistence failure");
+      expect((await harness.bots.list())[0]?.avatarGeneration).toEqual({ status: "pending" });
+    } finally {
+      Object.defineProperty(harness.storage, "writeJson", { configurable: true, value: writeJson });
+    }
+    expect(harness.avatarGeneration.claim("desktop-main", true).job).toMatchObject({ state: "submitting" });
+  });
+
+  it("does not publish a newly created bot or job when their atomic write fails", async () => {
+    const { harness } = fixture();
+    const writeJson = harness.storage.writeJson.bind(harness.storage);
+    Object.defineProperty(harness.storage, "writeJson", {
+      configurable: true,
+      value: (name: string, value: unknown) => {
+        if (name === "bots.json") throw new Error("simulated create persistence failure");
+        return writeJson(name, value);
+      },
+    });
+    try {
+      await expect(harness.bots.create({ name: "Ada" })).rejects.toThrow("simulated create persistence failure");
+      expect(await harness.bots.list()).toEqual([]);
+      expect(harness.avatarGeneration.claim("desktop-main", true)).toEqual({ job: null });
+    } finally {
+      Object.defineProperty(harness.storage, "writeJson", { configurable: true, value: writeJson });
+    }
   });
 
   it("fails closed when persisted generation state is malformed", async () => {

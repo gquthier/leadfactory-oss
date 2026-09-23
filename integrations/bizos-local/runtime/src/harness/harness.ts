@@ -2982,6 +2982,8 @@ export class LocalBizosHarness {
     report: (input: AvatarWorkerReport) => this.botStore.reportAvatar(input),
     generate: async (id: string, avatarPrompt?: string): Promise<Bot> =>
       this.decorate(this.botStore.generateAvatar(id, avatarPrompt)),
+    ensureIntent: async (id: string, avatarPrompt: string): Promise<Bot> =>
+      this.decorate(this.botStore.ensureAvatarIntent(id, avatarPrompt)),
   };
 
   /** Mark, in every journal that names it, a bot the person deleted. Best
