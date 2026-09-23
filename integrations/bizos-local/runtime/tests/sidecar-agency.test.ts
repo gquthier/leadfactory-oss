@@ -230,8 +230,8 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     const director = (bootstrap.body.threads as Array<{ id: string; lastMessage: { content: string } | null }>)
       .find((thread) => thread.id === (installed.body.bots as Array<{ threadId: string }>)[0]!.threadId)!;
     // The pack's own welcome, and an honest one: it claims no work ran.
-    expect(director.lastMessage?.content).toContain("only active agent");
-    expect(director.lastMessage?.content).toContain("no team or external action has started yet");
+    expect(director.lastMessage?.content).toContain("je recrute un spécialiste seulement si c’est utile");
+    expect(director.lastMessage?.content).toContain("Rien n’est encore lancé.");
 
     // Internal tool door: no capability, no answer.
     const noCapability = await fetch(new URL("/api/internal/local-team/agency", descriptor.origin), {
