@@ -1995,6 +1995,12 @@ export class CollaborationFacade {
           ? { ollamaBinding: recoverableUncreatedRole?.ollamaBinding ?? observedBinding } : {}),
       };
       const inheritedOllama = planned.ollamaBinding;
+      // An API-backed recruiter (Gemini, OpenRouter…) hands its provider and
+      // model to the recruit, so the teammate starts working on the same
+      // provider instead of waiting for a plan nobody connected.
+      const inheritedApi = !inheritedOllama && sourceRun?.inference?.kind === "api"
+        ? { providerId: sourceRun.inference.providerId, model: sourceRun.inference.model }
+        : !inheritedOllama && recruiter.providerId ? { providerId: recruiter.providerId, ...(recruiter.model ? { model: recruiter.model } : {}) } : undefined;
       if (previous?.state === "pending") {
         if (boundRole && (boundRole.botId !== planned.botId || boundRole.groupId !== planned.groupId)) {
           throw new HttpError(409, "idempotency_in_doubt", "The reserved role identity no longer matches the pending recruitment.");
@@ -2040,6 +2046,7 @@ export class CollaborationFacade {
           ...(avatarPrompt ? { avatarPrompt } : {}),
           ...(avatar ? { avatarDataUrl: avatar.dataUrl } : {}),
           ...(inheritedOllama ? { providerId: inheritedOllama.providerId, model: inheritedOllama.model }
+            : inheritedApi ? inheritedApi
             : recruiter.planId ? { planId: recruiter.planId } : {}),
         }, planned.botId);
       } else {
@@ -2051,6 +2058,7 @@ export class CollaborationFacade {
           instructions,
           ...(!bot.providerId && !bot.planId && inheritedOllama
             ? { providerId: inheritedOllama.providerId, model: inheritedOllama.model }
+            : !bot.providerId && !bot.planId && inheritedApi ? inheritedApi
             : !bot.providerId && !bot.planId && recruiter.planId ? { planId: recruiter.planId } : {}),
         });
       }

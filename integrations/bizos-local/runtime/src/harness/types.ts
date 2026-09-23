@@ -378,7 +378,8 @@ export interface Run {
    * exactly [SILENT] and published nothing. */
   outcome?: RoutineRunOutcome;
   task?: import("./task.js").TaskCheckpoint;
-  inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" };
+  inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" }
+    | { kind: "api"; providerId: string; model: string; locality: "remote" };
   usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
   /** Last write to this record (checkpoint, state, usage). */
   updatedAt?: string;

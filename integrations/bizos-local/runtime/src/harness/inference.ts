@@ -1,12 +1,12 @@
-// External inference providers. Ollama uses its native loopback API; the
-// other kinds retain the Codex OpenAI-compatible bridge.
+// External inference providers. Ollama uses its native loopback API;
+// OpenRouter and other OpenAI-compatible APIs (Gemini, Groq, …) use the
+// native chat-completions driver (`openai-driver.ts`).
 //
-// Codex CLI can talk to any OpenAI-compatible endpoint through its
-// `model_providers` configuration (`base_url`, `env_key`, `wire_api`). That
-// is the bridge for remote OpenAI-compatible providers: a provider the user
-// adds in Settings → Plans & usage becomes `-c` overrides on a Codex turn,
-// with the key travelling in the child environment, never argv. Ollama
-// bypasses that bridge and calls its loopback native API directly.
+// Codex CLI used to be the bridge for those (`model_providers` with
+// `wire_api = "chat"`), but Codex 0.155 refuses `wire_api = "chat"` outright,
+// so a Chat Completions endpoint can no longer be reached through it. Only a
+// provider stored with `wireApi: "responses"` still goes through Codex (`-c`
+// overrides, key in the child environment, never argv).
 //
 // `providers.json` (0600) holds the keys, next to `apps.json`. Nothing here
 // touches the cloud runtime or a BizOS credential: `local-bizos-oss`.
@@ -303,12 +303,21 @@ export interface OllamaExecutionProvider {
   baseUrl: string;
   model: string;
 }
-export type ExternalExecutionProvider = ({ kind: "codex" } & CodexModelProvider) | OllamaExecutionProvider;
+/** A Chat Completions API answered by the native driver. */
+export interface ApiExecutionProvider {
+  kind: "api";
+  providerId: string;
+  label: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+export type ExternalExecutionProvider = ({ kind: "codex" } & CodexModelProvider) | OllamaExecutionProvider | ApiExecutionProvider;
 
 export function executionProviderFor(provider: InferenceProvider): ExternalExecutionProvider {
-  return provider.kind === "ollama"
-    ? { kind: "ollama", providerId: provider.id, baseUrl: normalizeOllamaUrl(provider.baseUrl), model: provider.model }
-    : { kind: "codex", ...codexModelProviderFor(provider) };
+  if (provider.kind === "ollama") return { kind: "ollama", providerId: provider.id, baseUrl: normalizeOllamaUrl(provider.baseUrl), model: provider.model };
+  if (provider.wireApi === "responses") return { kind: "codex", ...codexModelProviderFor(provider) };
+  return { kind: "api", providerId: provider.id, label: provider.label, baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: provider.model };
 }
 
 export function codexModelProviderFor(provider: InferenceProvider): CodexModelProvider {

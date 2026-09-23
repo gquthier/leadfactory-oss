@@ -66,6 +66,7 @@ import { isLeadTurn, resolveGroupTargets } from "./mentions.js";
 import { findMentionedBotIds } from "./mentions.js";
 import type { ExternalExecutionProvider, OllamaExecutionProvider } from "./inference.js";
 import { startOllamaTurn as defaultStartOllamaTurn, type OllamaTurnInput } from "./ollama-driver.js";
+import { startOpenAiTurn as defaultStartOpenAiTurn, type OpenAiTurnInput } from "./openai-driver.js";
 import type { ConnectedPlan, PlanProvider } from "./plan-types.js";
 import {
   GROUP_LEAD_TURN_NOTE,
@@ -271,6 +272,8 @@ export interface DispatchDependencies {
   /** Test seam for Cursor print-mode turns. */
   startCursorTurn?: (input: CursorTurnInput) => CodexTurnHandle;
   startOllamaTurn?: (input: OllamaTurnInput) => CodexTurnHandle;
+  /** Test seam for native OpenAI-compatible API turns. */
+  startOpenAiTurn?: (input: OpenAiTurnInput) => CodexTurnHandle;
   environment?: Record<string, string | undefined>;
   retryScale?: number;
 }
@@ -321,6 +324,9 @@ interface QueuedTurn {
 }
 
 interface ActiveTurn extends QueuedTurn {
+  /** The API provider and model a native API turn answers with, recorded on
+   * the run once the provider really answered. */
+  apiBinding?: { providerId: string; model: string };
   blockedOnInput?: boolean;
   /** An approval or question expired unanswered (not refused by anyone). */
   expiredInput?: { askId: string; summary: string; approvalKey: string | null };
@@ -399,6 +405,11 @@ function queuedOf(turn: ActiveTurn): QueuedTurn {
     ...(turn.executionPolicy ? { executionPolicy: turn.executionPolicy } : {}),
     ...(turn.ollamaBinding ? { ollamaBinding: turn.ollamaBinding } : {}),
   };
+}
+
+/** Ollama and API providers: in-process drivers with host tools only. */
+function nativeProvider(provider: string): boolean {
+  return provider === "ollama" || provider === "api";
 }
 
 function isInside(path: string, root: string): boolean {
@@ -1352,16 +1363,20 @@ export class Dispatcher {
       this.abandon(queued, bot.id, "The voice task's selected personal plan is no longer available.");
       return;
     }
-    const provider: PlanProvider | "ollama" = external?.kind === "ollama" ? "ollama" : external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
+    const provider: PlanProvider | "ollama" | "api" = external?.kind === "ollama" ? "ollama" : external?.kind === "api" ? "api" : external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
+    // Ollama and API providers run in-process: no CLI, no MCP mount, no
+    // resumable provider session, host dynamic tools only.
+    const native = provider === "ollama" || provider === "api";
     const family = plan?.provider ?? preferredProvider;
     const model = external
       ? (queued.ollamaBinding?.model || bot.model?.trim() || external.model || undefined)
       : (modelForFamily(family, bot.model) ?? modelForFamily(family, settings.local.model));
     if (provider === "ollama" && !model) { this.abandon(queued, bot.id, "Select an installed Ollama model in Settings."); return; }
+    if (provider === "api" && !model) { this.abandon(queued, bot.id, "Choose a model for this API provider in Settings → Plans & usage."); return; }
 
     let cli: string;
     try {
-      if (provider === "ollama") {
+      if (native) {
         cli = "";
       } else if (provider === "claude") {
         if (!this.deps.claudePath) throw new Error("`claude` isn't configured for this runtime");
@@ -1385,8 +1400,8 @@ export class Dispatcher {
     const writableRoots = shared.folders
       .filter((folder) => folder.mode === "read-write")
       .map((folder) => folder.path);
-    if (provider === "ollama" && queued.attachments?.length) {
-      this.abandon(queued, bot.id, "Ollama attachments are not supported in this local runtime."); return;
+    if (native && queued.attachments?.length) {
+      this.abandon(queued, bot.id, provider === "ollama" ? "Ollama attachments are not supported in this local runtime." : "Attachments are not supported with API providers yet."); return;
     }
     const attached = this.materialize(bot, queued.attachments ?? []);
     const message = this.deps.threads.append(threadId, {
@@ -1431,7 +1446,7 @@ export class Dispatcher {
     // else. Mounting none is honest — and the persona below is built from
     // this same empty surface, so a Cursor turn is never told it has team
     // tools it cannot call.
-    const mountedServers = provider === "cursor" || provider === "ollama" ? {} : this.deps.mcpServers(bot, runContext);
+    const mountedServers = provider === "cursor" || native ? {} : this.deps.mcpServers(bot, runContext);
     const dynamicTools = provider === "cursor" ? undefined : this.deps.dynamicTools?.(bot, runContext);
     const toolSurface = [
       ...Object.keys(mountedServers).map((name) => `mcp:${name}`),
@@ -1450,20 +1465,21 @@ export class Dispatcher {
       model: model ?? null,
       cwd: this.deps.workspaceFor(bot),
       planId: plan?.id ?? null,
-      providerId: external?.kind === "ollama" ? external.providerId : external?.id ?? null,
+      providerId: external?.kind === "ollama" || external?.kind === "api" ? external.providerId : external?.id ?? null,
       ...(external?.kind === "ollama" ? { baseUrl: external.baseUrl } : {}),
       tools: toolSurface,
     });
-    const resumeCursor = provider === "ollama" ? null :
+    const resumeCursor = native ? null :
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
     // Local Codex / Claude / Cursor agents get the slim brief once per
     // provider session and only what is new on every turn after it; the
     // cloud path, quick chats and native Ollama keep their prompts.
-    const local = provider === "ollama" || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
+    const local = native || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
       provider, tools: toolSurface, excludeMessageId: message.id, resumeCursor, cursorKey, writableRoots, skipPermissions,
     });
     const persona = local ? local.system : this.personaFor(bot, threadId, {
       replayHistory: !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
+      ...(external?.kind === "api" ? { apiLabel: external.label } : {}),
       ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}),
     });
 
@@ -1475,6 +1491,7 @@ export class Dispatcher {
     const turn: ActiveTurn = {
       ...queued,
       ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
+      ...(external?.kind === "api" ? { apiBinding: { providerId: external.providerId, model: model! } } : {}),
       policyFingerprint,
       handle: undefined as unknown as CodexTurnHandle,
       message,
@@ -1518,7 +1535,14 @@ export class Dispatcher {
     };
 
     let handle: CodexTurnHandle;
-    if (provider === "ollama" && external?.kind === "ollama") {
+    if (provider === "api" && external?.kind === "api") {
+      handle = (this.deps.startOpenAiTurn ?? defaultStartOpenAiTurn)({
+        baseUrl: external.baseUrl, apiKey: external.apiKey, model: model!, label: external.label,
+        system: persona, text: turnText, threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
+        dynamicTools: dynamicTools ?? [],
+        onEvent: (event) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
+      });
+    } else if (provider === "ollama" && external?.kind === "ollama") {
       handle = (this.deps.startOllamaTurn ?? defaultStartOllamaTurn)({
         baseUrl: external.baseUrl, model: model!, system: persona, text: turnText,
         threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
@@ -1839,6 +1863,8 @@ export class Dispatcher {
   }
 
   private personaFor(bot: Bot, threadId: string, runtime: {
+    /** Present for a native API turn: the provider's name. */
+    apiLabel?: string;
     replayHistory: boolean;
     provider: string;
     tools: string[];
@@ -1848,7 +1874,8 @@ export class Dispatcher {
     if (threadId.startsWith("chat:")) {
       const messages = this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages
         .filter(row => row.id !== runtime.excludeMessageId);
-      return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings(), nativeOllama: runtime.provider === "ollama" });
+      return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings(), nativeOllama: runtime.provider === "ollama",
+        ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}) });
     }
     const target: ThreadTarget = threadId.startsWith("group:")
       ? { groupId: threadId.slice(6) }
@@ -1876,6 +1903,7 @@ export class Dispatcher {
     return buildPersonaPrompt({
       bot,
       nativeOllama: runtime.provider === "ollama",
+      ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}),
       orgName: this.deps.orgName(),
       ...(group
         ? {
@@ -1890,9 +1918,9 @@ export class Dispatcher {
       since: since.filter((row) => row.blocks.length > 0),
       roster,
       sharedFolders: [this.deps.workspaceFor(bot)],
-      ...(runtime.provider !== "ollama" && shared.folders.length ? { grantedFolders: shared.folders } : {}),
-      ...(runtime.provider !== "ollama" && shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(runtime.provider !== "ollama" && this.deps.hasComputer?.(bot) ? { hasComputer: true } : {}),
+      ...(!nativeProvider(runtime.provider) && shared.folders.length ? { grantedFolders: shared.folders } : {}),
+      ...(!nativeProvider(runtime.provider) && shared.fullDiskRead ? { fullDiskRead: true } : {}),
+      ...(!nativeProvider(runtime.provider) && this.deps.hasComputer?.(bot) ? { hasComputer: true } : {}),
       ...(architecture ? { localArchitecture: {
         ...architecture,
         sandbox: settings.local.permissions === "skip-all" ? "danger-full-access" as const : settings.local.sandbox,
@@ -1939,6 +1967,11 @@ export class Dispatcher {
 
 
     switch (event.type) {
+      case "external.model.verified":
+        if (turn.apiBinding) this.deps.runs.update(turn.runId, { inference: {
+          kind: "api", providerId: turn.apiBinding.providerId, model: turn.apiBinding.model, locality: "remote",
+        } });
+        break;
       case "ollama.model.verified":
         if (turn.ollamaBinding) this.deps.runs.update(turn.runId, { inference: {
           kind: "ollama", providerId: turn.ollamaBinding.providerId, model: turn.ollamaBinding.model, locality: "local",

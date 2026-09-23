@@ -164,6 +164,8 @@ export type RuntimeEvent =
   | { type: "turn.retrying"; attempt: number; delayMs: number; reason: string }
   | { type: "token-usage"; input: number; output: number; cachedInput?: number }
   | { type: "ollama.model.verified" }
+  /** A native API turn got its first valid answer from the configured model. */
+  | { type: "external.model.verified" }
   | { type: "runtime.error"; message: string; setup?: boolean }
   | { type: "turn.completed"; ok: boolean; stopReason: string | null };
 
