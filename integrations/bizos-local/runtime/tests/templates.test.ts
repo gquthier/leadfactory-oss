@@ -397,7 +397,7 @@ describe("harness.templates.apply", () => {
         expect(thread.messages[0]).toMatchObject({ role: "bot", botId: bot.id, deliveryState: "complete" });
         expect((thread.messages[0]!.blocks[0] as { text: string }).text).toBe(row.welcome);
         expect(bot.unread).toBe(true);
-        expect(bot.lastMessagePreview).toMatch(/^Welcome/);
+        expect(bot.lastMessagePreview).toMatch(/^Bonjour, je suis le CEO/);
       } else {
         expect(thread.messages).toEqual([]);
         expect(bot.unread).toBe(false);

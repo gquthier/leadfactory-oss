@@ -185,7 +185,7 @@ export function creationTemplateOf(source: CompanyTemplate): CompanyTemplate {
       "The runtime manifest is authoritative. Use the user's connected plan and existing permission settings. Do not invent tools, teammates, photo generation, messages or outcomes. Unknown facts stay TODO; preserve owner files and verify deliverables.",
     ].join("\n\n"),
     pinned: true,
-    welcome: "Welcome — I’m the CEO and the only active agent in this new company. Tell me the company context and the first outcome you want. I’ll work directly or recruit one bounded specialist from Roles/ when the authorized mission warrants it; no team or external action has started yet.",
+    welcome: "Bonjour, je suis le CEO de votre nouvelle entreprise. Dites-moi le premier résultat que vous voulez : je m’y mets directement et je recrute un spécialiste seulement si c’est utile. Rien n’est encore lancé.",
   };
   return {
     ...source,
