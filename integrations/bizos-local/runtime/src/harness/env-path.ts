@@ -22,6 +22,15 @@ function nvmBinDirectories(home: string): string[] {
 }
 
 export function knownBinDirectories(home: string = homedir()): string[] {
+  if (process.platform === 'win32') {
+    return [
+      join(home, 'AppData', 'Roaming', 'npm'),
+      join(home, '.local', 'bin'),
+      join(home, '.bun', 'bin'),
+      join(home, '.volta', 'bin'),
+      join(home, 'bin'),
+    ];
+  }
   return [
     join(home, ".local", "bin"),
     join(home, ".npm-global", "bin"),
@@ -74,12 +83,14 @@ export function findCliCandidates(
   environment: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (!name || /[\n\r]/.test(name)) return [];
-  if (name.includes("/")) return existsSync(name) ? [name] : [];
+  if (name.includes("/") || name.includes("\\")) return existsSync(name) ? [name] : [];
   const found: string[] = [];
   for (const directory of augmentedPath(environment).split(delimiter)) {
     if (!directory) continue;
-    const candidate = join(directory, name);
-    if (existsSync(candidate)) found.push(candidate);
+    for (const suffix of process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : ['']) {
+      const candidate = join(directory, name + suffix);
+      if (existsSync(candidate)) found.push(candidate);
+    }
   }
   return found;
 }
