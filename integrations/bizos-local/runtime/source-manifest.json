@@ -9,7 +9,7 @@
     "src/computer/native.ts": "b4f27527ed6a7c7d9a21cebb03268fc578703ddeb8f9b3598cac65dda051c098",
     "src/computer/observe.ts": "fbcc14cc240b0b5cf9de62ddb0d791c78c93b601600dc444d4908a5b7c1e0d39",
     "src/computer/types.ts": "6f5cebd0d9236a225565c8ef43a00c07f873a97fe82cae2b1ebaba320bc9ebf9",
-    "src/dashboard-summary.ts": "94dc5c111cfec7299095d7623de3780d2f078a95f2e6e7f39e9cefd08ca4dbb2",
+    "src/dashboard-summary.ts": "2abf01f4c0ebc15c633f67ce2033cd198e7ed000e809bbed2d906a7e42635a23",
     "src/harness/access.ts": "964cca47c54cd6b0dff92a8735af23d458830790627d2bb6f1d6356381addcc3",
     "src/harness/agency-kit.d.ts": "56a3bb17d8a8172f0eae3561d5ddcf208244fa683d21af83f531e0cdd578d768",
     "src/harness/agency-tools.ts": "73ab9e98e6b2afbcd4eda8a7b17b54ff4427e759fcd9ffae909ea76ab9ad793b",
@@ -81,7 +81,7 @@
     "src/routines-public.ts": "41e46b8cdffc47396556d8b054782c02b3f911a569f460fbd9eaae0ef9d25fcb",
     "src/sidecar-contract.ts": "10c2d18c2560c1b3451f53ea8115ce75e2a7aed4c674e6d059e0e36c03a317e2",
     "src/sidecar-state.ts": "61c9149007198577dde498a3154ae5bd45aae0396630e1fb57a09a140973332b",
-    "src/sidecar.ts": "9a27c84b3c93736f8cdae4a21dc9f8801051132941aba8ffea50292d0c6ebd9c",
+    "src/sidecar.ts": "336bacd2adc779591cf8f84c1fc024aea97fbbd4cc3678f8196c750a1df2d956",
     "src/voice-tasks.ts": "1d89d16114d21481360d2715a316db900694e70f154313075318e1e8ab36fb1e"
   }
 }

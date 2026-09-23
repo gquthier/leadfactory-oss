@@ -65,6 +65,17 @@ when it may not reach back to the start of the month, `monthComplete` is false
 and day totals that it cannot cover are `null`. A plan label that is an e-mail
 address is withheld.
 
+`attention` lists, newest first and at most five, what the agents need from the
+person: pending asks of waiting runs (`question` or `approval`, with `approvalId`,
+public `runId` and any `choices`), pending or waiting Ops decisions (`decision`,
+routed to the owning agent's thread or the CEO's) and runs that failed in the
+past 24 hours (`failure`, with the recorded error). Each agent row also carries
+its public `threadId` and, while working or waiting, its current `task`.
+Answer an ask with `POST /api/collaboration/runs/{runId}/approval`
+`{ "askId": approvalId, "answer": { "kind": "text", "text": "…" } }` (or
+`allow_once` / `deny` / `choice`); any other reply is an ordinary chat message:
+`POST /api/collaboration/threads/{threadId}/messages` `{ clientMessageId, content }`.
+
 ## Native Ollama connector
 
 The local sidecar can call an already running Ollama server directly at

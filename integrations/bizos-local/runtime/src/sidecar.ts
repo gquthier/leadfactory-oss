@@ -1240,6 +1240,16 @@ export class CollaborationFacade {
       plans: () => this.invoke<DashboardPlan[]>("lbz:plans:list"),
       providers: async () => (await this.invoke<{ providers: DashboardProvider[] }>("lbz:inference:list")).providers,
       settings: async () => (await this.invoke<RuntimeSettings>("lbz:runtime:getSettings")).local,
+      publicRunId: (runId) => this.runId(runId),
+      pendingAsks: async (run) => {
+        const target = targetForThreadId(run.threadId);
+        if (!target || !run.id) return [];
+        const snapshot = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
+        return snapshot.messages.flatMap((message) => message.blocks.flatMap((block) =>
+          block.kind === "ask" && block.runId === run.id && block.status === "pending"
+            ? [{ askId: block.askId, requestType: block.requestType, summary: block.summary, ...(block.choices ? { choices: block.choices } : {}), createdAt: message.createdAt }]
+            : []));
+      },
     });
   }
   async createBot(raw: unknown) {

@@ -208,4 +208,69 @@ describe("local dashboard summary", () => {
       expect(result.agents.waiting).toBe(1);
     });
   });
+
+  describe("attention", () => {
+    const now = new Date(2026, 8, 23, 12, 0, 0);
+    const at = (d: number, h: number) => new Date(2026, 8, d, h, 0, 0).toISOString();
+    const bots = async () => [
+      { id: "ceo", name: "CEO", archived: false, status: "idle" },
+      { id: "prod", name: "Product", archived: false, status: "waiting" },
+      { id: "cto", name: "CTO", archived: false, status: "working" },
+      { id: "sre", name: "SRE", archived: false, status: "idle" },
+    ];
+    const runs = async () => [
+      { id: "r1", threadId: "bot:prod", botId: "prod", state: "waiting_input", startedAt: at(23, 10), task: { objective: "Pricing du plan Team" } },
+      { id: "r2", threadId: "bot:cto", botId: "cto", state: "working", startedAt: at(23, 11), task: { objective: "Fuite mémoire" } },
+      { id: "r3", threadId: "bot:sre", botId: "sre", state: "failed", startedAt: at(23, 3), endedAt: at(23, 4), error: "timeout on latency probe" },
+      { id: "r4", threadId: "bot:sre", botId: "sre", state: "failed", startedAt: at(21, 3), endedAt: at(21, 4), error: "old" },
+      { id: "r5", threadId: "bot:ceo", botId: "ceo", state: "waiting_input", startedAt: at(23, 9) },
+    ];
+    const asks = async (run: { id?: string }) => run.id === "r1"
+      ? [{ askId: "k1", requestType: "question", summary: "Quel prix pour le plan Team ?", choices: [{ value: "29", label: "29 €" }], createdAt: at(23, 10) }]
+      : run.id === "r5" ? [{ askId: "k2", requestType: "permission", summary: "Allow CEO to run a command?", createdAt: at(23, 9) }] : [];
+    const input = (root: string, over: Record<string, unknown> = {}) => ({ ...fixture("software", root), bots, runs, now: () => now, runLimit: 200,
+      publicThreadId: (id: string) => `local:inst:thread:${id}`, publicRunId: (id: string) => `local:inst:run:${id}`, pendingAsks: asks, ...over });
+    const opsRoot = () => {
+      const root = vault(); mkdirSync(join(root, "state"));
+      writeFileSync(join(root, "state/claims.jsonl"), "");
+      writeFileSync(join(root, "state/decisions.jsonl"), [
+        { kind: "decision", id: "d1", normalizedSubject: "launch", subject: "Date de lancement", revision: 1, at: "2026-09-23T08:00:00.000Z", by: "Product", status: "PENDING", value: "private" },
+        { kind: "decision", id: "d2", normalizedSubject: "infra", subject: "Choix hébergeur", revision: 1, at: "2026-09-22T08:00:00.000Z", by: "Unknown", status: "WAITING", value: "private" },
+      ].map(JSON.stringify).join("\n") + "\n");
+      writeFileSync(join(root, "state/runs.jsonl"), "");
+      return root;
+    };
+
+    it("lists questions, approvals, decisions and recent failures with reply targets", async () => {
+      const result = await readLocalDashboardSummary(input(opsRoot()));
+      expect(result.attention.state).toBe("ready");
+      expect(result.attention.items.map((row) => row.id)).toEqual(["ask:k1", "ask:k2", "decision:d1", "decision:d2", "failure:r3"]);
+      expect(result.attention.items[0]).toEqual({ id: "ask:k1", kind: "question", agentName: "Product", title: "Pricing du plan Team",
+        body: "Quel prix pour le plan Team ?", threadId: "local:inst:thread:bot:prod", approvalId: "k1", runId: "local:inst:run:r1",
+        choices: [{ value: "29", label: "29 €" }], at: at(23, 10) });
+      expect(result.attention.items[1]).toMatchObject({ kind: "approval", agentName: "CEO", title: "CEO", approvalId: "k2", runId: "local:inst:run:r5" });
+      expect(result.attention.items[2]).toMatchObject({ kind: "decision", agentName: "Product", title: "Date de lancement", threadId: "local:inst:thread:bot:prod", approvalId: null });
+      expect(result.attention.items[3]).toMatchObject({ kind: "decision", agentName: null, threadId: "local:inst:thread:bot:ceo" });
+      expect(result.attention.items[4]).toMatchObject({ kind: "failure", agentName: "SRE", body: "timeout on latency probe", runId: "local:inst:run:r3" });
+      expect(JSON.stringify(result.attention)).not.toContain("private");
+    });
+
+    it("gives each agent its thread and current task", async () => {
+      const result = await readLocalDashboardSummary(input(opsRoot()));
+      const byName = Object.fromEntries(result.agents.items.map((row) => [row.name, row]));
+      expect(byName.Product).toMatchObject({ threadId: "local:inst:thread:bot:prod", task: "Pricing du plan Team" });
+      expect(byName.CTO).toMatchObject({ task: "Fuite mémoire" });
+      expect(byName.SRE).toMatchObject({ task: null });
+    });
+
+    it("isolates attention failures and stays empty when nothing is pending", async () => {
+      const failing = await readLocalDashboardSummary(input(opsRoot(), { pendingAsks: async () => { throw new Error("thread unreadable"); } }));
+      expect(failing.attention).toEqual({ state: "error", items: [] });
+      expect(failing.activity.state).toBe("ready");
+      const unwired = await readLocalDashboardSummary(input(opsRoot(), { pendingAsks: undefined }));
+      expect(unwired.attention.state).toBe("error");
+      const quiet = await readLocalDashboardSummary(input(vault(), { runs: async () => [], pendingAsks: async () => [] }));
+      expect(quiet.attention).toEqual({ state: "empty", items: [] });
+    });
+  });
 });

@@ -16,7 +16,8 @@ export interface LocalDashboardSummary {
   templateId: string | null;
   generatedAt: string;
   business: Business;
-  agents: { state: "ready" | "empty" | "error"; total: number | null; working: number | null; waiting: number | null; items: Array<{ id: string; name: string; status: "idle" | "working" | "waiting" }> };
+  agents: { state: "ready" | "empty" | "error"; total: number | null; working: number | null; waiting: number | null;
+    items: Array<{ id: string; name: string; status: "idle" | "working" | "waiting"; threadId: string | null; task: string | null }> };
   routines: { state: "ready" | "empty" | "error"; total: number | null; active: number | null; items: Array<{ id: string; name: string; status: "active" | "paused"; nextRunAt: string | null }> };
   email: { state: "unavailable"; reason: "no-native-email-sync" };
   finance: Finance;
@@ -24,7 +25,22 @@ export interface LocalDashboardSummary {
   plan: PlanSummary;
   mode: { permissions: string | null; inference: string | null };
   setup: { steps: Array<{ key: SetupKey; done: boolean }> };
+  attention: Attention;
 }
+export type AttentionItem = {
+  id: string;
+  kind: "question" | "approval" | "decision" | "failure";
+  agentName: string | null;
+  title: string;
+  body: string | null;
+  threadId: string | null;
+  /** The ask to answer through POST /api/collaboration/runs/{runId}/approval. */
+  approvalId: string | null;
+  runId: string | null;
+  choices: Array<{ value: string; label: string }> | null;
+  at: string | null;
+};
+type Attention = { state: "ready" | "empty" | "error"; items: AttentionItem[] };
 type Activity = {
   state: "ready" | "empty" | "error";
   tokensToday: number | null; tokensMonth: number | null; monthComplete: boolean;
@@ -39,12 +55,13 @@ type PlanSummary = {
 };
 type SetupKey = "plan" | "company" | "team" | "routines" | "firstTask";
 /** The run fields the dashboard reads. `runs()` answers newest first. */
-export type DashboardRun = { threadId: string; botId: string; state: string; startedAt: string; endedAt?: string;
+export type DashboardRun = { id?: string; error?: unknown; threadId: string; botId: string; state: string; startedAt: string; endedAt?: string;
   task?: { objective?: unknown } | null; usage?: { inputTokens?: unknown; outputTokens?: unknown } | null };
 export type DashboardPlan = { id: string; provider: string; label: string; status: string;
   quota?: { window?: unknown; usedPct?: unknown; resetsAt?: unknown } | null;
   usage?: { windows?: ReadonlyArray<{ label?: unknown; usedPct?: unknown; resetsAt?: unknown }> } | null };
 export type DashboardSettings = { permissions?: unknown; activePlanId?: unknown; inferenceProviderId?: unknown };
+export type DashboardAsk = { askId: string; requestType: string; summary: string; choices?: ReadonlyArray<{ value: string; label: string }>; createdAt?: string };
 export type DashboardProvider = { id: string; kind: string; label: string };
 export interface DashboardInputs {
   workspaceId: string;
@@ -59,6 +76,10 @@ export interface DashboardInputs {
   plans?: () => Promise<ReadonlyArray<DashboardPlan>>;
   providers?: () => Promise<ReadonlyArray<DashboardProvider>>;
   settings?: () => Promise<DashboardSettings | null>;
+  /** Internal run id to the id the collaboration API serves. */
+  publicRunId?: (runId: string) => string | null;
+  /** The pending ask blocks of a run, read from its thread. */
+  pendingAsks?: (run: DashboardRun) => Promise<ReadonlyArray<DashboardAsk>>;
   now?: () => Date;
 }
 
@@ -244,7 +265,8 @@ function validOpsRow(row: Record<string, unknown>, kind: "claim" | "decision" | 
     RUN_OUTCOMES.has(row.outcome as string) && record(row.evidence) && typeof row.evidence.path === "string" &&
     typeof row.evidence.sha256 === "string" && typeof row.cost === "string" && typeof row.next === "string";
 }
-function operations(root: string): Business {
+type PendingDecision = { id: string; subject: string; by: string; at: string | null };
+function operations(root: string): Business & { decisions?: PendingDecision[] } {
   const claims = fixedJsonl(root, "claims"), decisions = fixedJsonl(root, "decisions"), runs = fixedJsonl(root, "runs");
   if (!claims || !decisions || !runs) return EMPTY_BUSINESS;
   if (claims.some((row) => !validOpsRow(row, "claim")) || decisions.some((row) => !validOpsRow(row, "decision")) || runs.some((row) => !validOpsRow(row, "run"))) throw new Error("invalid ops rows");
@@ -252,7 +274,8 @@ function operations(root: string): Business {
   const finalClaims = latest(claims, "id"), finalDecisions = latest(decisions, "normalizedSubject");
   const active = finalClaims.filter((row) => ["CLAIMED", "IN-PROGRESS", "PR-REVIEW", "PUSHED-PROD"].includes(row.status as string));
   const pending = finalDecisions.filter((row) => row.status === "PENDING" || row.status === "WAITING");
-  return { state: claims.length || decisions.length || runs.length ? "ready" : "empty", source: "ops-jsonl", updatedAt: newest([...claims, ...decisions, ...runs]),
+  return { decisions: recent(pending).map((row) => ({ id: text(row.id, 128), subject: text(row.subject, 160), by: text(row.by, 80), at: date(row.updatedAt) ?? date(row.at) })),
+    state: claims.length || decisions.length || runs.length ? "ready" : "empty", source: "ops-jsonl", updatedAt: newest([...claims, ...decisions, ...runs]),
     metrics: [metric("activeClaims", "Chantiers actifs", active.length), metric("completedClaims", "Chantiers terminés", finalClaims.filter((row) => row.status === "DONE").length),
       metric("pendingDecisions", "Décisions en attente", pending.length), metric("recordedReports", "Rapports enregistrés", runs.length),
       metric("failedReports", "Rapports en échec", runs.filter((row) => row.outcome === "FAILED").length)],
@@ -273,11 +296,15 @@ export async function readLocalDashboardSummary(input: DashboardInputs): Promise
   const same = (binding: Binding | null) => JSON.stringify(binding) === JSON.stringify(start);
   if (!same(input.binding())) throw new Error("Workspace binding changed during dashboard read");
   let business = EMPTY_BUSINESS, finance = EMPTY_FINANCE;
+  let decisions: PendingDecision[] = [];
   if (start) {
     try {
       if (start.templateId === "lead-gen-agency") business = agency(start.path);
       else if (start.templateId === "ecommerce") ({ business, finance } = ecommerce(start.path));
-      else if (start.templateId === "software" || start.templateId === "service-based-business") business = operations(start.path);
+      else if (start.templateId === "software" || start.templateId === "service-based-business") {
+        const { decisions: pending, ...ops } = operations(start.path);
+        business = ops; decisions = pending ?? [];
+      }
     } catch {
       business = { ...EMPTY_BUSINESS, state: "error" };
       if (start.templateId === "ecommerce") finance = { ...EMPTY_FINANCE, state: "error" };
@@ -290,7 +317,7 @@ export async function readLocalDashboardSummary(input: DashboardInputs): Promise
     const rows = botResult.value.filter((bot) => !bot.archived);
     return { state: rows.length ? "ready" : "empty", total: rows.length, working: rows.filter((bot) => bot.status === "working").length,
       waiting: rows.filter((bot) => bot.status === "waiting").length,
-      items: rows.slice(0, PREVIEW_LIMIT).map((bot) => ({ id: text(bot.id, 128), name: text(bot.name), status: bot.status as "idle" | "working" | "waiting" })) };
+      items: rows.slice(0, PREVIEW_LIMIT).map((bot) => ({ id: text(bot.id, 128), name: text(bot.name), status: bot.status as "idle" | "working" | "waiting", threadId: null as string | null, task: null as string | null })) };
   })() : { state: "error", total: null, working: null, waiting: null, items: [] };
   const routines: LocalDashboardSummary["routines"] = routineResult.status === "fulfilled" &&
     routineResult.value.every((routine) => typeof routine.id === "string" && ID.test(routine.id) && typeof routine.name === "string" &&
@@ -320,9 +347,22 @@ export async function readLocalDashboardSummary(input: DashboardInputs): Promise
     { key: "routines", done: (routines.active ?? 0) > 0 },
     { key: "firstTask", done: Boolean(runs?.some((run) => run.state === "completed")) },
   ];
+  const publicThread = (threadId: string) => { try { return input.publicThreadId ? input.publicThreadId(threadId) : null; } catch { return null; } };
+  const publicRun = (runId: string | undefined) => { try { return runId && input.publicRunId ? input.publicRunId(runId) : null; } catch { return null; } };
+  const objective = (run: DashboardRun) => text(run.task?.objective, 160) || null;
+  const newestFirst = (rows: ReadonlyArray<DashboardRun>) => [...rows].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  for (const agent of agents.items) {
+    agent.threadId = publicThread(`bot:${agent.id}`);
+    if (agent.status !== "idle" && runs) {
+      const live = newestFirst(runs.filter((run) => run.botId === agent.id && (run.state === "working" || run.state === "waiting_input")))[0];
+      agent.task = live ? objective(live) : null;
+    }
+  }
+  const attention = await attentionOf({ runs, decisions, now, botNames, bots: botResult.status === "fulfilled" ? botResult.value : [],
+    publicThread, publicRun, objective, pendingAsks: input.pendingAsks, businessOk: business.state !== "error" });
   return { version: 1, workspaceId: input.workspaceId, templateId: start?.templateId ?? null, generatedAt: now.toISOString(),
     business, agents, routines, email: { state: "unavailable", reason: "no-native-email-sync" }, finance,
-    activity, plan, mode, setup: { steps } };
+    activity, plan, mode, setup: { steps }, attention };
 }
 
 const EMPTY_ACTIVITY: Activity = { state: "error", tokensToday: null, tokensMonth: null, monthComplete: false,
@@ -397,4 +437,58 @@ function planOf(plans: ReadonlyArray<DashboardPlan>, provider: DashboardProvider
   const usage = top ?? quota;
   return { state: "ready", label: safeLabel(active.label), provider: text(active.provider, 40) || null, status: text(active.status, 40) || null,
     usedPct: usage?.usedPct ?? null, window: usage?.label ?? null, resetsAt: usage?.resetsAt ?? null };
+}
+
+const ATTENTION_LIMIT = 5;
+async function attentionOf(input: {
+  runs: ReadonlyArray<DashboardRun> | null; decisions: PendingDecision[]; now: Date; botNames: ReadonlyMap<string, string>;
+  bots: ReadonlyArray<{ id: string; name: string; archived: boolean }>;
+  publicThread: (threadId: string) => string | null; publicRun: (runId: string | undefined) => string | null;
+  objective: (run: DashboardRun) => string | null;
+  pendingAsks?: (run: DashboardRun) => Promise<ReadonlyArray<DashboardAsk>>; businessOk: boolean;
+}): Promise<Attention> {
+  if (!input.runs || !input.pendingAsks || !input.businessOk) return { state: "error", items: [] };
+  const items: AttentionItem[] = [];
+  const waiting = input.runs.filter((run) => run.state === "waiting_input");
+  const asked = await Promise.allSettled(waiting.map((run) => input.pendingAsks!(run)));
+  if (asked.some((result) => result.status === "rejected")) return { state: "error", items: [] };
+  waiting.forEach((run, index) => {
+    const result = asked[index];
+    if (!result || result.status !== "fulfilled") return;
+    for (const ask of result.value) {
+      if (typeof ask.askId !== "string" || !ask.askId) continue;
+      const question = ask.requestType === "question";
+      items.push({ id: `ask:${text(ask.askId, 64)}`, kind: question ? "question" : "approval",
+        agentName: input.botNames.get(run.botId) || null,
+        title: input.objective(run) ?? input.botNames.get(run.botId) ?? "",
+        body: text(ask.summary, 280) || null, threadId: input.publicThread(run.threadId),
+        approvalId: text(ask.askId, 64), runId: input.publicRun(run.id),
+        choices: Array.isArray(ask.choices) && ask.choices.length
+          ? ask.choices.filter((choice) => typeof choice?.value === "string" && typeof choice?.label === "string")
+            .map((choice) => ({ value: text(choice.value, 80), label: text(choice.label, 80) })) : null,
+        at: date(ask.createdAt) ?? run.startedAt });
+    }
+  });
+  const live = input.bots.filter((bot) => !bot.archived);
+  const ceo = live.find((bot) => bot.name.trim().toLowerCase() === "ceo");
+  for (const decision of input.decisions) {
+    const owner = live.find((bot) => bot.name.trim().toLowerCase() === decision.by.trim().toLowerCase() || bot.id === decision.by) ?? null;
+    const thread = owner ?? ceo ?? null;
+    items.push({ id: `decision:${decision.id}`, kind: "decision", agentName: owner ? text(owner.name) : null,
+      title: decision.subject, body: null, threadId: thread ? input.publicThread(`bot:${thread.id}`) : null,
+      approvalId: null, runId: null, choices: null, at: decision.at });
+  }
+  const since = input.now.getTime() - 86_400_000;
+  for (const run of input.runs) {
+    const ended = Date.parse(run.endedAt ?? run.startedAt);
+    if (run.state !== "failed" || ended < since) continue;
+    items.push({ id: `failure:${text(run.id ?? `${run.botId}-${run.startedAt}`, 128)}`, kind: "failure",
+      agentName: input.botNames.get(run.botId) || null, title: input.objective(run) ?? input.botNames.get(run.botId) ?? "",
+      body: text(run.error, 280) || null, threadId: input.publicThread(run.threadId), approvalId: null,
+      runId: input.publicRun(run.id), choices: null, at: run.endedAt ?? run.startedAt });
+  }
+  const rank = { question: 0, approval: 0, decision: 1, failure: 2 } as const;
+  items.sort((a, b) => rank[a.kind] - rank[b.kind] || String(b.at ?? "").localeCompare(String(a.at ?? "")));
+  const top = items.slice(0, ATTENTION_LIMIT);
+  return { state: top.length ? "ready" : "empty", items: top };
 }

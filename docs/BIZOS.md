@@ -44,6 +44,9 @@ dans le coffre. Les agents et routines sont ceux réellement enregistrés.
 Les montants E-commerce sont uniquement des relevés saisis à la main, avec
 leur devise ; les autres finances et l'email restent indisponibles sans source
 locale native. Une source absente ou invalide ne devient jamais un faux zéro.
+La section `attention` expose ce que les agents attendent (question, autorisation,
+décision Ops, échec des dernières 24 h) avec le fil public où répondre ; la
+réponse passe par les routes de conversation existantes.
 Il expose aussi l'activité (jetons du jour et du mois d'après les exécutions
 enregistrées, exécutions du jour, en cours et en file, dernier échec), le plan
 ou fournisseur actif et son usage, le mode de permissions et les étapes de mise
