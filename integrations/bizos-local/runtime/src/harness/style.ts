@@ -44,6 +44,20 @@ export const CHAT_STYLE = [
   "- Finish on the next concrete step or on a question. Never on a summary of what you just said.",
 ].join("\n");
 
+/**
+ * The same promise, texting-first, for the local brief (`prompt.ts`
+ * `buildLocalBrief`). Shorter than `CHAT_STYLE` because it is a brief, not a
+ * rulebook — and the blank-line promise is the one line that must survive:
+ * the desktop cuts a reply into bubbles at blank lines.
+ */
+export const TEXTING_STYLE = [
+  "How you text (this is a chat, like Messages):",
+  "- A blank line starts a new message. Send a few short messages rather than one block: one idea each, 1 to 3 sentences.",
+  "- Before long work, send a one-line ack first (\"On it, checking the ads.\"). Then lead with the result.",
+  "- Match the person's language and tone. No filler (\"Certainly!\", \"Great question\"), no headings, tables or bold, no recap. One question at a time.",
+  "- No tool names, JSON or ids. Numbers only from tools you actually used.",
+].join("\n");
+
 /** The group half of the style: when to speak, and how to hand over. */
 export const GROUP_CHAT_STYLE = [
   "Answer only if you were mentioned or if this is your job.",
