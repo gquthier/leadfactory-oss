@@ -34,12 +34,13 @@
     "src/harness/cursor-models.ts": "af610eda94d4f8ed3d327a05c1db75d6394ed9e58e266f6758469329d95a0e72",
     "src/harness/cursor-status.ts": "2e34362176ffc281bb083d997c1da82b0bfb6f285333d1dd63c36d3bff2cc42b",
     "src/harness/device-agent.ts": "b09d1d2801a037bd0d5a0251b9b475e16c7369e0b31cf17df2ef17ffba640b15",
-    "src/harness/dispatch.ts": "d9e03ad08d879d25a4a7e79ed6317acb0ee2fbace6f32416775100b25eaf72fc",
+    "src/harness/dispatch.ts": "b5f5ebb07e9d0ba00891786160ceaf59e4cf1369e8f19b569929a494f970a193",
     "src/harness/ecommerce.ts": "bf1a7ed7c1ab41c5b83db7cfb682b14864736a0eba170ab8f010596beee3c7ba",
+    "src/harness/entitlement.ts": "fee5aff1ba5c8cc085e97e4be7deb4993e035d08bf0e7eaff86aa59e45497671",
     "src/harness/env-path.ts": "4ba59ff3b3cc9f6475fc241570dbe495f996e3ea03ba3a70bfc6395595d26f08",
     "src/harness/events.ts": "2a9b27ae6b149a713bb1653dc94b69bdbf4e63bd4aa76a418117dd26915059d3",
     "src/harness/groups.ts": "079d659348d016860caaf0e89e099ac473a6031756a9832518bb15e6aed1980b",
-    "src/harness/harness.ts": "33ba473c016866095c988da82089586a2de78931add44b8574293951bf7c0e33",
+    "src/harness/harness.ts": "9d70baa2986dc1ae421b9a521d621dde7aa3254ccf9f0eda7ed531dea5d1a53a",
     "src/harness/ids.ts": "43cdb6e73e687520a4826b790be53bb14348b38e08cf2fa628d6f5f521c02787",
     "src/harness/inference.ts": "ec2b79eb0286b875f9370d725b50d21ca7e78bace838de1e0083851d93b69251",
     "src/harness/login-launcher.ts": "a138021bb74cfe45078ec87be7fa2ef09a732d1734b2928c40a1891131b15e6b",
@@ -81,7 +82,7 @@
     "src/routines-public.ts": "41e46b8cdffc47396556d8b054782c02b3f911a569f460fbd9eaae0ef9d25fcb",
     "src/sidecar-contract.ts": "10c2d18c2560c1b3451f53ea8115ce75e2a7aed4c674e6d059e0e36c03a317e2",
     "src/sidecar-state.ts": "61c9149007198577dde498a3154ae5bd45aae0396630e1fb57a09a140973332b",
-    "src/sidecar.ts": "7e72a29ede0e53bad1a6a2092ec14c0863bba6d1dcfc7a9d30d06fc44ed22933",
+    "src/sidecar.ts": "943341cfddee14eedc18dfca77038b3ef9ba43cf6a7ab192a850220b1b03a6fa",
     "src/voice-tasks.ts": "1d89d16114d21481360d2715a316db900694e70f154313075318e1e8ab36fb1e"
   }
 }

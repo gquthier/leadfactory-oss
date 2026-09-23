@@ -1,3 +1,4 @@
+import { EntitlementStore, type Entitlement, type ProFeature } from "./entitlement.js";
 import { QuickChatStore, quickMessageId } from "./quick-chats.js";
 // Composition root for the local runtime. Everything Electron-specific is
 // injected, so the whole harness runs under vitest with no Electron at all.
@@ -515,6 +516,7 @@ export class LocalBizosHarness {
   private readonly planRegistry: PlanRegistry;
   private readonly appsStore: AppsStore;
   private readonly inferenceStore: InferenceStore;
+  private readonly entitlementStore: EntitlementStore;
 
   constructor(private readonly options: HarnessOptions) {
     this.clock = options.clock ?? systemClock;
@@ -539,6 +541,7 @@ export class LocalBizosHarness {
     this.planRegistry = new PlanRegistry(this.storage);
     this.appsStore = new AppsStore(this.storage, () => this.clock.nowIso(), () => this.environment());
     this.inferenceStore = new InferenceStore(this.storage, () => this.clock.nowIso());
+    this.entitlementStore = new EntitlementStore(this.storage, () => this.environment());
     this.homeDir = options.homeDir ?? homedir();
     this.accessPolicy = defaultAccessPolicy(this.homeDir, options.deniedDirs ?? []);
     this.accessStore = new AccessStore({
@@ -594,6 +597,7 @@ export class LocalBizosHarness {
         });
       },
       planProviderOf: (planId) => this.planRegistry.get(planId)?.provider ?? null,
+      planTier: () => this.entitlementStore.tier(),
       inferenceProviderById: (id) => {
         const provider = this.inferenceStore.get(id);
         return provider ? executionProviderFor(provider) : null;
@@ -1479,6 +1483,14 @@ export class LocalBizosHarness {
   };
 
   /** Settings → Plans & usage: external API-key providers (OpenRouter, Ollama, any OpenAI-compatible API). */
+  /** The local plan tier — a dev/test switch, see `entitlement.ts`. */
+  readonly entitlement = {
+    get: async (): Promise<Entitlement> => this.entitlementStore.get(),
+    set: async (tier: unknown): Promise<Entitlement> => this.entitlementStore.set(tier),
+    /** Throws `ProRequiredError` on the free tier. */
+    require: (feature: ProFeature): void => this.entitlementStore.require(feature),
+  };
+
   readonly inference = {
     list: async (): Promise<{ providers: PublicInferenceProvider[]; presets: typeof INFERENCE_PRESETS }> => ({
       providers: this.inferenceStore.publicList(),

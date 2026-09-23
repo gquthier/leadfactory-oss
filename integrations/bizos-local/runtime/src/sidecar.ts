@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
+import { ProRequiredError, type ProFeature } from "./harness/entitlement.js";
 import { isTemplateId } from "./harness/templates.js";
 import {
   targetForThreadId,
@@ -292,6 +293,12 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
 }
 
 function requestError(response: ServerResponse, error: unknown): void {
+  // The one error with a flat shape: the desktop reads `error === "pro_required"`
+  // and shows the upgrade sheet for `feature`.
+  if (error instanceof ProRequiredError) {
+    sendJson(response, 402, { error: "pro_required", feature: error.feature, message: error.message });
+    return;
+  }
   const failure = error instanceof HttpError
     ? error
     : new HttpError(500, "local_runtime_error", error instanceof Error ? error.message : String(error));
@@ -1349,14 +1356,33 @@ export class CollaborationFacade {
       },
     };
   }
-  setInference(raw: unknown) { return this.invoke("lbz:runtime:setInference", [raw]); }
-  setModel(raw: unknown) {
+  // ── plan tier (local stub, see `harness/entitlement.ts`) ──────────────
+  // `GET/PUT /api/local/entitlement` is a local dev/test switch: nothing is
+  // verified against billing. Real account/billing linkage is future work.
+  entitlement() { return this.harness.entitlement.get(); }
+  async setEntitlement(raw: unknown) {
+    const input = objectBody(raw, ["tier"]);
+    if (input.tier !== "free" && input.tier !== "pro") throw new HttpError(400, "invalid_payload", "tier must be \"free\" or \"pro\".");
+    return this.harness.entitlement.set(input.tier);
+  }
+  /** 402 `pro_required` on the free tier. */
+  private requirePro(feature: ProFeature): void { this.harness.entitlement.require(feature); }
+
+  async setInference(raw: unknown) {
+    if (raw && typeof raw === "object" && (raw as Record<string, unknown>).source === "provider") this.requirePro("customModels");
+    return this.invoke("lbz:runtime:setInference", [raw]);
+  }
+  async setModel(raw: unknown) {
     const input = objectBody(raw, ["model"]);
-    return this.invoke("lbz:runtime:setSettings", [{ mode: "local", local: { model: requiredString(input.model, "model", 120) } }]);
+    const model = requiredString(input.model, "model", 120);
+    const current = await this.invoke<RuntimeSettings>("lbz:runtime:getSettings");
+    // Re-sending the model already in force is not a selection.
+    if (model !== current.local.model) this.requirePro("customModels");
+    return this.invoke("lbz:runtime:setSettings", [{ mode: "local", local: { model } }]);
   }
   inferenceProviders() { return this.invoke("lbz:inference:list"); }
-  addInferenceProvider(raw: unknown) { return this.invoke("lbz:inference:add", [raw]); }
-  updateInferenceProvider(id: string, raw: unknown) { return this.invoke("lbz:inference:update", [id, raw]); }
+  async addInferenceProvider(raw: unknown) { this.requirePro("customModels"); return this.invoke("lbz:inference:add", [raw]); }
+  async updateInferenceProvider(id: string, raw: unknown) { this.requirePro("customModels"); return this.invoke("lbz:inference:update", [id, raw]); }
   removeInferenceProvider(id: string) { return this.invoke("lbz:inference:remove", [id]); }
   testInferenceProvider(id: string) { return this.invoke("lbz:inference:test", [id]); }
   disconnectPlan(id: string) { return this.invoke("lbz:plans:disconnect", [id]); }
@@ -1396,6 +1422,8 @@ export class CollaborationFacade {
     });
   }
   async createBot(raw: unknown) {
+    const model = raw && typeof raw === "object" ? (raw as Record<string, unknown>).model : undefined;
+    if (typeof model === "string" && model.trim()) this.requirePro("customModels");
     const bot = await this.invoke<Bot>("lbz:bots:create", [raw]);
     const bootstrap = await this.bootstrap();
     const agent = this.agent(bot);
@@ -1403,6 +1431,15 @@ export class CollaborationFacade {
     return { bot, agent, thread };
   }
   async updateBot(id: string, raw: unknown) {
+    if (raw && typeof raw === "object") {
+      const patch = raw as Record<string, unknown>;
+      const current = (await this.bots()).find((candidate) => candidate.id === id);
+      // Choosing a provider or a model override is Pro; clearing one, or
+      // re-sending the value already set, is not.
+      const chooses = (key: "providerId" | "model") =>
+        typeof patch[key] === "string" && (patch[key] as string).trim() !== "" && (patch[key] as string).trim() !== (current?.[key] ?? "");
+      if (chooses("providerId") || chooses("model")) this.requirePro("customModels");
+    }
     const bot = await this.invoke<Bot>("lbz:bots:update", [id, raw]);
     const bootstrap = await this.bootstrap();
     const agent = this.agent(bot);
@@ -1517,7 +1554,10 @@ export class CollaborationFacade {
   }
   installApp(raw: unknown) {
     const input = objectBody(raw, ["catalogId", "values", "name", "description", "approval", "custom"]);
-    if (input.custom !== undefined) return this.invoke("lbz:apps:addCustom", [input.custom]);
+    if (input.custom !== undefined) {
+      this.requirePro("customConnectors");
+      return this.invoke("lbz:apps:addCustom", [input.custom]);
+    }
     return this.invoke("lbz:apps:install", [{
       catalogId: input.catalogId,
       values: input.values ?? {},
@@ -2415,6 +2455,8 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/local/runtime/model") {
         return sendJson(response, 200, { settings: await facade.setModel(await bodyOf(request)) });
       }
+      if (method === "GET" && url.pathname === "/api/local/entitlement") return sendJson(response, 200, await facade.entitlement());
+      if (method === "PUT" && url.pathname === "/api/local/entitlement") return sendJson(response, 200, await facade.setEntitlement(await bodyOf(request)));
       if (method === "GET" && url.pathname === "/api/local/providers") return sendJson(response, 200, await facade.inferenceProviders());
       if (method === "POST" && url.pathname === "/api/local/providers") {
         return sendJson(response, 201, { provider: await facade.addInferenceProvider(await bodyOf(request)) });

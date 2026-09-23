@@ -218,6 +218,10 @@ export interface DispatchDependencies {
   inferenceProvider?(): ExternalExecutionProvider | null;
   /** A bot's own external provider, by id; null when it no longer exists. */
   inferenceProviderById?(id: string): ExternalExecutionProvider | null;
+  /** The local plan tier (`entitlement.ts`). On `free`, a bot's or the
+   * global external provider is ignored and the turn answers with the
+   * connected personal plan, with a one-line note. Absent ⇒ no gating. */
+  planTier?(): "free" | "pro";
   /** Which family a plan belongs to, for a bot pinned to one. */
   planProviderOf?(planId: string): PlanProvider | null;
   /** Local host-side tools. The callback captures this exact active run. */
@@ -375,6 +379,10 @@ interface SessionContext {
 
 /** A primed session's brief is refreshed when it changed and is this old. */
 export const BRIEF_REFRESH_MS = 6 * 60 * 60_000;
+
+/** The run note of a free-tier turn whose custom model was set aside. */
+export const FREE_TIER_PROVIDER_NOTE =
+  "Custom models need BizOS Pro: this reply used your connected plan instead.";
 
 /** The queued half of an active turn, to launch the turn that continues it. */
 function queuedOf(turn: ActiveTurn): QueuedTurn {
@@ -1315,16 +1323,21 @@ export class Dispatcher {
     // otherwise the router picks among the connected plans.
     let ownExternal: ExternalExecutionProvider | null = null;
     let globalExternal: ExternalExecutionProvider | null = null;
+    // Free tier: custom models (external providers) are a Pro feature. The
+    // selection is kept — upgrading brings it back — but this turn answers
+    // with the connected plan, and says so.
+    const globalProviderId = settings.local.inferenceProviderId;
+    const freeTier = !strictBinding && !queued.ollamaBinding && this.deps.planTier?.() === "free";
+    const ignoredProvider = freeTier && Boolean(bot.providerId || (!(bot.planId && ownPlanProvider) && globalProviderId));
     try {
-      ownExternal = strictBinding || queued.ollamaBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
-      globalExternal = strictBinding || queued.ollamaBinding || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
+      ownExternal = strictBinding || queued.ollamaBinding || freeTier ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
+      globalExternal = strictBinding || queued.ollamaBinding || freeTier || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
     } catch (error) {
       this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error)); return;
     }
-    if (!strictBinding && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
-    const globalProviderId = settings.local.inferenceProviderId;
+    if (!strictBinding && !freeTier && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
     const external = strictBinding ? null : queued.ollamaBinding ?? ownExternal ?? (bot.planId && ownPlanProvider ? null : globalExternal);
-    if (!strictBinding && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
+    if (!strictBinding && !freeTier && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
       this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Settings."); return;
     }
     const plan = external
@@ -1384,9 +1397,12 @@ export class Dispatcher {
       // it belongs to, and it stays there when the setting is turned back off.
       // Cursor's print mode cannot raise an approval card at all, so the
       // transcript says so on EVERY Cursor turn, not only under `skip-all`.
-      blocks: provider === "cursor"
-        ? [{ kind: "meta", text: cursorPermissionNote(settings.local.permissions) }]
-        : skipPermissions ? [{ kind: "meta", text: SKIPPED_PERMISSIONS_NOTE }] : [],
+      blocks: [
+        ...(ignoredProvider ? [{ kind: "meta" as const, text: FREE_TIER_PROVIDER_NOTE }] : []),
+        ...(provider === "cursor"
+          ? [{ kind: "meta" as const, text: cursorPermissionNote(settings.local.permissions) }]
+          : skipPermissions ? [{ kind: "meta" as const, text: SKIPPED_PERMISSIONS_NOTE }] : []),
+      ],
       botId: bot.id,
       runId: queued.runId,
     });

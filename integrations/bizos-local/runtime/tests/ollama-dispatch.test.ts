@@ -30,7 +30,7 @@ async function fixture(answer: (body: any) => unknown, options: { recruit?: bool
   let facade: CollaborationFacade;
   const harness = new LocalBizosHarness({ rootDir: root, homeDir: root, baseUrl: "", readSessionCookie: async () => "", orgName: () => "Fixture",
     execPath: "/missing/node", packaged: false, runAsNodeAvailable: false, mcpScriptPath: "/missing/mcp", devices: false,
-    environment: { PATH: "/nowhere", LBZ_CODEX_PATH: "/missing/codex", LBZ_CLAUDE_PATH: "/missing/claude", LBZ_CURSOR_PATH: "/missing/cursor" },
+    environment: { PATH: "/nowhere", LBZ_CODEX_PATH: "/missing/codex", LBZ_CLAUDE_PATH: "/missing/claude", LBZ_CURSOR_PATH: "/missing/cursor", BIZOS_LOCAL_PLAN: "pro" },
     localTeamTools: ({ bot, threadId, runId }) => options.recruit
       ? [{ name: "recruit_agent", description: "Recruit a local teammate", inputSchema: { type: "object", properties: { name: { type: "string" }, title: { type: "string" }, initial_task: { type: "string" } } },
         call: async args => {
