@@ -11,6 +11,24 @@ import { renderMemory, type MemorySnapshot } from "./memory.js";
 import { CHAT_STYLE, GROUP_CHAT_STYLE, TEXTING_STYLE } from "./style.js";
 import type { AccessMode, Bot, ThreadMessage } from "./types.js";
 import { taskRecord, type TaskCheckpoint } from "./task.js";
+import { groupLeadId } from "./mentions.js";
+
+/** How a group routes a message (`mentions.resolveGroupTargets`), told to
+ * every member so the lead knows it speaks first and the others know why
+ * they were not asked. */
+export function groupRoutingLine(bot: Bot, members: Bot[]): string {
+  const leadId = groupLeadId(members.map((member) => member.id), members);
+  const lead = members.find((member) => member.id === leadId);
+  if (!lead || members.length < 2) return "";
+  const who = lead.id === bot.id ? "you, the group's lead," : `@${singleLine(lead.name, 60)}, the group's lead,`;
+  return `A message that names nobody goes to ${who} alone: the lead answers for the group and @mentions the teammate a question belongs to. @Name asks that member; @everyone asks every member.`;
+}
+
+/** Prefixed to the turn of a lead answering a group message that named
+ * nobody. `GROUP_CHAT_STYLE` says "answer only if you were mentioned": this
+ * turn WAS addressed to you, as the group. */
+export const GROUP_LEAD_TURN_NOTE =
+  "(Nobody was named in this group message, so it came to you alone as the group's lead. Answer it for the group. If it belongs to a teammate, @mention them by name in one sentence so they take it, rather than answering in their place.)";
 
 /** The context window handed to a turn. Twenty messages is a conversation;
  * more is a transcript nobody reads, and it pushes the style section — the
@@ -305,9 +323,10 @@ export function buildPersonaPrompt(input: PersonaInput): string {
               )
               .join(", ")}. Mention one of them by name to hand a task over; they will answer in this thread.`
           : "You are the only member of this group.",
+        groupRoutingLine(input.bot, input.group.members),
         "Do not mention yourself, and do not repeat what a teammate already said.",
         GROUP_CHAT_STYLE,
-      ].join(" "),
+      ].filter(Boolean).join(" "),
     );
   }
 
@@ -424,9 +443,10 @@ export function buildLocalBrief(input: LocalBriefInput): string {
     const others = input.group.members.filter((member) => member.id !== bot.id);
     sections.push([
       `You are in the group "${singleLine(input.group.name, 60)}"${others.length ? ` with ${others.map((member) => `@${singleLine(member.name, 60)}${member.title ? ` (${singleLine(member.title, 80)})` : ""}`).join(", ")}` : ""}.`,
+      groupRoutingLine(bot, input.group.members),
       GROUP_CHAT_STYLE,
       "Don't repeat what a teammate already said.",
-    ].join(" "));
+    ].filter(Boolean).join(" "));
   }
 
   sections.push([

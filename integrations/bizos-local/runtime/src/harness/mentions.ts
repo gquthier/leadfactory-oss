@@ -57,12 +57,52 @@ export function findMentionedBotIds(text: string, roster: Bot[]): string[] {
   return ordered;
 }
 
-/** Who answers a message posted to a group.
+/** Words that address the whole group. `@équipe` folds to `@equipe`. */
+export const EVERYONE_MENTIONS: readonly string[] = ["everyone", "all", "tous", "team", "equipe"];
+
+/** `@everyone`, `@all`, `@tous`, `@team`, `@equipe` / `@équipe` — as a WORD,
+ * case and accent blind, by the same rules as a bot's name: `me@all.com` and
+ * `@allies` do not address anybody. */
+export function mentionsEveryone(text: string): boolean {
+  if (!text.includes("@")) return false;
+  const folded = foldForMention(text);
+  for (const word of EVERYONE_MENTIONS) {
+    const needle = `@${word}`;
+    let from = 0;
+    for (;;) {
+      const at = folded.indexOf(needle, from);
+      if (at === -1) break;
+      from = at + needle.length;
+      const before = at > 0 ? folded.charAt(at - 1) : "";
+      const after = folded.charAt(at + needle.length);
+      if (before && WORDLIKE.test(before)) continue;
+      if (!after || !WORDLIKE.test(after)) return true;
+    }
+  }
+  return false;
+}
+
+/** The member who answers a group message nobody was named in: the CEO when
+ * the group has one (by slug or by name), otherwise the first member. */
+export function groupLeadId(memberIds: string[], roster: Array<Bot & { slug?: string }>): string | undefined {
+  const members = memberIds
+    .map((id) => roster.find((bot) => bot.id === id))
+    .filter((bot): bot is Bot & { slug?: string } => Boolean(bot));
+  const ceo = members.find((bot) => foldForMention(bot.slug ?? "").trim() === "ceo" || foldForMention(bot.name).trim() === "ceo");
+  return ceo?.id ?? memberIds[0];
+}
+
+/** Who answers a message posted to a group — the Grok-bot rule.
  *
- * With mentions: exactly those members, in the order they were mentioned.
- * Without: every member, in roster order — a group question is asked of the
- * whole group, and silently picking one member would be a lie about who
- * was consulted. `exclude` keeps a bot from replying to itself. */
+ *   * `@Name` mentions: exactly those members, in the order they were named.
+ *   * `@everyone` / `@all` / `@tous` / `@team` / `@équipe`: every member, in
+ *     roster order.
+ *   * No mention: ONE lead — the CEO when the group has one, else its first
+ *     member. The lead answers for the group and hands over by naming a
+ *     teammate (the dispatcher's handoff), so a plain question gets one answer
+ *     instead of a chorus of five.
+ *
+ * `exclude` keeps a bot from replying to itself. */
 export function resolveGroupTargets(input: {
   text: string;
   memberIds: string[];
@@ -76,6 +116,22 @@ export function resolveGroupTargets(input: {
     ...findMentionedBotIds(input.text, input.roster.filter((bot) => members.has(bot.id))),
   ];
   const unique = [...new Set(mentioned)].filter((id) => members.has(id));
-  const targets = unique.length ? unique : input.memberIds.filter((id) => members.has(id));
+  const inRoster = input.memberIds.filter((id) => members.has(id) && id !== input.exclude);
+  let targets: string[];
+  if (unique.length) targets = unique;
+  else if (mentionsEveryone(input.text)) targets = inRoster;
+  else {
+    const lead = groupLeadId(inRoster, input.roster);
+    targets = lead ? [lead] : [];
+  }
   return targets.filter((id) => id !== input.exclude);
+}
+
+/** Whether a group message reached its answerer as the group LEAD — nobody
+ * named, nobody addressed as everyone — so the prompt can say so. */
+export function isLeadTurn(text: string, memberIds: string[], roster: Bot[], explicitMentionIds?: string[]): boolean {
+  if (explicitMentionIds?.length) return false;
+  const members = new Set(memberIds);
+  if (findMentionedBotIds(text, roster.filter((bot) => members.has(bot.id))).length) return false;
+  return !mentionsEveryone(text);
 }

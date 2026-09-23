@@ -5,9 +5,12 @@
 //   * One turn at a time per thread. A queued turn is a real `queued` run,
 //     not a hidden promise, so the UI can say "waiting" honestly.
 //   * A direct message goes to that bot. A group message goes to the
-//     mentioned members, in mention order; with no mention it goes to
-//     EVERY member, in roster order — a question asked of a group was
-//     asked of the group, and quietly picking one member would be a lie.
+//     mentioned members, in mention order; `@everyone` (`@all`, `@tous`,
+//     `@team`, `@équipe`) goes to EVERY member, in roster order; with no
+//     mention it goes to ONE lead — the CEO when the group has one, else its
+//     first member — who answers for the group and is told so in its turn,
+//     and hands over by naming a teammate (next rule). One answer to a plain
+//     question, like a group chat with bots, not a chorus.
 //   * A bot that mentions a teammate hands the turn over: the teammate
 //     answers next, up to MAX_HOPS deep, and never to itself — and never
 //     twice for the same message, because DEPTH alone does not bound a
@@ -59,12 +62,13 @@ import {
 import type { EventBus } from "./events.js";
 import type { GroupStore } from "./groups.js";
 import { newAskId } from "./ids.js";
-import { resolveGroupTargets } from "./mentions.js";
+import { isLeadTurn, resolveGroupTargets } from "./mentions.js";
 import { findMentionedBotIds } from "./mentions.js";
 import type { ExternalExecutionProvider, OllamaExecutionProvider } from "./inference.js";
 import { startOllamaTurn as defaultStartOllamaTurn, type OllamaTurnInput } from "./ollama-driver.js";
 import type { ConnectedPlan, PlanProvider } from "./plan-types.js";
 import {
+  GROUP_LEAD_TURN_NOTE,
   buildLocalBrief,
   buildPersonaPrompt,
   buildQuickChatPrompt,
@@ -286,6 +290,9 @@ interface QueuedTurn {
   triggerMessageId?: string;
   /** Restart-resumes in a row that led to this turn. */
   restartResumes?: number;
+  /** A group message that named nobody, answered by this bot as the group's
+   * lead: its turn text says so (`GROUP_LEAD_TURN_NOTE`). */
+  groupLead?: boolean;
   runId: string;
   threadId: string;
   botId: string;
@@ -534,6 +541,7 @@ export class Dispatcher {
     this.deps.events.publish({ type: "thread.message.created", threadId, message });
 
     const targets = this.resolveTargets(target, text, input.mentionBotIds);
+    const groupLead = "groupId" in target && targets.length === 1 && this.isGroupLeadMessage(target.groupId, text, input.mentionBotIds);
     if (!targets.length) {
       // The message is already in the thread. Refusing it now with an exception
       // would leave it sitting there with nothing to explain it — so the thread
@@ -554,6 +562,7 @@ export class Dispatcher {
         hop: 0,
         chainId: message.id,
         triggerMessageId: message.id,
+        ...(groupLead ? { groupLead: true } : {}),
         ...(attachments.length ? { attachments } : {}),
         ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
       });
@@ -1073,6 +1082,12 @@ export class Dispatcher {
     });
   }
 
+  private isGroupLeadMessage(groupId: string, text: string, explicit?: string[]): boolean {
+    const group = this.deps.groups.get(groupId);
+    if (!group) return false;
+    return isLeadTurn(text, group.memberIds, this.deps.bots.list(), explicit);
+  }
+
   private decisionFor(answer: AskAnswer): { behavior: "allow" | "deny" | "answer"; message?: string } {
     switch (answer.kind) {
       case "allow_once":
@@ -1132,6 +1147,7 @@ export class Dispatcher {
     fromBotId?: string;
     executionPolicy?: TurnExecutionPolicy;
     triggerMessageId?: string;
+    groupLead?: boolean;
     /** A task continued by this turn (restart / late-approval resumes). */
     resume?: { task: TaskCheckpoint; previousCheckpoint: string; restartResumes?: number };
   }): string | null {
@@ -1182,6 +1198,7 @@ export class Dispatcher {
       ...(input.fromBotId ? { fromBotId: input.fromBotId } : {}),
       ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
       ...(input.triggerMessageId ? { triggerMessageId: input.triggerMessageId } : {}),
+      ...(input.groupLead ? { groupLead: true } : {}),
       ...(input.resume ? {
         previousCheckpoint: input.resume.previousCheckpoint,
         ...(input.resume.restartResumes ? { restartResumes: input.resume.restartResumes } : {}),
@@ -1466,7 +1483,7 @@ export class Dispatcher {
       ...(plan?.codexHome ? { CODEX_HOME: plan.codexHome } : {}),
       ...(plan?.configDir ? { CLAUDE_CONFIG_DIR: plan.configDir } : {}),
     };
-    const turnText = [local?.turnPrefix, queued.text, attached.note].filter(Boolean).join("\n\n");
+    const turnText = [local?.turnPrefix, queued.groupLead ? GROUP_LEAD_TURN_NOTE : "", queued.text, attached.note].filter(Boolean).join("\n\n");
     const common = {
       cli,
       cwd: this.deps.workspaceFor(bot),

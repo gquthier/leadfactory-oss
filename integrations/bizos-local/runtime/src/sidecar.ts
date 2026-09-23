@@ -986,12 +986,11 @@ export class CollaborationFacade {
       if (!allowedBotIds || requestedBotIds.some((id) => !allowedBotIds.includes(id))) {
         throw new HttpError(422, "invalid_agent_target", "Agent is not in this thread.");
       }
-      // The underlying harness historically fanned an unmentioned group turn
-      // out to every member. Local collaboration instead has one deterministic
-      // lead: explicit mentions win, otherwise the first seated agent answers.
-      const mentionBotIds = requestedBotIds.length > 0
-        ? requestedBotIds
-        : "groupId" in target ? allowedBotIds.slice(0, 1) : [];
+      // Explicit mentions win; otherwise the harness routes the text itself
+      // (`mentions.resolveGroupTargets`): `@everyone` reaches every member,
+      // and a message naming nobody goes to ONE lead (the CEO, else the first
+      // member), whose turn is told it answers for the group.
+      const mentionBotIds = requestedBotIds;
       const fingerprint = JSON.stringify({ threadId, content, mentionAgentIds: [...mentionAgentIds].sort() });
       const previous = this.index.messages[clientMessageId];
       if (previous) {

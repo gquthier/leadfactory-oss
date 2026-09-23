@@ -34,7 +34,7 @@
     "src/harness/cursor-models.ts": "af610eda94d4f8ed3d327a05c1db75d6394ed9e58e266f6758469329d95a0e72",
     "src/harness/cursor-status.ts": "2e34362176ffc281bb083d997c1da82b0bfb6f285333d1dd63c36d3bff2cc42b",
     "src/harness/device-agent.ts": "b09d1d2801a037bd0d5a0251b9b475e16c7369e0b31cf17df2ef17ffba640b15",
-    "src/harness/dispatch.ts": "2227924bce65d720928b923aad1f970042806cd886a24d454f6bd26f9710f5b4",
+    "src/harness/dispatch.ts": "d9e03ad08d879d25a4a7e79ed6317acb0ee2fbace6f32416775100b25eaf72fc",
     "src/harness/ecommerce.ts": "bf1a7ed7c1ab41c5b83db7cfb682b14864736a0eba170ab8f010596beee3c7ba",
     "src/harness/env-path.ts": "4ba59ff3b3cc9f6475fc241570dbe495f996e3ea03ba3a70bfc6395595d26f08",
     "src/harness/events.ts": "2a9b27ae6b149a713bb1653dc94b69bdbf4e63bd4aa76a418117dd26915059d3",
@@ -44,7 +44,7 @@
     "src/harness/inference.ts": "ec2b79eb0286b875f9370d725b50d21ca7e78bace838de1e0083851d93b69251",
     "src/harness/login-launcher.ts": "a138021bb74cfe45078ec87be7fa2ef09a732d1734b2928c40a1891131b15e6b",
     "src/harness/mcp-mount.ts": "48b858831073a7f316271bcf9bd40e5b86b59f86702e473d1c977da8f3378e41",
-    "src/harness/mentions.ts": "f44d745a480ea4358895426c254e2e9a3f6e21fe2fa14e5ef894a54a77f2928b",
+    "src/harness/mentions.ts": "87bcc25b4551a79012782cca27b7cf7b7ff8fcb720707cda4abe6c80c145d103",
     "src/harness/ollama-driver.ts": "2a55cd577cb7e92b0a5c076a1d381de3eb9b2f8709e167e0edc5d36aea08dfa9",
     "src/harness/ollama.ts": "6d414fd142a789f30b4c79495de60f86091116f0047db43b6ff1e037f2e79fd6",
     "src/harness/pack-kit.ts": "8b9effb086667aa925deae8a87462c76ce97f5895612aec936c9343f6da94089",
@@ -53,7 +53,7 @@
     "src/harness/plan-router.ts": "cecd0730f1ff9b60006f87a84ed58d76485452f798777884d47d5b71aa248e61",
     "src/harness/plan-types.ts": "4ecdf7ae6db37475050c376555b67c54dc706f159006b931ab8852c1b3bd8657",
     "src/harness/procs.ts": "f2e1ed63cbc0e0fa1ca96250556239affb83b6bdf7d9b331e87a7e30b8bd900a",
-    "src/harness/prompt.ts": "3c560083a01e5293e9857e4d0f701e48b22feb047836afed85311f3d29c8de7a",
+    "src/harness/prompt.ts": "cf4d7f387d9da912d7441a21868fbf622a33a09c941b9b2c51c879dfb316520b",
     "src/harness/redact.ts": "d66f5fc5bd6f3a991393fdef8b171b737a20d70e5ad64fda8150ea3801d6f0bc",
     "src/harness/retry.ts": "36526a6b37e566b8ac73fc36a37745b2b7d94c25ae687f78c19b164046b0cda3",
     "src/harness/routines.ts": "e73ce530e4ffa8b4a561fc8553c66b4e90ebd8e302c88fd047e4bdc5f8d712d5",
@@ -81,7 +81,7 @@
     "src/routines-public.ts": "41e46b8cdffc47396556d8b054782c02b3f911a569f460fbd9eaae0ef9d25fcb",
     "src/sidecar-contract.ts": "10c2d18c2560c1b3451f53ea8115ce75e2a7aed4c674e6d059e0e36c03a317e2",
     "src/sidecar-state.ts": "61c9149007198577dde498a3154ae5bd45aae0396630e1fb57a09a140973332b",
-    "src/sidecar.ts": "336bacd2adc779591cf8f84c1fc024aea97fbbd4cc3678f8196c750a1df2d956",
+    "src/sidecar.ts": "7e72a29ede0e53bad1a6a2092ec14c0863bba6d1dcfc7a9d30d06fc44ed22933",
     "src/voice-tasks.ts": "1d89d16114d21481360d2715a316db900694e70f154313075318e1e8ab36fb1e"
   }
 }
