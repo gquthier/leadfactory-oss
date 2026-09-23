@@ -264,7 +264,7 @@ memory): identity, company and person, mission, freedom to act, texting style
 new), teammates, three safety rules and a few runtime facts. The cloud prompt,
 Quick chats and native Ollama keep their existing prompts.
 
-The brief is byte-stable within a provider session and is sent once per session:
+Codex gets it at the top of the first turn of a new thread (or when `thread/resume` fails) and a resumed,
 Codex gets it on `thread/start` (or when `thread/resume` fails) and a resumed,
 primed thread receives only the messages since the agent's last reply
 (`resumedSystem`); Claude re-sends the same bytes in `--append-system-prompt`,
