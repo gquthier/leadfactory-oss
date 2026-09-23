@@ -305,6 +305,11 @@ function routeId(pathname: string, pattern: RegExp): string | null {
 }
 
 function processCommand(pid: number): string {
+  if (process.platform === 'win32') {
+    const command = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`;
+    const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8' });
+    return result.status === 0 ? result.stdout.trim() : '';
+  }
   const result = spawnSync("/bin/ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
   return result.status === 0 ? result.stdout.trim() : "";
 }
@@ -317,6 +322,7 @@ function descriptorProcessIsOurs(descriptor: Descriptor): boolean {
 }
 
 function processEnvironment(pid: number): string {
+  if (process.platform === 'win32') return '';
   const result = spawnSync("/bin/ps", ["-p", String(pid), "-wwwE", "-o", "command="], { encoding: "utf8" });
   return result.status === 0 ? result.stdout.trim() : "";
 }
@@ -374,6 +380,7 @@ export function signalProcessGroup(
   pid: number,
   kill: (pid: number, signal: NodeJS.Signals) => boolean = process.kill,
 ): boolean {
+  if (process.platform === 'win32') return false;
   try {
     kill(-pid, "SIGTERM");
     return true;

@@ -10,7 +10,8 @@ import {
   type ExecFileOptions,
   type SpawnOptions,
 } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 export type PipedChild = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -30,11 +31,28 @@ export async function waitForCliShutdown(): Promise<boolean> {
   return outcomes.every(Boolean);
 }
 
+/** Standard npm .cmd shims point to a JavaScript entrypoint. Resolve that
+ * entrypoint and invoke it directly with bundled Node so user supplied prompts
+ * never pass through cmd.exe's command parser. Unknown shims fail closed. */
+export function cliLaunch(cli: string, args: string[], platform: NodeJS.Platform = process.platform): { command: string; args: string[] } {
+  if (platform !== 'win32' || !/\.(cmd|bat)$/i.test(cli)) return { command: cli, args };
+  const contents = readFileSync(cli, 'utf8');
+  const match = /["']%(?:~dp0|dp0)%?\\([^"'\r\n]+?\.[cm]?js)["']/i.exec(contents)
+    ?? /["']%dp0%\\([^"'\r\n]+?\.[cm]?js)["']/i.exec(contents);
+  if (!match?.[1] || match[1].includes('%') || match[1].includes('..')) {
+    throw new Error(`Unsupported Windows CLI shim: ${cli}`);
+  }
+  const entry = join(dirname(cli), match[1].replace(/\\/g, '/'));
+  if (!existsSync(entry)) throw new Error(`Missing Windows CLI entrypoint: ${entry}`);
+  return { command: process.execPath, args: [entry, ...args] };
+}
+
 export function spawnCli(cli: string, args: string[], options: SpawnOptions): PipedChild {
-  const child = spawn(cli, args, {
+  const launch = cliLaunch(cli, args);
+  const child = spawn(launch.command, launch.args, {
     ...options,
     // Own process group so kill(-pid) reaps the MCP servers codex spawned.
-    detached: true,
+    detached: process.platform !== 'win32',
   }) as PipedChild;
   // A write to a dying child's stdin errors on the stream; nothing listens,
   // and an unlistened stream error takes the whole app down over one dead
@@ -55,7 +73,8 @@ export function execCli(
   options: ExecFileOptions,
   callback: (error: Error | null, stdout: string, stderr: string) => void,
 ): void {
-  execFile(cli, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) =>
+  const launch = cliLaunch(cli, args);
+  execFile(launch.command, launch.args, { ...options, encoding: "utf8" }, (error, stdout, stderr) =>
     callback(error, String(stdout ?? ""), String(stderr ?? "")),
   );
 }
@@ -107,6 +126,7 @@ export function parseCliProcessSnapshot(output: string): CliProcessIdentity[] {
 }
 
 function processSnapshot(): CliProcessIdentity[] | null {
+  if (process.platform === 'win32') return null;
   try {
     const rows = parseCliProcessSnapshot(execFileSync("/bin/ps", ["-axo", "pid=,ppid=,pgid=,lstart=,stat="], {
       encoding: "utf8", timeout: 1_000, maxBuffer: 4 * 1024 * 1024,
@@ -151,6 +171,15 @@ export function killCliTree(child: ChildProcess, graceMs = KILL_GRACE_MS): void 
 
 async function stopCliTree(child: ChildProcess, graceMs: number): Promise<boolean> {
   const pid = child.pid!;
+  if (process.platform === 'win32') {
+    if (child.exitCode !== null || child.signalCode !== null) return true;
+    try {
+      execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+        encoding: 'utf8', timeout: graceMs, stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      return true;
+    } catch { return false; }
+  }
   // A transient ps failure gets a bounded chance to recover BEFORE any signal
   // can detach descendants. No process authority is inferred from a failed ps.
   let initial = processSnapshot();

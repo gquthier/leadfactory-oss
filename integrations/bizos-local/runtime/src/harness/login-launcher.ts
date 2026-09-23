@@ -28,6 +28,12 @@ export function openCliLogin(input: OpenCliLoginInput): { started: boolean } {
     return { started: true };
   }
 
+  if (platform() === 'win32') {
+    // Callers currently provide POSIX environment assignments and quoting.
+    // Do not pass them to cmd.exe; users may sign in from their own terminal.
+    return { started: false };
+  }
+
   const shell = process.env.SHELL || "/bin/sh";
   const child = spawn(shell, ["-lc", command], {
     detached: true,

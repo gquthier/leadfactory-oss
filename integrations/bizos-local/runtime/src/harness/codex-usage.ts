@@ -9,6 +9,7 @@
 import { spawn } from "node:child_process";
 import { cleanChildEnvironment } from "./child-env.js";
 import { augmentedPath } from "./env-path.js";
+import { cliLaunch } from "./procs.js";
 
 export interface UsageWindow {
   /** "5h", "weekly", "daily" or the raw duration when it is none of those. */
@@ -120,7 +121,8 @@ export function readCodexUsage(input: {
     };
     const deadline = setTimeout(() => finish(null), timeoutMs);
     try {
-      child = spawn(input.cli, ["app-server"], { env: environment as NodeJS.ProcessEnv, stdio: ["pipe", "pipe", "pipe"] });
+      const launch = cliLaunch(input.cli, ["app-server"]);
+      child = spawn(launch.command, launch.args, { env: environment as NodeJS.ProcessEnv, stdio: ["pipe", "pipe", "pipe"] });
     } catch {
       finish(null);
       return;

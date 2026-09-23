@@ -21,6 +21,7 @@ import { cleanChildEnvironment } from "./child-env.js";
 import type { HttpMcpServer, McpServerSpec, StdioMcpServer } from "./codex-driver.js";
 import { augmentedPath, findCliCandidates } from "./env-path.js";
 import { newId } from "./ids.js";
+import { cliLaunch } from "./procs.js";
 import type { Storage } from "./storage.js";
 
 export const APPS_FILE = "apps.json";
@@ -1252,7 +1253,8 @@ export function probeStdioServer(
       finish({ ok: false, tools: [], error: `no answer after ${Math.round(timeoutMs / 1000)}s${stderr ? `: ${stderr.trim().slice(-300)}` : ""}` });
     }, timeoutMs);
     try {
-      child = spawn(server.command, server.args, {
+      const launch = cliLaunch(server.command, server.args);
+      child = spawn(launch.command, launch.args, {
         env: environment as NodeJS.ProcessEnv,
         stdio: ["pipe", "pipe", "pipe"],
       });
