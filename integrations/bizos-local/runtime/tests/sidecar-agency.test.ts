@@ -93,6 +93,10 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     const unboundSummary = await api("GET", "/api/local/dashboard-summary");
     expect(unboundSummary.status).toBe(200);
     expect(unboundSummary.body).toMatchObject({ version: 1, templateId: null, business: { state: "unavailable" }, finance: { state: "unavailable" } });
+    expect(unboundSummary.body).toMatchObject({ agents: { waiting: expect.any(Number) },
+      activity: { state: expect.stringMatching(/^(ready|empty)$/), monthComplete: expect.any(Boolean) },
+      plan: { state: expect.stringMatching(/^(ready|empty)$/) }, mode: { permissions: expect.any(String) },
+      setup: { steps: expect.arrayContaining([{ key: "company", done: false }]) } });
 
     const before = await api("GET", "/api/local/agency");
     expect(before.status).toBe(200);

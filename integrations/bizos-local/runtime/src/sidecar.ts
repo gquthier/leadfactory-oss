@@ -68,7 +68,7 @@ import { publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, 
 import { pairingAdminRoute } from "./mobile/admin-routes.js";
 import { createMobileBackend } from "./mobile/backend.js";
 import { RelayConnector } from "./mobile/connector.js";
-import { readLocalDashboardSummary } from "./dashboard-summary.js";
+import { readLocalDashboardSummary, type DashboardPlan, type DashboardProvider } from "./dashboard-summary.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_ROOT_VARIABLE = "LOCALBIZOS_SIDECAR_STATE";
@@ -1234,6 +1234,12 @@ export class CollaborationFacade {
       binding: () => this.harness.workspaceTemplate.verifiedCurrent(),
       bots: () => this.bots(),
       routines: async () => (await this.crons()).items,
+      runs: () => this.invoke<Run[]>("lbz:runs:list", [{ limit: 200 }]),
+      runLimit: 200,
+      publicThreadId: (threadId) => { const target = targetForThreadId(threadId); return target ? this.publicThreadId(target) : null; },
+      plans: () => this.invoke<DashboardPlan[]>("lbz:plans:list"),
+      providers: async () => (await this.invoke<{ providers: DashboardProvider[] }>("lbz:inference:list")).providers,
+      settings: async () => (await this.invoke<RuntimeSettings>("lbz:runtime:getSettings")).local,
     });
   }
   async createBot(raw: unknown) {

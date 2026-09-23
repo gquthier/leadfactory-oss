@@ -55,6 +55,16 @@ the sum of manually entered metrics in the profile's currency over all
 recorded dates, with no profit calculation. Email and finance for other
 templates are unavailable until a dedicated local data source exists.
 
+The summary also carries `activity` (input + output tokens today and this
+calendar month from recorded runs, runs today, running/queued runs, the current
+run and the last failure of the past 24 hours, with public thread ids),
+`plan` (the active plan or local provider: label, status and its busiest usage
+window), `mode` (permission policy and inference source) and `setup` (plan,
+company, team, routines, first completed task). The run history keeps 200 runs:
+when it may not reach back to the start of the month, `monthComplete` is false
+and day totals that it cannot cover are `null`. A plan label that is an e-mail
+address is withheld.
+
 ## Native Ollama connector
 
 The local sidecar can call an already running Ollama server directly at

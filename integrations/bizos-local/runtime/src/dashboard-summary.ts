@@ -16,16 +16,50 @@ export interface LocalDashboardSummary {
   templateId: string | null;
   generatedAt: string;
   business: Business;
-  agents: { state: "ready" | "empty" | "error"; total: number | null; working: number | null; items: Array<{ id: string; name: string; status: "idle" | "working" | "waiting" }> };
+  agents: { state: "ready" | "empty" | "error"; total: number | null; working: number | null; waiting: number | null; items: Array<{ id: string; name: string; status: "idle" | "working" | "waiting" }> };
   routines: { state: "ready" | "empty" | "error"; total: number | null; active: number | null; items: Array<{ id: string; name: string; status: "active" | "paused"; nextRunAt: string | null }> };
   email: { state: "unavailable"; reason: "no-native-email-sync" };
   finance: Finance;
+  activity: Activity;
+  plan: PlanSummary;
+  mode: { permissions: string | null; inference: string | null };
+  setup: { steps: Array<{ key: SetupKey; done: boolean }> };
 }
+type Activity = {
+  state: "ready" | "empty" | "error";
+  tokensToday: number | null; tokensMonth: number | null; monthComplete: boolean;
+  runsToday: number | null; running: number | null; queued: number | null;
+  current: { title: string; threadId: string | null } | null;
+  lastFailure: { title: string; at: string; threadId: string | null } | null;
+};
+type PlanSummary = {
+  state: "ready" | "empty" | "error";
+  label: string | null; provider: string | null; status: string | null;
+  usedPct: number | null; window: string | null; resetsAt: string | null;
+};
+type SetupKey = "plan" | "company" | "team" | "routines" | "firstTask";
+/** The run fields the dashboard reads. `runs()` answers newest first. */
+export type DashboardRun = { threadId: string; botId: string; state: string; startedAt: string; endedAt?: string;
+  task?: { objective?: unknown } | null; usage?: { inputTokens?: unknown; outputTokens?: unknown } | null };
+export type DashboardPlan = { id: string; provider: string; label: string; status: string;
+  quota?: { window?: unknown; usedPct?: unknown; resetsAt?: unknown } | null;
+  usage?: { windows?: ReadonlyArray<{ label?: unknown; usedPct?: unknown; resetsAt?: unknown }> } | null };
+export type DashboardSettings = { permissions?: unknown; activePlanId?: unknown; inferenceProviderId?: unknown };
+export type DashboardProvider = { id: string; kind: string; label: string };
 export interface DashboardInputs {
   workspaceId: string;
   binding: () => Binding | null;
   bots: () => Promise<ReadonlyArray<{ id: string; name: string; archived: boolean; status: string }>>;
   routines: () => Promise<ReadonlyArray<{ id: string; name: string; status: string; next_run_at: string | null }>>;
+  /** Newest first, at most `runLimit` rows. Absent means unknown, never zero. */
+  runs?: () => Promise<ReadonlyArray<DashboardRun>>;
+  runLimit?: number;
+  /** Internal `bot:…`/`chat:…`/`group:…` id to the id the collaboration API serves. */
+  publicThreadId?: (threadId: string) => string | null;
+  plans?: () => Promise<ReadonlyArray<DashboardPlan>>;
+  providers?: () => Promise<ReadonlyArray<DashboardProvider>>;
+  settings?: () => Promise<DashboardSettings | null>;
+  now?: () => Date;
 }
 
 const EMPTY_BUSINESS: Business = { state: "unavailable", source: null, updatedAt: null, metrics: [], items: [] };
@@ -232,7 +266,10 @@ function operations(root: string): Business {
 export async function readLocalDashboardSummary(input: DashboardInputs): Promise<LocalDashboardSummary> {
   const current = input.binding();
   const start = current ? { ...current } : null;
-  const [botResult, routineResult] = await Promise.allSettled([input.bots(), input.routines()]);
+  const missing = () => Promise.reject(new Error("source not wired"));
+  const [botResult, routineResult, runResult, planResult, providerResult, settingsResult] = await Promise.allSettled([
+    input.bots(), input.routines(), input.runs ? input.runs() : missing(), input.plans ? input.plans() : missing(),
+    input.providers ? input.providers() : missing(), input.settings ? input.settings() : missing()]);
   const same = (binding: Binding | null) => JSON.stringify(binding) === JSON.stringify(start);
   if (!same(input.binding())) throw new Error("Workspace binding changed during dashboard read");
   let business = EMPTY_BUSINESS, finance = EMPTY_FINANCE;
@@ -252,8 +289,9 @@ export async function readLocalDashboardSummary(input: DashboardInputs): Promise
       typeof bot.archived === "boolean" && ["idle", "working", "waiting"].includes(bot.status)) ? (() => {
     const rows = botResult.value.filter((bot) => !bot.archived);
     return { state: rows.length ? "ready" : "empty", total: rows.length, working: rows.filter((bot) => bot.status === "working").length,
+      waiting: rows.filter((bot) => bot.status === "waiting").length,
       items: rows.slice(0, PREVIEW_LIMIT).map((bot) => ({ id: text(bot.id, 128), name: text(bot.name), status: bot.status as "idle" | "working" | "waiting" })) };
-  })() : { state: "error", total: null, working: null, items: [] };
+  })() : { state: "error", total: null, working: null, waiting: null, items: [] };
   const routines: LocalDashboardSummary["routines"] = routineResult.status === "fulfilled" &&
     routineResult.value.every((routine) => typeof routine.id === "string" && ID.test(routine.id) && typeof routine.name === "string" &&
       ["active", "paused"].includes(routine.status) && (routine.next_run_at === null || date(routine.next_run_at) !== null)) ? (() => {
@@ -261,6 +299,102 @@ export async function readLocalDashboardSummary(input: DashboardInputs): Promise
     return { state: rows.length ? "ready" : "empty", total: rows.length, active: rows.filter((routine) => routine.status === "active").length,
       items: rows.slice(0, PREVIEW_LIMIT).map((routine) => ({ id: text(routine.id, 128), name: text(routine.name), status: routine.status as "active" | "paused", nextRunAt: routine.next_run_at })) };
   })() : { state: "error", total: null, active: null, items: [] };
-  return { version: 1, workspaceId: input.workspaceId, templateId: start?.templateId ?? null, generatedAt: new Date().toISOString(),
-    business, agents, routines, email: { state: "unavailable", reason: "no-native-email-sync" }, finance };
+  const now = input.now ? input.now() : new Date();
+  const botNames = new Map(agents.state === "error" ? [] : (botResult.status === "fulfilled" ? botResult.value : []).map((bot) => [bot.id, text(bot.name)] as const));
+  const runs = runResult.status === "fulfilled" && Array.isArray(runResult.value) && runResult.value.every(validRun) ? runResult.value : null;
+  const activity = runs ? activityOf(runs, input.runLimit ?? 200, now, botNames, input.publicThreadId ?? (() => null)) : EMPTY_ACTIVITY;
+  const settings = settingsResult.status === "fulfilled" && record(settingsResult.value) ? settingsResult.value as DashboardSettings : null;
+  const plans = planResult.status === "fulfilled" && Array.isArray(planResult.value) && planResult.value.every(validPlan) ? planResult.value : null;
+  const providers = providerResult.status === "fulfilled" && Array.isArray(providerResult.value) && providerResult.value.every(validProvider) ? providerResult.value : null;
+  const activeProvider = settings && typeof settings.inferenceProviderId === "string" && providers
+    ? providers.find((row) => row.id === settings.inferenceProviderId) ?? null : null;
+  const plan = plans && providers && settings ? planOf(plans, activeProvider, settings) : EMPTY_PLAN;
+  const mode = {
+    permissions: settings ? (settings.permissions === "skip-all" ? "skip-all" : settings.permissions === undefined || settings.permissions === "ask" ? "ask" : null) : null,
+    inference: settings ? (settings.inferenceProviderId == null ? "plan" : activeProvider ? text(activeProvider.kind, 40) || null : null) : null,
+  };
+  const steps: Array<{ key: SetupKey; done: boolean }> = [
+    { key: "plan", done: Boolean((plans ?? []).some((row) => row.status === "connected") || (providers ?? []).length > 0) },
+    { key: "company", done: start !== null },
+    { key: "team", done: (agents.total ?? 0) > 1 },
+    { key: "routines", done: (routines.active ?? 0) > 0 },
+    { key: "firstTask", done: Boolean(runs?.some((run) => run.state === "completed")) },
+  ];
+  return { version: 1, workspaceId: input.workspaceId, templateId: start?.templateId ?? null, generatedAt: now.toISOString(),
+    business, agents, routines, email: { state: "unavailable", reason: "no-native-email-sync" }, finance,
+    activity, plan, mode, setup: { steps } };
+}
+
+const EMPTY_ACTIVITY: Activity = { state: "error", tokensToday: null, tokensMonth: null, monthComplete: false,
+  runsToday: null, running: null, queued: null, current: null, lastFailure: null };
+const EMPTY_PLAN: PlanSummary = { state: "error", label: null, provider: null, status: null, usedPct: null, window: null, resetsAt: null };
+const RUN_STATES = new Set(["queued", "working", "waiting_input", "completed", "failed", "cancelled"]);
+
+function validRun(value: unknown): value is DashboardRun {
+  return record(value) && typeof value.threadId === "string" && typeof value.botId === "string" &&
+    typeof value.state === "string" && RUN_STATES.has(value.state) && date(value.startedAt) !== null &&
+    (value.endedAt === undefined || date(value.endedAt) !== null);
+}
+function validPlan(value: unknown): value is DashboardPlan {
+  return record(value) && typeof value.id === "string" && typeof value.provider === "string" &&
+    typeof value.label === "string" && typeof value.status === "string";
+}
+function validProvider(value: unknown): value is DashboardProvider {
+  return record(value) && typeof value.id === "string" && typeof value.kind === "string" && typeof value.label === "string";
+}
+function tokens(run: DashboardRun): number {
+  const input = count(run.usage?.inputTokens), output = count(run.usage?.outputTokens);
+  return (input ?? 0) + (output ?? 0);
+}
+function count(value: unknown): number | null { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null; }
+function percent(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : null; }
+/** A plan label is shown as a name; one that is an e-mail address is not. */
+function safeLabel(value: unknown): string | null { const label = text(value, 80); return label && !label.includes("@") ? label : null; }
+
+function activityOf(runs: ReadonlyArray<DashboardRun>, limit: number, now: Date, botNames: ReadonlyMap<string, string>,
+  publicThreadId: (threadId: string) => string | null): Activity {
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const started = (run: DashboardRun) => Date.parse(run.startedAt);
+  // The history keeps the newest `limit` runs. When it is full, anything
+  // older than its oldest row may have been dropped.
+  const oldest = runs.length ? Math.min(...runs.map(started)) : Number.POSITIVE_INFINITY;
+  const full = runs.length >= limit;
+  const covers = (from: number) => !full || oldest < from;
+  const today = runs.filter((run) => started(run) >= dayStart);
+  const month = runs.filter((run) => started(run) >= monthStart);
+  const title = (run: DashboardRun) => text(run.task?.objective, 160) || botNames.get(run.botId) || "";
+  const thread = (run: DashboardRun) => { try { return publicThreadId(run.threadId); } catch { return null; } };
+  const live = runs.filter((run) => run.state === "working" || run.state === "waiting_input");
+  const newest = (rows: DashboardRun[]) => [...rows].sort((a, b) => started(b) - started(a))[0];
+  const current = newest(live) ?? newest(runs.filter((run) => run.state === "queued"));
+  const failed = newest(runs.filter((run) => run.state === "failed" && Date.parse(run.endedAt ?? run.startedAt) >= now.getTime() - 86_400_000));
+  return {
+    state: runs.length ? "ready" : "empty",
+    tokensToday: covers(dayStart) ? today.reduce((sum, run) => sum + tokens(run), 0) : null,
+    tokensMonth: month.reduce((sum, run) => sum + tokens(run), 0),
+    monthComplete: covers(monthStart),
+    runsToday: covers(dayStart) ? today.length : null,
+    running: live.length,
+    queued: runs.filter((run) => run.state === "queued").length,
+    current: current ? { title: title(current), threadId: thread(current) } : null,
+    lastFailure: failed ? { title: title(failed), at: failed.endedAt ?? failed.startedAt, threadId: thread(failed) } : null,
+  };
+}
+
+function planOf(plans: ReadonlyArray<DashboardPlan>, provider: DashboardProvider | null, settings: DashboardSettings): PlanSummary {
+  if (provider) return { state: "ready", label: safeLabel(provider.label), provider: text(provider.kind, 40) || null,
+    status: "connected", usedPct: null, window: null, resetsAt: null };
+  const active = plans.find((row) => row.id === settings.activePlanId) ?? plans.find((row) => row.status === "connected") ?? plans[0];
+  if (!active) return { ...EMPTY_PLAN, state: "empty" };
+  const windows = (Array.isArray(active.usage?.windows) ? active.usage.windows : [])
+    .map((row) => ({ label: text(row.label, 40) || null, usedPct: percent(row.usedPct), resetsAt: date(row.resetsAt) }))
+    .filter((row) => row.usedPct !== null)
+    .sort((a, b) => (b.usedPct ?? 0) - (a.usedPct ?? 0));
+  const top = windows[0];
+  const quota = active.quota && percent(active.quota.usedPct) !== null
+    ? { label: text(active.quota.window, 20) || null, usedPct: percent(active.quota.usedPct), resetsAt: date(active.quota.resetsAt) } : null;
+  const usage = top ?? quota;
+  return { state: "ready", label: safeLabel(active.label), provider: text(active.provider, 40) || null, status: text(active.status, 40) || null,
+    usedPct: usage?.usedPct ?? null, window: usage?.label ?? null, resetsAt: usage?.resetsAt ?? null };
 }

@@ -44,6 +44,10 @@ dans le coffre. Les agents et routines sont ceux réellement enregistrés.
 Les montants E-commerce sont uniquement des relevés saisis à la main, avec
 leur devise ; les autres finances et l'email restent indisponibles sans source
 locale native. Une source absente ou invalide ne devient jamais un faux zéro.
+Il expose aussi l'activité (jetons du jour et du mois d'après les exécutions
+enregistrées, exécutions du jour, en cours et en file, dernier échec), le plan
+ou fournisseur actif et son usage, le mode de permissions et les étapes de mise
+en route.
 
 Lead Gen Agency conserve son cockpit métier intégré ; les anciens espaces E-commerce conservent le leur. Service-based Business et Software fonctionnent avec CEO, les spécialistes recrutés au besoin et **Second cerveau → Dossier** ; ce lot ne leur invente pas de CRM ou de dashboard métier. Leur note **Start here** recueille les faits de l’activité. Configurez votre modèle personnel dans les réglages BizOS puis donnez une mission à CEO dans Discussions.
 
