@@ -7,6 +7,7 @@ import { LocalBizosHarness } from "../src/harness/harness.js";
 import type { Routine } from "../src/harness/types.js";
 import { cronForTrigger, triggerFromToolInput } from "../src/routines-public.js";
 import { CollaborationFacade, LocalTeamBroker } from "../src/sidecar.js";
+import { emptyDurableIndex } from "../src/sidecar-contract.js";
 
 const roots: string[] = [];
 const harnesses: LocalBizosHarness[] = [];
@@ -56,7 +57,7 @@ function fixture(options: {
     },
   });
   harnesses.push(harness);
-  facade = new CollaborationFacade(harness, "fixture", broker);
+  facade = new CollaborationFacade(harness, "fixture", broker, emptyDurableIndex(), null, () => undefined);
   return { harness, broker, facade, turns };
 }
 

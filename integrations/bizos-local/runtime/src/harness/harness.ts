@@ -61,6 +61,8 @@ import type { PlanProvider, PublicPlan } from "./plan-types.js";
 import { RoutineStore } from "./routines.js";
 import { RunStore } from "./runs.js";
 import { Scheduler } from "./scheduler.js";
+import { Heartbeat, HEARTBEAT_DEFAULT_MINUTES } from "./heartbeat.js";
+import { routineRunPrompt } from "./routine-run.js";
 import { defaultSettingsPolicy, PERMISSION_POLICIES, SettingsError, SettingsStore } from "./settings.js";
 import { startSessionBroker, type SessionBroker } from "./session-broker.js";
 import { Storage, DIRECTORY_MODE, safeFileName } from "./storage.js";
@@ -283,6 +285,7 @@ export interface HarnessOptions {
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
   startOllamaTurn?: DispatchDependencies["startOllamaTurn"];
+  startClaudeTurn?: DispatchDependencies["startClaudeTurn"];
   retryScale?: number;
   /** The build's version, as this machine reports it to the device registry. */
   appVersion?: string;
@@ -335,6 +338,9 @@ export interface HarnessOptions {
     sandbox: RuntimeSettings["local"]["sandbox"];
     peers: Bot[];
   }): LocalArchitectureManifest;
+  /** Start the proactive heartbeat (the sidecar does). Off by default: the
+   * unit tests and the cloud composition never wake an agent by themselves. */
+  heartbeat?: boolean;
 }
 
 /** What a local team tool mount is issued for. */
@@ -487,6 +493,7 @@ export class LocalBizosHarness {
   private readonly storageRootRealPath: string;
   private readonly dispatcher: Dispatcher;
   private readonly scheduler: Scheduler;
+  private readonly heartbeat: Heartbeat;
   private readonly launcher: McpLauncher | null;
   private readonly deviceAgent: DeviceAgent;
   private deviceCapabilityCache: { at: number; value: DeviceCapabilities } | null = null;
@@ -674,8 +681,26 @@ export class LocalBizosHarness {
       onRunFinished: ({ bot, outcome, preview }) => this.notifyRunFinished(bot, outcome, preview),
       // The scheduler owns both halves: it hands the routine's mutex back and
       // clears `running`, but only for the run that actually holds it.
-      onRoutineIdle: (routineId, runId) => this.scheduler.settle(routineId, runId),
+      onRoutineIdle: (routineId, runId) => {
+        this.recordRoutineSettled(routineId, runId);
+        this.scheduler.settle(routineId, runId);
+      },
+      onQuietTurnSettled: (input) => {
+        if (!input.routineId) return;
+        this.routineStore.recordOutcome(input.routineId, {
+          outcome: input.outcome,
+          at: this.clock.nowIso(),
+          runId: input.runId,
+          ...(input.report ? { report: input.report } : {}),
+        });
+        // The owner said the watched thing is over: the routine ends here.
+        if (input.done) {
+          const ended = this.routineStore.expire(input.routineId);
+          if (ended) this.publishRoutineUpdated(ended, "ended");
+        }
+      },
       ...(options.startTurn ? { startTurn: options.startTurn } : {}),
+      ...(options.startClaudeTurn ? { startClaudeTurn: options.startClaudeTurn } : {}),
       ...(options.startOllamaTurn ? { startOllamaTurn: options.startOllamaTurn } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
       ...(options.retryScale ? { retryScale: options.retryScale } : {}),
@@ -743,18 +768,38 @@ export class LocalBizosHarness {
       // signed out" by every tool it reached for.
       prepare: () => this.refreshSessionCookie(),
       ineligibleReason: (routine) => this.routineOwnerIneligibleReason(routine.botId),
-      fire: ({ routine, missed }) => {
+      onExpired: (routine) => this.publishRoutineUpdated(routine, "expired"),
+      fire: ({ routine, missed, final }) => {
         const bot = this.botStore.get(routine.botId);
         const reason = this.routineOwnerIneligibleReason(routine.botId);
         if (!bot || reason) throw new Error(reason ?? "routine owner does not exist");
         return this.dispatcher.runRoutine({
           botId: routine.botId,
           routineId: routine.id,
-          prompt: missed
-            ? `${routine.prompt}\n\n(This routine was due while Local BizOS was closed; it is running now, late.)`
-            : routine.prompt,
+          routine: { name: routine.name, trigger: routine.trigger, ...(routine.endsAt ? { endsAt: routine.endsAt } : {}) },
+          prompt: routineRunPrompt({
+            name: routine.name,
+            prompt: routine.prompt,
+            missed,
+            previousReport: routine.lastReport,
+            endsAt: routine.endsAt,
+            finalRun: final === true,
+          }),
         });
       },
+    });
+
+    this.heartbeat = new Heartbeat({
+      clock: this.clock,
+      storage: this.storage,
+      settings: () => {
+        const configured = this.settingsStore.get().local.heartbeat;
+        return configured ?? { enabled: true, everyMinutes: HEARTBEAT_DEFAULT_MINUTES };
+      },
+      botIds: () => this.botStore.list().filter((bot) => !bot.archived).map((bot) => bot.id),
+      runs: () => this.runStore.list(200),
+      isBusy: (botId) => this.dispatcher.isBusy(botId),
+      wake: ({ botId, threadId, prompt }) => this.dispatcher.runHeartbeat({ botId, threadId, prompt }),
     });
 
     // The device agent is BUILT here and STARTED in `start()`: a harness a
@@ -815,6 +860,21 @@ export class LocalBizosHarness {
       // name it, which is more useful than failing here.
     }
     return path;
+  }
+
+  /** A routine run reached a terminal state that never reached the quiet
+   * delivery (refused, cancelled while queued): its outcome still counts. */
+  private recordRoutineSettled(routineId: string, runId: string): void {
+    const run = this.runStore.get(runId);
+    const routine = this.routineStore.get(routineId);
+    if (!run || !routine || routine.lastOutcome?.runId === runId) return;
+    const outcome = run.outcome
+      ?? (run.state === "completed" ? "ok" : run.state === "cancelled" ? "cancelled" : "failed");
+    this.routineStore.recordOutcome(routineId, { outcome, at: run.endedAt ?? this.clock.nowIso(), runId });
+  }
+
+  private publishRoutineUpdated(routine: Routine, reason: "expired" | "ended"): void {
+    this.events.publish({ type: "routine.updated", routineId: routine.id, botId: routine.botId, reason, at: this.clock.nowIso() });
   }
 
   private notifyRunFinished(bot: Bot, outcome: "completed" | "failed", preview: string): void {
@@ -880,7 +940,11 @@ export class LocalBizosHarness {
     await this.seedPlansFromMachine();
     await this.refreshSessionCookie();
     this.scheduler.start();
+    if (this.options.heartbeat) this.heartbeat.start();
     if (this.options.devices !== false) this.deviceAgent.start();
+    // Tasks an app shutdown cut mid-flight continue once from their
+    // checkpoint (local runtime only; the dispatcher guards the rest).
+    this.dispatcher.resumeInterruptedTasks();
   }
 
   /** Import ~/.codex, ~/.claude and the machine's Cursor account as
@@ -963,6 +1027,7 @@ export class LocalBizosHarness {
     // heartbeat that cannot reach the server must not delay a quit.
     void this.deviceAgent.stop();
     this.scheduler.stop();
+    this.heartbeat.stop();
     this.dispatcher.stopAll();
     this.events.clear();
     void this.broker?.close();
@@ -3154,6 +3219,10 @@ export class LocalBizosHarness {
     markUnread: async (target: ThreadTarget): Promise<void> => this.threadStore.markUnread(target),
     answer: async (input: { runId: string; askId: string; answer: AskAnswer }): Promise<void> =>
       this.dispatcher.answer(input),
+    /** A late answer to a request that expired while its task waited. */
+    answerExpired: async (input: { runId: string; askId: string; answer: AskAnswer }): Promise<void> => {
+      if (!this.dispatcher.answerExpired(input)) throw new Error("that request is no longer open");
+    },
   };
 
   readonly routines = {
@@ -3175,6 +3244,8 @@ export class LocalBizosHarness {
       return this.routineStore.get(routine.id)!;
     },
     remove: async (id: string): Promise<void> => this.routineStore.remove(id),
+    /** Synchronous read for the sidecar's event projection. */
+    peek: (id: string): Routine | undefined => this.routineStore.get(id),
     /** The same path a scheduled fire takes, bookkeeping included — running
      * a routine by hand used to skip `lastRunAt`, `nextRunAt` and the
      * one-off disarm entirely. */
@@ -3196,6 +3267,11 @@ export class LocalBizosHarness {
     if (!owner) return "routine owner no longer exists";
     if (owner.archived) return "routine owner is archived";
     return null;
+  }
+
+  /** One heartbeat pass now (tests, and a future "check now" control). */
+  heartbeatTick(): string[] {
+    return this.heartbeat.tick();
   }
 
   checkpointTask(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {

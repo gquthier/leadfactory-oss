@@ -48,17 +48,18 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
   },
 }, {
   name: "schedule_routine",
-  description: "Create a routine on this Mac: a prompt the runtime sends to an agent on a schedule, in that agent's own chat. The owner is you unless owner_agent_id names a teammate, who then becomes responsible for it. The person sees every routine in Apps → Routines and can pause, resume or run it.",
+  description: "Create a routine on this Mac yourself — no confirmation question — whenever the person asks you to watch, remind, follow up, check back or ping them later. A short-lived watch (a delivery, a deploy, a reply, today's meeting) MUST have an end: set `until`. Write `prompt` to your future self as an intent (what to check, what counts as news, what they already know), not as an order to the person. It fires in your own direct chat; when nothing is new you will answer [SILENT] and nothing is shown. The result gives nextRunAt and endsAt: announce it in one short line. Routines cannot be created from a routine or heartbeat run. The owner is you unless owner_agent_id names a teammate; the person sees every routine in Apps → Routines.",
   inputSchema: {
     type: "object",
     properties: {
-      name: { type: "string", description: "Short routine name, such as Morning digest." },
-      prompt: { type: "string", description: "What the owner is asked to do each time it runs." },
+      name: { type: "string", description: "Short routine name, such as Colis Chronopost or Morning digest." },
+      prompt: { type: "string", description: "Intent to your future self: what to check each run, and what would be worth telling the person." },
       frequency: { type: "string", enum: ["daily", "interval", "once"], description: "daily at a time (optionally on some weekdays), every N minutes, or once at an instant." },
       time: { type: "string", description: "HH:MM local time, for daily." },
       weekdays: { type: "array", items: { type: "integer", minimum: 0, maximum: 6 }, description: "0 = Sunday … 6 = Saturday, for daily; every day when omitted." },
       every_minutes: { type: "integer", minimum: 5, maximum: 10080, description: "Minutes between runs, from 5 to 10080, for interval." },
       at: { type: "string", description: "ISO instant, for once." },
+      until: { type: "string", description: "ISO instant when this watch ends (required in spirit for anything short-lived). It never runs after it and then stops by itself." },
       owner_agent_id: { type: "string", description: "Optional teammate agent id (from the manifest or a recruitment result) who owns the routine instead of you." },
     },
     required: ["name", "prompt", "frequency"],

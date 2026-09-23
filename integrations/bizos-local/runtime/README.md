@@ -192,6 +192,29 @@ they cannot advance schedule bookkeeping or start a provider turn. Archiving
 does not interrupt a provider turn that already started; STOP remains the
 explicit control for work already executing.
 
+## Proactive routines, heartbeat and push events
+
+A routine run is wrapped in a short prompt (`harness/routine-run.ts`): deliver
+the result casually, answer exactly `[SILENT]` when nothing is new, don't
+repeat the previous report (quoted, ≤1,200 chars), and end with `[DONE]` when
+the watched thing is over. Routine and heartbeat replies are held until the
+turn ends: `[SILENT]` publishes nothing and records run outcome `silent`;
+otherwise `routine.fired` is recorded just before the reply messages.
+`endsAt` (tool `until`, PATCH `ends_at`) makes a watch self-expiring: no window
+at or after it ever fires, and the routine is then disabled with `expiredAt`.
+A routine or heartbeat run cannot create routines.
+
+Routine team events (`routine.created|updated|deleted|fired`) share the durable
+team-event history with recruitment. `GET /api/local/events` (same bearer and
+origin checks) streams `ready`, `message`, `team-event` and `run` frames with a
+15-second ping; it is a refresh hint, never the source of truth.
+
+The sidecar heartbeat (default every 30 minutes, 08:00–21:00 local, set with
+`POST /api/local/runtime/heartbeat`) wakes an idle agent only for its latest
+unfinished task checkpoint, or to nudge once on a task blocked for two hours
+with no reply. The gate reads the run store only; each task is woken at most
+once per two hours and three times in all.
+
 ## Local team-tool status
 
 `/api/local/runtime` reports `tools.scope = "local"` and separate Codex,
@@ -231,3 +254,49 @@ resumed Codex turns with a fake app-server transport, plus Claude's native tool,
 context and connector arguments. It makes no model call. See the official
 [Codex app-server contract](https://learn.chatgpt.com/docs/app-server) and
 [Claude CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+## Agent brief, memory and autonomy
+
+Local Codex, Claude Code and Cursor agents receive a short brief
+(`buildLocalBrief` in `src/harness/prompt.ts`, about 2.7k characters before
+memory): identity, company and person, mission, freedom to act, texting style
+(a blank line is a new chat bubble), routines (`[SILENT]` when there is nothing
+new), teammates, three safety rules and a few runtime facts. The cloud prompt,
+Quick chats and native Ollama keep their existing prompts.
+
+The brief is byte-stable within a provider session and is sent once per session:
+Codex gets it on `thread/start` (or when `thread/resume` fails) and a resumed,
+primed thread receives only the messages since the agent's last reply
+(`resumedSystem`); Claude re-sends the same bytes in `--append-system-prompt`,
+with the time, checkpoint and new messages in the turn text; Cursor gets it
+prefixed once per chat. A primed session is recorded per thread and agent in
+`cursors.json` (`|ctx`); a provider that starts a new session, a policy change,
+a plan failover or a cleared thread falls back to the brief plus a bounded
+transcript. A changed brief older than six hours is re-sent.
+
+Memory is two Markdown files the agent edits with its own file tools:
+`MEMORY.md` in its folder (2,200 characters) and `USER.md` at the root of the
+bound second brain, else in the profile's `workspaces/` folder (1,375
+characters). The runtime creates a missing file and never rewrites one. Both are
+read when the brief is built, shown with a fill gauge and, past the cap, a
+request to consolidate. Symlinks are not read; control characters and fence
+markers are neutralised and known secret formats redacted. A read-only sandbox
+marks memory read-only; `USER.md` outside the agent's writable roots is marked
+read-only for that agent.
+
+An `in_progress` checkpoint that changes continues automatically for up to 45
+minutes of wall clock or 20 continuations. A permission or question that
+expires unanswered no longer ends the task as failed: the run completes, the
+checkpoint becomes `blocked` with `waiting for your approval: …`, and a late
+answer through `lbz:threads:answerExpired` (the HTTP approval endpoint uses it
+for ended runs) resumes the task from its checkpoint. A late "allow once" grants
+the exact same request once, for one hour. A person's refusal still stops the
+task. The expired-request record lives in memory; after a restart, or at any
+time, a reply in the thread continues the task, whose blocked checkpoint is in
+the turn context.
+
+At start, the latest run of each agent thread whose task was `in_progress`
+when an app shutdown or crash interrupted it (touched within 12 hours) is
+continued once with a note that the app restarted. STOP-cancelled runs are never
+resumed, a run is resumed at most once, and a chain of two restart resumes is
+not extended further.

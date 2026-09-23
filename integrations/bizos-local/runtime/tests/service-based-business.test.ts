@@ -90,7 +90,7 @@ describe("Service-based Business company template", () => {
     expect(notes.get("Rules.md")).toMatch(/recruit_agent.*manage_agent/is);
     expect(notes.get("Rules.md")).toMatch(/current team (chat|thread)/i);
     expect(notes.get("Rules.md")).toMatch(/4 hops.*12 turns.*no revisit/is);
-    expect(notes.get("Rules.md")).toMatch(/three additional turns|3 continuations/i);
+    expect(notes.get("Rules.md")).toMatch(/45 minutes or 20 turns/i);
     expect(notes.get("Rules.md")).toMatch(/interrupted.*not.*automatic/is);
     expect(notes.get("Rules.md")).not.toMatch(/24\/7|always online/i);
 

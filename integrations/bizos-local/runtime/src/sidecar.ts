@@ -30,6 +30,7 @@ import {
   type Run,
   type ThreadMessage,
   type ThreadSnapshot,
+  type ProductEvent,
   type ThreadTarget,
 } from "./harness/types.js";
 import { buildHandlers, runHandler } from "./ipc.js";
@@ -43,9 +44,12 @@ import {
   type DurableIndex,
   type DurableVoiceCall,
   type AgentManagementResult,
+  type LocalRoutineEventChanges,
+  type LocalRoutineEventType,
   type LocalTeamEvent,
   type RecruitmentResult,
 } from "./sidecar-contract.js";
+import { LocalEventHub, serveEventStream } from "./local-events.js";
 import {
   resolveVoiceBinding,
   VoiceTaskError,
@@ -65,7 +69,7 @@ import { parseAvatarDataUrl, safeAvatarDataUrl } from "./harness/avatar.js";
 import { AvatarGenerationError, type AvatarWorkerReport } from "./harness/bots.js";
 import { newId, newMessageId } from "./harness/ids.js";
 import type { PackHost } from "./harness/pack.js";
-import { publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, type PublicRoutine, type PublicRoutineRun } from "./routines-public.js";
+import { cronForTrigger, endsAtFromToolInput, publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, type PublicRoutine, type PublicRoutineRun } from "./routines-public.js";
 import { pairingAdminRoute } from "./mobile/admin-routes.js";
 import { createMobileBackend } from "./mobile/backend.js";
 import { RelayConnector } from "./mobile/connector.js";
@@ -513,6 +517,110 @@ export class CollaborationFacade {
     this.handlers = buildHandlers(harness);
     this.userId = `local:${instanceId}:user`;
     this.workspaceId = `local:${instanceId}:workspace`;
+    // Routine events are recorded whether or not a desktop is listening; the
+    // bus is cleared (and this listener with it) when the harness stops.
+    harness.events?.subscribe((event) => this.onHarnessEvent(event));
+  }
+
+  /** Open `GET /api/local/events` streams. */
+  readonly streams = new LocalEventHub();
+
+  private onHarnessEvent(event: ProductEvent): void {
+    try {
+      if (event.type === "thread.message.created" || event.type === "thread.message.updated") {
+        const target = targetForThreadId(event.threadId);
+        // Only what `messagePage` would serve: no system lines, no private
+        // control records (a silent routine's turn leaves one of those).
+        if (!target || !this.message(event.message, target, [])) return;
+        this.streams.publish({ event: "message", data: {
+          threadId: this.publicThreadId(target),
+          messageId: this.messageId(event.message.id),
+          change: event.type === "thread.message.created" ? "created" : "updated",
+        } });
+        return;
+      }
+      if (event.type === "run.started" || event.type === "run.waiting_input" || event.type === "run.completed"
+        || event.type === "run.failed" || event.type === "run.cancelled") {
+        const target = targetForThreadId(event.threadId);
+        if (!target) return;
+        const state = event.type === "run.completed" ? "done" as const
+          : event.type === "run.failed" ? "failed" as const
+          : event.type === "run.cancelled" ? "cancelled" as const
+          : "running" as const;
+        this.streams.publish({ event: "run", data: { runId: this.runId(event.runId), threadId: this.publicThreadId(target), state } });
+        return;
+      }
+      if (event.type === "routine.fired") {
+        const target = targetForThreadId(event.threadId) ?? { botId: event.botId };
+        const current = this.harness.routines.peek?.(event.routineId);
+        this.recordTeamEvent("routine.fired", {
+          actorBotId: event.botId,
+          ownerBotId: event.botId,
+          runId: this.runId(event.runId),
+          threadId: this.publicThreadId(target),
+          createdAt: event.at,
+          changes: this.routineChanges({
+            id: event.routineId,
+            name: event.routine.name,
+            trigger: event.routine.trigger,
+            ...(event.routine.endsAt ? { endsAt: event.routine.endsAt } : {}),
+            ...(current ? { enabled: current.enabled, ...(current.nextRunAt ? { nextRunAt: current.nextRunAt } : {}) } : {}),
+          }),
+        });
+        return;
+      }
+      if (event.type === "routine.updated") {
+        const routine = this.harness.routines.peek?.(event.routineId);
+        if (!routine) return;
+        this.recordTeamEvent("routine.updated", {
+          actorBotId: routine.botId,
+          ownerBotId: routine.botId,
+          runId: this.runId("none"),
+          threadId: this.publicThreadId({ botId: routine.botId }),
+          createdAt: event.at,
+          changes: { ...this.routineChanges(routine), reason: event.reason },
+        });
+      }
+    } catch (error) {
+      process.stderr.write(`[localbizos] event projection: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+
+  private routineChanges(routine: Pick<Routine, "id" | "name" | "trigger"> & Partial<Pick<Routine, "endsAt" | "enabled" | "nextRunAt">>): LocalRoutineEventChanges {
+    return {
+      routineId: routine.id,
+      routineName: routine.name,
+      schedule: cronForTrigger(routine.trigger),
+      trigger: routine.trigger,
+      nextRunAt: routine.enabled === false ? null : routine.nextRunAt ?? null,
+      endsAt: routine.endsAt ?? null,
+      ...(routine.enabled === undefined ? {} : { enabled: routine.enabled }),
+    };
+  }
+
+  /** Append a routine team event to the durable index and push it. */
+  private recordTeamEvent(type: LocalRoutineEventType, input: {
+    actorBotId: string;
+    ownerBotId: string;
+    runId: string;
+    threadId: string;
+    createdAt?: string;
+    changes: LocalRoutineEventChanges;
+  }): LocalTeamEvent {
+    const event: LocalTeamEvent = {
+      eventId: `local:${this.instanceId}:team-event:${randomUUID()}`,
+      type,
+      actorAgentId: this.agentId(input.actorBotId),
+      subjectAgentId: this.agentId(input.ownerBotId),
+      runId: input.runId,
+      threadId: input.threadId,
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      changes: input.changes,
+    };
+    this.index.events = [...this.index.events, event].slice(-1_000);
+    this.persistIndex(this.index);
+    this.streams.publish({ event: "team-event", data: event });
+    return event;
   }
 
   private async invoke<T>(channel: string, args: unknown[] = []): Promise<T> {
@@ -1195,12 +1303,21 @@ export class CollaborationFacade {
     const runId = this.internalRunId(publicRunId);
     const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
-    if (publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued") {
-      throw new HttpError(409, "run_finished", "This run has ended; its requests can no longer be answered.");
-    }
+    const ended = publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued";
     const input = objectBody(raw, ["askId", "answer"]);
     const askId = requiredString(input.askId, "askId", 64);
     const answer = input.answer as AskAnswer;
+    if (ended) {
+      // An ended run takes one kind of answer only: a late answer to an
+      // approval that expired while its task waited, which resumes the task.
+      // A separate channel, so nothing else of an ended run can be answered.
+      try {
+        await this.invoke<void>("lbz:threads:answerExpired", [{ runId, askId, answer }]);
+      } catch {
+        throw new HttpError(409, "run_finished", "This run has ended; its requests can no longer be answered.");
+      }
+      return this.approvals(publicRunId);
+    }
     await this.invoke<void>("lbz:threads:answer", [{ runId, askId, answer }]);
     return this.approvals(publicRunId);
   }
@@ -1357,6 +1474,13 @@ export class CollaborationFacade {
     }
     return this.invoke("lbz:runtime:setSettings", [{ mode: "local", local: { sandbox: input.sandbox } }]);
   }
+  /** Settings → proactive heartbeat: `{enabled, everyMinutes}` (10–240). */
+  async setHeartbeat(raw: unknown) {
+    const input = objectBody(raw, ["enabled", "everyMinutes"]);
+    if (typeof input.enabled !== "boolean") throw new HttpError(400, "invalid_settings", "enabled must be a boolean.");
+    const everyMinutes = input.everyMinutes === undefined ? 30 : input.everyMinutes;
+    return this.invoke("lbz:runtime:setSettings", [{ mode: "local", local: { heartbeat: { enabled: input.enabled, everyMinutes } } }]);
+  }
   /** The one permission switch, for every agent at once. `skip-all` is the
    * dangerous mode: no CLI asks anything, of anybody. */
   async setPermissions(raw: unknown) {
@@ -1408,7 +1532,7 @@ export class CollaborationFacade {
     return { items: routines.map((routine) => publicRoutine(routine, bots, (botId) => this.agentId(botId))) };
   }
   async patchCron(id: string, raw: unknown): Promise<{ item: PublicRoutine }> {
-    const input = objectBody(raw, ["status", "expected_updated_at", "agent_id", "name", "description", "trigger"]);
+    const input = objectBody(raw, ["status", "expected_updated_at", "agent_id", "name", "description", "trigger", "ends_at", "endsAt"]);
     const routines = await this.invoke<Routine[]>("lbz:routines:list", []);
     const current = routines.find((routine) => routine.id === id);
     if (!current) throw new HttpError(404, "not_found", "No such routine.");
@@ -1430,15 +1554,38 @@ export class CollaborationFacade {
       if (!input.trigger || typeof input.trigger !== "object" || Array.isArray(input.trigger)) throw new HttpError(400, "invalid_trigger", "trigger must be an object.");
       patch.trigger = input.trigger;
     }
+    const endsAtInput = input.ends_at !== undefined ? input.ends_at : input.endsAt;
+    if (endsAtInput !== undefined) {
+      if (endsAtInput !== null && (typeof endsAtInput !== "string" || Number.isNaN(Date.parse(endsAtInput)))) {
+        throw new HttpError(400, "invalid_ends_at", "ends_at must be an ISO instant or null.");
+      }
+      patch.endsAt = endsAtInput;
+    }
     if (Object.keys(patch).length === 0) throw new HttpError(400, "invalid_body", "Nothing to change.");
     const updated = await this.invoke<Routine>("lbz:routines:update", [id, patch]);
     const bots = await this.invoke<Bot[]>("lbz:bots:list");
+    // The person edited it in Apps → Routines: the line lands in the owner's DM.
+    this.recordTeamEvent("routine.updated", {
+      actorBotId: updated.botId,
+      ownerBotId: updated.botId,
+      runId: this.runId("none"),
+      threadId: this.publicThreadId({ botId: updated.botId }),
+      changes: this.routineChanges(updated),
+    });
     return { item: publicRoutine(updated, bots, (botId) => this.agentId(botId)) };
   }
   async deleteCron(id: string): Promise<{ removed: boolean }> {
     const routines = await this.invoke<Routine[]>("lbz:routines:list", []);
-    if (!routines.some((routine) => routine.id === id)) throw new HttpError(404, "not_found", "No such routine.");
+    const routine = routines.find((candidate) => candidate.id === id);
+    if (!routine) throw new HttpError(404, "not_found", "No such routine.");
     await this.invoke("lbz:routines:remove", [id]);
+    this.recordTeamEvent("routine.deleted", {
+      actorBotId: routine.botId,
+      ownerBotId: routine.botId,
+      runId: this.runId("none"),
+      threadId: this.publicThreadId({ botId: routine.botId }),
+      changes: { ...this.routineChanges(routine), enabled: false, nextRunAt: null },
+    });
     return { removed: true };
   }
   /** The last runs of one routine, newest first: the panel's history. */
@@ -1460,20 +1607,28 @@ export class CollaborationFacade {
     return this.harness.checkpointTask(capability, raw);
   }
 
-  async scheduleRoutine(authorize: () => TeamCapability, raw: unknown): Promise<{ routine: PublicRoutine }> {
+  async scheduleRoutine(authorize: () => TeamCapability, raw: unknown): Promise<{ routine: PublicRoutine; nextRunAt: string | null; endsAt: string | null; note: string }> {
     return this.exclusive(async () => {
       const capability = authorize();
-      const input = objectBody(raw, ["name", "prompt", "frequency", "time", "weekdays", "every_minutes", "at", "owner_agent_id"]);
+      const input = objectBody(raw, ["name", "prompt", "frequency", "time", "weekdays", "every_minutes", "at", "until", "owner_agent_id"]);
       const name = requiredString(input.name, "name", 80);
       const prompt = requiredString(input.prompt, "prompt", 6000);
       let trigger;
+      let endsAt: string | null;
       try {
         trigger = triggerFromToolInput(input);
+        endsAt = endsAtFromToolInput(input);
       } catch (error) {
         throw new HttpError(400, "invalid_trigger", error instanceof Error ? error.message : "invalid trigger");
       }
       const acceptedRun = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
       this.requireActiveTeamRun(acceptedRun, capability, "A routine can be scheduled only while its source run is active.");
+      // Anti-recursion: a routine that schedules routines is a fork bomb with
+      // a timetable. Only a turn the person started may create one.
+      if (acceptedRun.routineId || acceptedRun.heartbeat) {
+        throw new HttpError(403, "routine_recursion",
+          "A routine or heartbeat run cannot create routines. Report what you found in your reply instead.");
+      }
       const ownerId = input.owner_agent_id === undefined
         ? capability.botId
         : this.internalAgentId(requiredString(input.owner_agent_id, "owner_agent_id", 160));
@@ -1488,8 +1643,23 @@ export class CollaborationFacade {
       if (current.runId !== capability.runId || current.botId !== capability.botId || current.threadId !== capability.threadId) {
         throw new HttpError(403, "invalid_team_scope", "The routine capability changed before it could be committed.");
       }
-      const routine = await this.invoke<Routine>("lbz:routines:create", [{ botId: ownerId, name, prompt, trigger, enabled: true }]);
-      return { routine: publicRoutine(routine, bots, (botId) => this.agentId(botId)) };
+      const routine = await this.invoke<Routine>("lbz:routines:create", [{
+        botId: ownerId, name, prompt, trigger, enabled: true, ...(endsAt ? { endsAt } : {}),
+      }]);
+      this.recordTeamEvent("routine.created", {
+        actorBotId: capability.botId,
+        ownerBotId: ownerId,
+        runId: this.runId(capability.runId),
+        threadId: this.publicThreadId(targetForThreadId(capability.threadId) ?? { botId: capability.botId }),
+        changes: this.routineChanges(routine),
+      });
+      const item = publicRoutine(routine, bots, (botId) => this.agentId(botId));
+      return {
+        routine: item,
+        nextRunAt: item.nextRunAt,
+        endsAt: item.endsAt,
+        note: "Scheduled. Tell the person in one short line what you'll watch and when (next run, and the end if any). No confirmation question.",
+      };
     });
   }
 
@@ -1857,7 +2027,7 @@ export class CollaborationFacade {
       if (avatar && !createdNow && safeAvatarDataUrl(bot.avatarUrl)?.hash !== avatar.hash) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the avatar could be set.");
         bot = await this.harness.bots.setAvatar(bot.id, { dataUrl: avatar.dataUrl });
-      } else if (avatarPrompt && !createdNow) {
+      } else if (!avatar && avatarPrompt && !createdNow) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before avatar generation could be requested.");
         try {
           bot = await this.harness.avatarGeneration.ensureIntent(bot.id, avatarPrompt);
@@ -2202,6 +2372,13 @@ async function serve(): Promise<void> {
       if (approvalRunId && method === "POST") return sendJson(response, 200, await facade.answer(approvalRunId, await bodyOf(request)));
       if (method === "GET" && url.pathname === "/api/local/runtime") return sendJson(response, 200, await facade.localRuntime());
       if (method === "GET" && url.pathname === "/api/local/team/events") return sendJson(response, 200, { events: (await facade.bootstrap()).teamEvents });
+      if (method === "GET" && url.pathname === "/api/local/events") {
+        if (!serveEventStream(request, response, facade.streams)) {
+          throw new HttpError(429, "too_many_streams", "Too many local event streams are open.");
+        }
+        return;
+      }
+      if (method === "POST" && url.pathname === "/api/local/runtime/heartbeat") return sendJson(response, 200, { settings: await facade.setHeartbeat(await bodyOf(request)) });
       if (method === "POST" && url.pathname === "/api/local/runtime/sandbox") return sendJson(response, 200, { settings: await facade.setSandbox(await bodyOf(request)) });
       if (method === "POST" && url.pathname === "/api/local/runtime/permissions") return sendJson(response, 200, { settings: await facade.setPermissions(await bodyOf(request)) });
       if (method === "GET" && url.pathname === "/api/local/bots") return sendJson(response, 200, { bots: await facade.bots() });
@@ -2353,6 +2530,8 @@ async function serve(): Promise<void> {
     homeDir: homedir(),
     deniedDirs: [stateRoot, dirname(descriptorPath)],
     devices: false,
+    // Agents with unfinished work pick it back up by themselves (gated, cheap).
+    heartbeat: true,
     localTeamTools: ({ bot, threadId, runId, teamDelegationBlocked }) => {
       // Exchange the one-shot ticket inside the trusted host. Neither token
       // reaches Codex, its prompt, argv, environment, or the renderer.

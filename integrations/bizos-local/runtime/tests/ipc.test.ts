@@ -200,6 +200,7 @@ function fakeHarness() {
       markRead: record("threads.markRead"),
       markUnread: record("threads.markUnread"),
       answer: record("threads.answer"),
+      answerExpired: record("threads.answerExpired"),
     },
     routines: {
       list: record("routines.list", []),
@@ -462,6 +463,7 @@ describe("handlers", () => {
       "lbz:threads:markRead": [target],
       "lbz:threads:markUnread": [target],
       "lbz:threads:answer": [{ runId: "run_1", askId: "ask_1", answer: { kind: "allow_once" } }],
+      "lbz:threads:answerExpired": [{ runId: "run_1", askId: "ask_1", answer: { kind: "allow_once" } }],
       "lbz:routines:list": ["bot_1"],
       "lbz:routines:create": [
         {

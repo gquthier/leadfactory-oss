@@ -1,7 +1,7 @@
 // Routines as the app shows them: the same rows the cloud's `/api/crons`
 // answers with, so one Routines app reads both. A local routine's trigger
 // becomes a cron line the app already knows how to describe.
-import type { Bot, Routine, RoutineTrigger, Run } from "./harness/types.js";
+import type { Bot, Routine, RoutineRunOutcome, RoutineTrigger, Run } from "./harness/types.js";
 import { MAX_INTERVAL_MINUTES, MIN_INTERVAL_MINUTES } from "./harness/routines.js";
 
 export interface PublicRoutine {
@@ -21,6 +21,14 @@ export interface PublicRoutine {
   kind: "local";
   /** The runtime's own trigger, so a panel can edit it as it is. */
   trigger: RoutineTrigger;
+  /** Next scheduled instant (null when paused, expired or never again). */
+  nextRunAt: string | null;
+  /** Self-expiring watch end (ISO), or null for a routine without an end. */
+  endsAt: string | null;
+  /** True once the routine ended by itself (end passed / owner said done). */
+  expired: boolean;
+  /** The latest run: `running` while one is in flight, else its outcome. */
+  lastRun: { outcome: "running" | RoutineRunOutcome; at: string } | null;
 }
 
 export interface PublicRoutineRun {
@@ -29,6 +37,8 @@ export interface PublicRoutineRun {
   started_at: string;
   ended_at: string | null;
   error: string | null;
+  /** How a finished run ended for the person; `silent` published nothing. */
+  outcome: RoutineRunOutcome | null;
 }
 
 export function publicRoutineRun(run: Run, runIdFor: (id: string) => string): PublicRoutineRun {
@@ -44,6 +54,8 @@ export function publicRoutineRun(run: Run, runIdFor: (id: string) => string): Pu
     started_at: run.startedAt,
     ended_at: run.endedAt ?? null,
     error: run.error ?? null,
+    outcome: run.outcome
+      ?? (run.state === "completed" ? "ok" : run.state === "failed" ? "failed" : run.state === "cancelled" ? "cancelled" : null),
   };
 }
 
@@ -86,7 +98,23 @@ export function publicRoutine(
     running: routine.running,
     kind: "local",
     trigger: routine.trigger,
+    nextRunAt: routine.enabled ? (routine.nextRunAt ?? null) : null,
+    endsAt: routine.endsAt ?? null,
+    expired: Boolean(routine.expiredAt),
+    lastRun: routine.running && routine.lastRunAt
+      ? { outcome: "running", at: routine.lastRunAt }
+      : routine.lastOutcome ? { outcome: routine.lastOutcome.outcome, at: routine.lastOutcome.at } : null,
   };
+}
+
+/** `until` (or `ends_at`) from the agent's tool call: an ISO instant or absent. */
+export function endsAtFromToolInput(input: Record<string, unknown>): string | null {
+  const raw = input.until ?? input.ends_at;
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw !== "string" || Number.isNaN(Date.parse(raw.trim()))) {
+    throw new Error("until must be an ISO instant in the future");
+  }
+  return new Date(raw.trim()).toISOString();
 }
 
 /** What an agent may schedule: a name, a prompt, one of three rhythms, and an owner. */

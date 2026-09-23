@@ -203,6 +203,47 @@ describe("CEO on-demand recruitment", () => {
     expect(await f.harness.groups.list()).toHaveLength(1);
   });
 
+  it("keeps an uploaded avatar authoritative when recovery also repeats an avatar prompt", async () => {
+    const f = await fixture();
+    const source = await activeCeoCapability(f);
+    const createGroup = f.harness.groups.create;
+    let failOnce = true;
+    Object.defineProperty(f.harness.groups, "create", {
+      configurable: true,
+      value: async (...args: Parameters<typeof createGroup>) => {
+        if (failOnce) {
+          failOnce = false;
+          throw new Error("fixture group persistence failure");
+        }
+        return createGroup(...args);
+      },
+    });
+    const request = {
+      role_slug: "acquisition",
+      initial_task: "Build the shortlist.",
+      avatar_data_url: PNG,
+      avatar_prompt: "A paid generation must not replace this explicit upload.",
+    };
+
+    await expect(f.facade.recruit(source.capability, request)).rejects.toThrow("fixture group persistence failure");
+    const botId = f.index.recruitments[source.runId]?.plan?.botId;
+    expect((await f.harness.bots.list()).find((bot) => bot.id === botId)).toMatchObject({
+      avatarKind: "upload",
+      avatarUrl: PNG,
+    });
+    expect((await f.harness.bots.list()).find((bot) => bot.id === botId)?.avatarGeneration).toBeUndefined();
+
+    const recovered = await f.facade.recruit(source.capability, request);
+    expect(recovered.dispatch.status).toBe("started");
+    expect((await f.harness.bots.list()).find((bot) => bot.id === botId)).toMatchObject({
+      avatarKind: "upload",
+      avatarUrl: PNG,
+    });
+    expect((await f.harness.bots.list()).find((bot) => bot.id === botId)?.avatarGeneration).toBeUndefined();
+    const persisted = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+    expect(persisted.find((bot) => bot.id === botId)?.avatarGenerationInternal).toBeUndefined();
+  });
+
   it("reuses a role reserved by an earlier uncertain turn without recreating its bot", async () => {
     const f = await fixture();
     const firstSource = await activeCeoCapability(f);

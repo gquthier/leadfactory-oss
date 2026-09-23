@@ -38,6 +38,17 @@ export const PLAN_PROVIDERS = ["codex", "claude", "cursor"] as const;
 export const ACTIVE_PLAN_ID = /^pln_[a-z0-9]+_[a-z0-9]+$/i;
 /** Opaque external provider id — mirrors `inference.PROVIDER_ID`. */
 export const INFERENCE_PROVIDER_ID = /^prv_[a-z0-9]{6,40}$/;
+export const HEARTBEAT_MIN_MINUTES = 10;
+export const HEARTBEAT_MAX_MINUTES = 240;
+
+function heartbeatSetting(value: unknown): { enabled: boolean; everyMinutes: number } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const every = record.everyMinutes;
+  if (typeof record.enabled !== "boolean" || typeof every !== "number" || !Number.isInteger(every)
+    || every < HEARTBEAT_MIN_MINUTES || every > HEARTBEAT_MAX_MINUTES) return undefined;
+  return { enabled: record.enabled, everyMinutes: every };
+}
 
 /** A refusal the bridge can name (`ipc.runHandler` uses `name` as the code). */
 export class SettingsError extends Error {
@@ -114,6 +125,7 @@ export function normalizeSettings(raw: unknown): RuntimeSettings {
       ...(activePlanId !== undefined ? { activePlanId } : {}),
       ...(provider ? { provider } : {}),
       ...(inferenceProviderId !== undefined ? { inferenceProviderId } : {}),
+      ...(heartbeatSetting(local.heartbeat) ? { heartbeat: heartbeatSetting(local.heartbeat)! } : {}),
     },
     appearance: {
       // A `settings.json` written before F-THEME has no `appearance` at all, and
@@ -293,6 +305,9 @@ export function validateLocalPatch(local: Record<string, unknown>, policy: Setti
     } else if (typeof local.inferenceProviderId !== "string" || !INFERENCE_PROVIDER_ID.test(local.inferenceProviderId.trim())) {
       throw new SettingsError("inferenceProviderId must be a prv_… id or null");
     }
+  }
+  if ("heartbeat" in local && local.heartbeat !== undefined && !heartbeatSetting(local.heartbeat)) {
+    throw new SettingsError(`heartbeat must be {enabled: boolean, everyMinutes: ${HEARTBEAT_MIN_MINUTES}–${HEARTBEAT_MAX_MINUTES}}`);
   }
 }
 
