@@ -285,6 +285,7 @@ export interface HarnessOptions {
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
   startOllamaTurn?: DispatchDependencies["startOllamaTurn"];
+  startClaudeTurn?: DispatchDependencies["startClaudeTurn"];
   retryScale?: number;
   /** The build's version, as this machine reports it to the device registry. */
   appVersion?: string;
@@ -699,6 +700,7 @@ export class LocalBizosHarness {
         }
       },
       ...(options.startTurn ? { startTurn: options.startTurn } : {}),
+      ...(options.startClaudeTurn ? { startClaudeTurn: options.startClaudeTurn } : {}),
       ...(options.startOllamaTurn ? { startOllamaTurn: options.startOllamaTurn } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
       ...(options.retryScale ? { retryScale: options.retryScale } : {}),
@@ -940,6 +942,9 @@ export class LocalBizosHarness {
     this.scheduler.start();
     if (this.options.heartbeat) this.heartbeat.start();
     if (this.options.devices !== false) this.deviceAgent.start();
+    // Tasks an app shutdown cut mid-flight continue once from their
+    // checkpoint (local runtime only; the dispatcher guards the rest).
+    this.dispatcher.resumeInterruptedTasks();
   }
 
   /** Import ~/.codex, ~/.claude and the machine's Cursor account as
@@ -3198,6 +3203,10 @@ export class LocalBizosHarness {
     markUnread: async (target: ThreadTarget): Promise<void> => this.threadStore.markUnread(target),
     answer: async (input: { runId: string; askId: string; answer: AskAnswer }): Promise<void> =>
       this.dispatcher.answer(input),
+    /** A late answer to a request that expired while its task waited. */
+    answerExpired: async (input: { runId: string; askId: string; answer: AskAnswer }): Promise<void> => {
+      if (!this.dispatcher.answerExpired(input)) throw new Error("that request is no longer open");
+    },
   };
 
   readonly routines = {

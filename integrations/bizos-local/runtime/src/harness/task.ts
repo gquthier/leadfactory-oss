@@ -9,7 +9,22 @@ export interface TaskCheckpoint {
   evidence: string[];
 }
 
-export const MAX_TASK_CONTINUATIONS = 3;
+/**
+ * The autonomy budget. An in_progress checkpoint that keeps moving is
+ * continued automatically until one of these runs out — a TIME budget first,
+ * because "three more turns" stopped long tasks halfway while a turn that
+ * loops without progress is already stopped by the unchanged-checkpoint rule.
+ */
+export const MAX_TASK_CONTINUATIONS = 20;
+export const MAX_TASK_WALL_MS = 45 * 60_000;
+/** A task interrupted by an app shutdown is resumed at the next start when its
+ * run was last touched this recently… */
+export const RESTART_RESUME_WINDOW_MS = 12 * 60 * 60_000;
+/** …and at most this many times in a row, whatever the number of restarts:
+ * a task that crashes the app must not relaunch itself forever. */
+export const MAX_RESTART_RESUMES = 2;
+/** What a paused task waits for when an approval expired unanswered. */
+export const WAITING_FOR_APPROVAL = "waiting for your approval";
 
 export function parseTaskCheckpoint(raw: unknown): TaskCheckpoint {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid task checkpoint");

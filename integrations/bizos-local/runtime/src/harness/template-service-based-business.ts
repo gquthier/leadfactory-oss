@@ -229,7 +229,7 @@ TODO: one priority, its owner, deadline and acceptance check.
 - Internal recruitment through \`recruit_agent\` is authorized for an in-scope mission; the owner does not approve each creation. \`manage_agent\` is limited to a teammate in the current group or one the agent recruited. These tools are injected for Codex and Claude when available; Cursor has no injected team tools.
 - @Name handoff works only in the current team chat. There is no native send from a CEO or director DM into an existing group. Direct the user to the team chat instead of pretending the handoff ran.
 - One chain is limited to 4 hops and 12 turns with no revisit of an agent. STOP cancels the active chain.
-- An in-progress checkpoint may continue automatically for at most three additional turns. Denied input, STOP, failure, blocked status and interrupted runs do not recover automatically; a restart preserves records but does not replay work.
+- An in-progress checkpoint that keeps progressing continues automatically for up to 45 minutes or 20 turns. Denied input, STOP, failure, blocked status and interrupted runs do not recover automatically, with two exceptions: an approval that expires unanswered pauses the task until the person answers, and a task cut by an app restart resumes once from its checkpoint.
 
 ## Authority
 

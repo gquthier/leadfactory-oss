@@ -344,6 +344,13 @@ export interface Run {
   task?: import("./task.js").TaskCheckpoint;
   inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" };
   usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
+  /** Last write to this record (checkpoint, state, usage). */
+  updatedAt?: string;
+  /** An app shutdown or crash cut this run while its task was in_progress;
+   * `resumed` once the next start has continued it (see `Dispatcher`). */
+  interruption?: "shutdown" | "resumed";
+  /** How many restart-resumes in a row led to this run. */
+  restartResumes?: number;
 }
 
 export type RoutineFrequency = "once" | "daily" | "interval";

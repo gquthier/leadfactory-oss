@@ -1301,12 +1301,21 @@ export class CollaborationFacade {
     const runId = this.internalRunId(publicRunId);
     const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
-    if (publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued") {
-      throw new HttpError(409, "run_finished", "This run has ended; its requests can no longer be answered.");
-    }
+    const ended = publicRunState(run.state) !== "running" && publicRunState(run.state) !== "queued";
     const input = objectBody(raw, ["askId", "answer"]);
     const askId = requiredString(input.askId, "askId", 64);
     const answer = input.answer as AskAnswer;
+    if (ended) {
+      // An ended run takes one kind of answer only: a late answer to an
+      // approval that expired while its task waited, which resumes the task.
+      // A separate channel, so nothing else of an ended run can be answered.
+      try {
+        await this.invoke<void>("lbz:threads:answerExpired", [{ runId, askId, answer }]);
+      } catch {
+        throw new HttpError(409, "run_finished", "This run has ended; its requests can no longer be answered.");
+      }
+      return this.approvals(publicRunId);
+    }
     await this.invoke<void>("lbz:threads:answer", [{ runId, askId, answer }]);
     return this.approvals(publicRunId);
   }
