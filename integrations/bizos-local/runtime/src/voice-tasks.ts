@@ -46,6 +46,23 @@ export class VoiceTaskError extends Error {
   }
 }
 
+function usableNow(plan: PublicPlan, nowMs: number): boolean {
+  const cooldownUntil = plan.cooldownUntil ? Date.parse(plan.cooldownUntil) : NaN;
+  const coolingDown = Number.isFinite(cooldownUntil) && cooldownUntil > nowMs;
+  return !coolingDown && (plan.status === "connected" || plan.status === "rate_limited");
+}
+
+/** The connected ChatGPT/Claude plan a voice call uses when none is chosen. */
+function automaticVoicePlan(plans: readonly PublicPlan[], nowMs: number): PublicPlan | undefined {
+  return plans
+    .filter((plan) =>
+      (plan.provider === "codex" || plan.provider === "claude")
+      && usableNow(plan, nowMs)
+      && !plan.usage?.reached
+      && (plan.quota?.usedPct ?? 0) < 100)
+    .sort((left, right) => left.priority - right.priority || left.createdAt.localeCompare(right.createdAt))[0];
+}
+
 function sameBinding(left: VoiceBinding, right: VoiceBinding): boolean {
   return left.planId === right.planId && left.provider === right.provider;
 }
@@ -74,12 +91,20 @@ export function resolveVoiceBinding(input: {
     );
   }
 
-  const planId = input.bot.planId ?? input.settings.local.activePlanId;
+  const nowMs = input.nowMs ?? Date.now();
+  // With no bot override and no active plan, a normal chat turn is routed to
+  // a connected plan automatically. Voice does the same ONCE, at the start of
+  // the call, and the desktop then pins that binding for every later task, so
+  // a call still never drifts to another account.
+  const planId = input.bot.planId
+    ?? input.settings.local.activePlanId
+    ?? input.expectedBinding?.planId
+    ?? automaticVoicePlan(input.plans, nowMs)?.id;
   if (!planId) {
     throw new VoiceTaskError(
       422,
       "voice_plan_not_selected",
-      "Select a ChatGPT or Claude personal plan before starting a voice task.",
+      "Connect a ChatGPT or Claude personal plan before starting a voice task.",
     );
   }
   const plan = input.plans.find((candidate) => candidate.id === planId);
@@ -93,10 +118,7 @@ export function resolveVoiceBinding(input: {
       "Voice tasks support ChatGPT and Claude personal plans only.",
     );
   }
-  const nowMs = input.nowMs ?? Date.now();
-  const cooldownUntil = plan.cooldownUntil ? Date.parse(plan.cooldownUntil) : NaN;
-  const coolingDown = Number.isFinite(cooldownUntil) && cooldownUntil > nowMs;
-  if ((plan.status !== "connected" && !(plan.status === "rate_limited" && !coolingDown)) || coolingDown) {
+  if (!usableNow(plan, nowMs)) {
     throw new VoiceTaskError(422, "voice_plan_unavailable", "The selected personal plan is disconnected, expired, or cooling down.");
   }
   if (plan.usage?.reached || (plan.quota?.usedPct ?? 0) >= 100) {

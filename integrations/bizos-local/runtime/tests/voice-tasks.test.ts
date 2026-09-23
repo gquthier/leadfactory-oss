@@ -67,6 +67,20 @@ describe("voice plan binding", () => {
     );
   });
 
+  it("picks the preferred connected plan once when none is selected, then stays pinned", () => {
+    const unselected = { ...base, settings: { ...base.settings, local: { ...base.settings.local, activePlanId: undefined } } };
+    const cursor = plan("pln_cursor", "cursor", { priority: -1 });
+    const exhausted = plan("pln_codex_full", "codex", { priority: 0, usage: { at: createdAt, planType: "pro", email: null, reached: true, windows: [] } });
+    const second = plan("pln_claude_second", "claude", { priority: 1 });
+    const first = resolveVoiceBinding({ ...unselected, plans: [cursor, exhausted, second] });
+    expect(first).toEqual({ planId: second.id, provider: "claude" });
+    // A later task of the same call keeps its binding even if another plan
+    // becomes preferred meanwhile.
+    const preferred = plan("pln_codex_new", "codex", { priority: -5 });
+    expect(resolveVoiceBinding({ ...unselected, plans: [preferred, second], expectedBinding: first })).toEqual(first);
+    expectVoiceError(() => resolveVoiceBinding({ ...unselected, plans: [cursor] }), "voice_plan_not_selected");
+  });
+
   it("rejects external providers, Cursor, disconnected and exhausted plans instead of falling back", () => {
     expectVoiceError(() => resolveVoiceBinding({ ...base, bot: { ...base.bot, providerId: "prv_external" } }), "voice_external_provider_not_allowed");
     expectVoiceError(() => resolveVoiceBinding({ ...base, settings: { ...base.settings, local: { ...base.settings.local, inferenceProviderId: "prv_external" } } }), "voice_external_provider_not_allowed");
