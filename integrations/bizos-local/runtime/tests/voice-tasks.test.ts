@@ -80,9 +80,13 @@ interface Fixture {
   root: string;
   harness: LocalBizosHarness;
   facade: CollaborationFacade;
+  broker: LocalTeamBroker;
   turns: CodexTurnInput[];
   stops: string[];
   teamMounts(): number;
+  /** `teamDelegationBlocked` of each dynamic-tool / MCP mount, in order. */
+  toolMounts: boolean[];
+  mcpMounts: Array<{ blocked: boolean; ticket: string }>;
   botId: string;
   agentId: string;
   binding: { planId: string; provider: "codex" };
@@ -98,6 +102,9 @@ async function fixture(options: { stopDelayMs?: number } = {}): Promise<Fixture>
   const turns: CodexTurnInput[] = [];
   const stops: string[] = [];
   let teamMounts = 0;
+  const toolMounts: boolean[] = [];
+  const mcpMounts: Array<{ blocked: boolean; ticket: string }> = [];
+  const broker = new LocalTeamBroker();
   const harness = new LocalBizosHarness({
     rootDir: root,
     homeDir: root,
@@ -110,9 +117,17 @@ async function fixture(options: { stopDelayMs?: number } = {}): Promise<Fixture>
     mcpScriptPath: "/fake/none.mjs",
     devices: false,
     environment: { PATH: "/nowhere", LBZ_CODEX_PATH: join(root, "scripted-codex") },
-    localTeamTools: () => {
+    // Wired like the sidecar: every call re-authorizes the run's capability.
+    localTeamTools: ({ bot, threadId, runId, teamDelegationBlocked }) => {
       teamMounts += 1;
-      return [{ name: "recruit_agent", description: "test", inputSchema: { type: "object" }, call: async () => ({}) }];
+      toolMounts.push(teamDelegationBlocked);
+      const session = broker.exchange(broker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }));
+      return [{ name: "recruit_agent", description: "test", inputSchema: { type: "object" }, call: async () => ({ botId: broker.authorize(session).botId }) }];
+    },
+    localTeamMcp: ({ bot, threadId, runId, teamDelegationBlocked }) => {
+      const ticket = broker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked });
+      mcpMounts.push({ blocked: teamDelegationBlocked, ticket });
+      return { command: "/fake/node", args: ["/fake/local-team-mcp.js"], forwarded: { LBZ_LOCAL_TEAM_TICKET: ticket }, preApproved: true };
     },
     localArchitecture: ({ bot, threadId, workspaceDir, sandbox, peers }) => ({
       mode: "local",
@@ -145,14 +160,17 @@ async function fixture(options: { stopDelayMs?: number } = {}): Promise<Fixture>
   await harness.runtime.setInference({ source: "plan", planId: selected.id });
   const bot = await harness.bots.create({ name: "Voice agent" });
   const index = emptyDurableIndex();
-  const facade = new CollaborationFacade(harness, INSTANCE, new LocalTeamBroker(), index, null, () => undefined);
+  const facade = new CollaborationFacade(harness, INSTANCE, broker, index, null, () => undefined);
   const result: Fixture = {
     root,
     harness,
     facade,
+    broker,
     turns,
     stops,
     teamMounts: () => teamMounts,
+    toolMounts,
+    mcpMounts,
     botId: bot.id,
     agentId: `local:${INSTANCE}:agent:${bot.id}`,
     binding: { planId: selected.id, provider: "codex" },
@@ -174,7 +192,7 @@ function finish(turn: CodexTurnInput, text: string): void {
 }
 
 describe("voice task lifecycle", () => {
-  it("prepares idempotently, dispatches once, persists the real result and does not mount team delegation", async () => {
+  it("prepares idempotently, dispatches once, persists the real result and refuses team delegation", async () => {
     const f = await fixture();
     const first = await f.facade.prepareVoiceCall({ requestId: REQUEST_A, agentId: f.agentId });
     const replay = await f.facade.prepareVoiceCall({ requestId: REQUEST_A, agentId: f.agentId });
@@ -186,9 +204,14 @@ describe("voice task lifecycle", () => {
     expect(dispatched.runs).toHaveLength(1);
     expect(f.turns).toHaveLength(1);
     expect(f.turns[0]!.environment?.CODEX_HOME).toBe(join(f.root, "codex-a"));
-    expect(f.turns[0]!.dynamicTools ?? []).toEqual([]);
+    // Mounted exactly like a typed turn, refused at call time.
+    expect(f.turns[0]!.dynamicTools?.map((tool) => tool.name)).toEqual(["recruit_agent"]);
     expect(f.turns[0]!.system).toContain("recruitment: unavailable");
-    expect(f.teamMounts()).toBe(0);
+    expect(f.toolMounts).toEqual([true]);
+    await expect(f.turns[0]!.dynamicTools![0]!.call({ name: "Helper", title: "Research" })).rejects.toMatchObject({
+      status: 403,
+      code: "team_delegation_unavailable_in_voice",
+    });
 
     const duplicate = await f.facade.dispatchVoiceCall(first.callId, { operationId: OPERATION_A, content: "Do the selected-plan task" });
     expect(duplicate).toMatchObject({ callId: first.callId, duplicate: true });
@@ -213,8 +236,65 @@ describe("voice task lifecycle", () => {
 
     await f.harness.threads.send({ botId: f.botId }, { text: "Normal chat still has its ordinary tools and routing" });
     expect(f.turns).toHaveLength(2);
-    expect(f.teamMounts()).toBe(1);
+    expect(f.teamMounts()).toBe(2);
+    expect(f.toolMounts).toEqual([true, false]);
     expect(f.turns[1]!.dynamicTools?.map((tool) => tool.name)).toContain("recruit_agent");
+    await expect(f.turns[1]!.dynamicTools![0]!.call({})).resolves.toEqual({ botId: f.botId });
+  });
+
+  it("keeps the typed chat's tool surface so voice and the next typed turn both resume the same CLI thread", async () => {
+    const f = await fixture();
+    const cursor = "lbz-dynamic-v1:thr_voice_resume";
+    await f.harness.threads.send({ botId: f.botId }, { text: "Typed turn before the call" });
+    f.turns[0]!.onEvent({ type: "session.started", sessionId: cursor, model: null });
+    finish(f.turns[0]!, "Typed answer");
+
+    const call = await f.facade.prepareVoiceCall({ requestId: REQUEST_A, agentId: f.agentId });
+    await f.facade.dispatchVoiceCall(call.callId, { operationId: OPERATION_A, content: "Voice task" });
+    expect(f.turns).toHaveLength(2);
+    // Same surface ⇒ same policy fingerprint ⇒ the saved cursor is used and
+    // the history is not replayed into a fresh thread.
+    expect(f.turns[1]!.resumeCursor).toBe(cursor);
+    expect(f.turns[1]!.dynamicTools?.map((tool) => tool.name)).toEqual(f.turns[0]!.dynamicTools?.map((tool) => tool.name));
+    f.turns[1]!.onEvent({ type: "session.started", sessionId: cursor, model: null });
+    finish(f.turns[1]!, "Voice answer");
+    expect((await f.facade.voiceCall(call.callId)).state).toBe("done");
+
+    await f.harness.threads.send({ botId: f.botId }, { text: "Typed turn after the call" });
+    expect(f.turns[2]!.resumeCursor).toBe(cursor);
+  });
+
+  it("reports the latest public progress message while the run is still running", async () => {
+    const f = await fixture();
+    const call = await f.facade.prepareVoiceCall({ requestId: REQUEST_A, agentId: f.agentId });
+    await f.facade.dispatchVoiceCall(call.callId, { operationId: OPERATION_A, content: "Long voice task" });
+    expect((await f.facade.voiceCall(call.callId)).results).toEqual([expect.objectContaining({ state: "running", content: null })]);
+    f.turns[0]!.onEvent({ type: "item.completed", itemId: "c1", itemType: "assistant_text", phase: "commentary", text: "Reading the files now", ok: true });
+    expect(await f.facade.voiceCall(call.callId)).toMatchObject({
+      state: "running",
+      message: "Long voice task",
+      results: [{ state: "running", content: "Reading the files now" }],
+    });
+    finish(f.turns[0]!, "All done");
+    expect((await f.facade.voiceCall(call.callId)).results).toEqual([expect.objectContaining({ state: "done", content: "All done" })]);
+  });
+
+  it("refuses team tool calls from the Claude MCP bridge during a voice run only", async () => {
+    const f = await fixture();
+    const call = await f.facade.prepareVoiceCall({ requestId: REQUEST_A, agentId: f.agentId });
+    await f.facade.dispatchVoiceCall(call.callId, { operationId: OPERATION_A, content: "Voice task" });
+    finish(f.turns[0]!, "Voice answer");
+    await f.harness.threads.send({ botId: f.botId }, { text: "Typed turn" });
+    expect(f.mcpMounts.map((mount) => mount.blocked)).toEqual([true, false]);
+
+    // What `/api/internal/local-team/*` does with the bridge's bearer.
+    const voiceSession = f.broker.exchange(f.mcpMounts[0]!.ticket);
+    expect(() => f.broker.authorize(voiceSession)).toThrow(expect.objectContaining({
+      status: 403,
+      code: "team_delegation_unavailable_in_voice",
+    }));
+    const typedSession = f.broker.exchange(f.mcpMounts[1]!.ticket);
+    expect(f.broker.authorize(typedSession).botId).toBe(f.botId);
   });
 
   it("cancels prepared calls and only the exact queued voice run", async () => {

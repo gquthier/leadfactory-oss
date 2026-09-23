@@ -136,7 +136,8 @@ export interface TurnExecutionPolicy {
   source: "voice";
   binding: { planId: string; provider: "codex" | "claude" };
   /** Phase one deliberately has no child-run lineage, so coordination tools
-   * are removed instead of letting a recruited run escape call-wide STOP. */
+   * refuse every call instead of letting a recruited run escape call-wide
+   * STOP. They stay mounted: the tool surface is in the resume fingerprint. */
   allowTeamDelegation: false;
 }
 

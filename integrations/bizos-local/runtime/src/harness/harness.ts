@@ -209,6 +209,15 @@ export function computerHostKey(botId: string, host: string): string {
   return approvalKey(botId, "computer", "computer_act", host);
 }
 
+function localTeamMount(bot: Bot, context: TurnContext): LocalTeamMountInput {
+  return {
+    bot,
+    threadId: context.threadId,
+    runId: context.runId,
+    teamDelegationBlocked: context.executionPolicy?.allowTeamDelegation === false,
+  };
+}
+
 /** The dedicated thread a remote task lands in, and the line that opens it.
  * A task the user cannot read afterwards is a back door, not a feature. */
 export const REMOTE_TASKS_THREAD = "Remote tasks";
@@ -305,13 +314,13 @@ export interface HarnessOptions {
    */
   computerHost?: ComputerHost;
   /** Optional local-only team tool. It is never mounted by cloud composition. */
-  localTeamMcp?(input: { bot: Bot; threadId: string; runId: string }): StdioMcpServer | null;
+  localTeamMcp?(input: LocalTeamMountInput): StdioMcpServer | null;
   /** Compiled bridge used by `localTeamMcp`. Status checks the real file so a
    * missing package artifact degrades Claude alone instead of claiming that
    * every local tool transport is down. */
   localTeamMcpScriptPath?: string;
   /** Optional local-only host tools. They never enter the cloud composition. */
-  localTeamTools?(input: { bot: Bot; threadId: string; runId: string }): CodexDynamicTool[];
+  localTeamTools?(input: LocalTeamMountInput): CodexDynamicTool[];
   /** Called for completed, failed and cancelled local runs. */
   onLocalRunSettled?(runId: string): void;
   /** Called the moment a local run is asked to STOP, before the CLI settles. */
@@ -326,6 +335,20 @@ export interface HarnessOptions {
     sandbox: RuntimeSettings["local"]["sandbox"];
     peers: Bot[];
   }): LocalArchitectureManifest;
+}
+
+/** What a local team tool mount is issued for. */
+export interface LocalTeamMountInput {
+  bot: Bot;
+  threadId: string;
+  runId: string;
+  /**
+   * The run may not recruit, hand off or schedule (a voice task). The tools
+   * stay MOUNTED — the tool surface is part of the resume-cursor fingerprint,
+   * so removing them would cold-start the thread for this run and the next
+   * typed one — and every call is refused by the host instead.
+   */
+  teamDelegationBlocked: boolean;
 }
 
 export type LocalToolsStatusCode =
@@ -607,18 +630,18 @@ export class LocalBizosHarness {
             ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue(bot.id) } }
             : {}),
         });
-        const localTeam = bot.id.startsWith("qchat_") || context.executionPolicy?.allowTeamDelegation === false
+        const localTeam = bot.id.startsWith("qchat_")
           ? undefined
-          : options.localTeamMcp?.({ bot, threadId: context.threadId, runId: context.runId });
+          : options.localTeamMcp?.(localTeamMount(bot, context));
         // The user's own apps go first so a harness server always wins the
         // key on a collision (the store refuses reserved names anyway).
         const apps = this.appsStore.mountedServers({ sharedDirs });
         return { ...apps, ...cloudTools, ...(localTeam ? { local_team_actions: localTeam } : {}) };
       },
       ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: TurnContext) =>
-        bot.id.startsWith("qchat_") || context.executionPolicy?.allowTeamDelegation === false
+        bot.id.startsWith("qchat_")
           ? []
-          : options.localTeamTools!({ bot, threadId: context.threadId, runId: context.runId }) } : {}),
+          : options.localTeamTools!(localTeamMount(bot, context)) } : {}),
       ...(options.onLocalRunSettled ? { onRunSettled: (runId: string) => options.onLocalRunSettled!(runId) } : {}),
       ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       workspaceFor: (bot) => this.workspaceFor(bot),

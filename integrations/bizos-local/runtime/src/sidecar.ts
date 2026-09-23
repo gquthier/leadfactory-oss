@@ -425,6 +425,9 @@ interface TeamCapability {
   threadId: string;
   runId: string;
   expiresAt: number;
+  /** A voice run: the team tools are mounted (same resume fingerprint as a
+   * typed turn) but every call is refused by `authorize`. */
+  teamDelegationBlocked?: boolean;
 }
 
 /** `GET /api/local/agency` and `GET /api/local/ecommerce` — the desktop
@@ -473,11 +476,20 @@ export class LocalTeamBroker {
     for (const [token, capability] of this.sessions) if (capability.runId === runId) this.sessions.delete(token);
   }
 
+  /** Every team and pack tool call passes here (dynamic tools and the Claude
+   * MCP bridge alike), so this is where a voice run's calls are refused. */
   authorize(session: string): TeamCapability {
     const capability = this.sessions.get(session);
     if (!capability || capability.expiresAt <= Date.now()) {
       this.sessions.delete(session);
       throw new HttpError(401, "invalid_team_capability", "Local team capability is invalid or expired.");
+    }
+    if (capability.teamDelegationBlocked) {
+      throw new HttpError(
+        403,
+        "team_delegation_unavailable_in_voice",
+        "Team recruitment and handoff are unavailable during a voice task. Do the work yourself or tell the user to continue in the chat.",
+      );
     }
     return capability;
   }
@@ -1036,14 +1048,19 @@ export class CollaborationFacade {
     return "done";
   }
 
+  /** Polled by the desktop several times a second while a task runs. A run's
+   * `content` is its latest public bot message, so while `state` is still
+   * `running` it is the agent's newest progress message, not its answer. */
   async voiceCall(callId: string): Promise<VoiceCallSnapshot> {
     const record = this.voiceRecord(callId);
     const target = { botId: record.botId } as const;
-    const thread = await this.harness.threads.get(target);
+    // Each thread read parses the whole transcript file: a prepared call
+    // needs none, and the trigger is normally in the page already read.
+    const thread = record.dispatch ? await this.harness.threads.get(target) : null;
     const internalRunIds = record.dispatch?.state === "completed" ? record.dispatch.runIds : [];
     const runRows = await Promise.all(internalRunIds.map(async (runId) => {
       const run = await this.run(runId, record.dispatch?.messageId);
-      const contents = thread.messages
+      const contents = (thread?.messages ?? [])
         .filter((message) => message.role === "bot" && message.runId === runId && message.deliveryState !== "control")
         .map((message) => textOf(message.blocks).trim())
         .filter(Boolean);
@@ -1055,8 +1072,9 @@ export class CollaborationFacade {
         updatedAt: run.updatedAt,
       };
     }));
-    const trigger = record.dispatch
-      ? await this.harness.threads.message(target, record.dispatch.messageId)
+    const triggerId = record.dispatch?.messageId;
+    const trigger = triggerId
+      ? thread?.messages.find((message) => message.id === triggerId) ?? await this.harness.threads.message(target, triggerId)
       : undefined;
     const states = runRows.map((run) => run.state);
     const updatedAt = runRows.map((run) => run.updatedAt).sort().at(-1) ?? record.updatedAt;
@@ -2241,10 +2259,10 @@ async function serve(): Promise<void> {
     homeDir: homedir(),
     deniedDirs: [stateRoot, dirname(descriptorPath)],
     devices: false,
-    localTeamTools: ({ bot, threadId, runId }) => {
+    localTeamTools: ({ bot, threadId, runId, teamDelegationBlocked }) => {
       // Exchange the one-shot ticket inside the trusted host. Neither token
       // reaches Codex, its prompt, argv, environment, or the renderer.
-      const session = teamBroker.exchange(teamBroker.issue({ botId: bot.id, threadId, runId }));
+      const session = teamBroker.exchange(teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }));
       const teamTools = LOCAL_TEAM_TOOL_SPECS.map((tool) => ({
         name: tool.name,
         description: tool.description,
@@ -2274,14 +2292,14 @@ async function serve(): Promise<void> {
     // the child exchanges (it never reaches the CLI's argv or prompt). The
     // toolset rides in argv, per server; the sidecar re-checks every call.
     localTeamMcpScriptPath,
-    localTeamMcp: ({ bot, threadId, runId }) => ({
+    localTeamMcp: ({ bot, threadId, runId, teamDelegationBlocked }) => ({
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
         `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
-      forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId }) },
+      forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },
       preApproved: true,
     }),
     // STOP: the capability dies now and every request it has in flight with
