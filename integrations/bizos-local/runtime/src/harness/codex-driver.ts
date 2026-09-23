@@ -135,7 +135,9 @@ export interface CodexDynamicTool {
 
 export type RuntimeEvent =
   | { type: "turn.started" }
-  | { type: "session.started"; sessionId: string | null; model: string | null }
+  | { type: "session.started"; sessionId: string | null; model: string | null;
+      /** Codex only: `thread/resume` succeeded, so `resumedSystem` was sent. */
+      resumed?: boolean }
   | { type: "content.delta"; streamKind: "assistant_text" | "reasoning_text"; delta: string }
   | { type: "item.started"; itemType: "tool"; itemId?: string; title: string }
   | { type: "item.completed"; itemType: "tool"; itemId?: string; ok: boolean }
@@ -174,6 +176,13 @@ export interface CodexTurnInput {
   text: string;
   /** Persona; codex has no system slot, so it is prefixed to `text`. */
   system?: string;
+  /**
+   * What to prefix instead when `thread/resume` succeeds: the thread already
+   * holds the brief and the history, so only what is new is sent. Absent ⇒
+   * `system` is sent on every turn (the legacy behaviour). A failed resume
+   * always falls back to `system`, the full context.
+   */
+  resumedSystem?: string;
   model?: string;
   effort?: ReasoningEffort;
   sandbox: SandboxMode;
@@ -910,6 +919,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
 
         let codexThreadId: string | null = null;
         let startedModel: string | null = null;
+        let resumedThread = false;
         const dynamicCursorPrefix = "lbz-dynamic-v1:";
         const persistedCursor = typeof input.resumeCursor === "string" ? input.resumeCursor : null;
         const cursor = persistedCursor?.startsWith(dynamicCursorPrefix)
@@ -921,6 +931,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
               | { thread?: { id?: string } }
               | undefined;
             codexThreadId = resumed?.thread?.id ?? cursor;
+            resumedThread = true;
           } catch {
             // Resume unsupported or the thread is gone — start fresh.
           }
@@ -950,7 +961,8 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
           ? `${dynamicCursorPrefix}${codexThreadId}`
           : codexThreadId;
         state.sessionId = sessionId;
-        emit({ type: "session.started", sessionId, model: startedModel ?? input.model ?? null });
+        emit({ type: "session.started", sessionId, model: startedModel ?? input.model ?? null, resumed: resumedThread });
+        const prefix = resumedThread && input.resumedSystem !== undefined ? input.resumedSystem : input.system;
 
         // Writable roots only mean something in a write sandbox: in
         // `read-only` the user's shared folders are named to the bot and
@@ -974,7 +986,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
         await request("turn/start", {
           threadId: codexThreadId,
           input: [
-            { type: "text", text: input.system ? `${input.system}\n\n${input.text}` : input.text },
+            { type: "text", text: prefix ? `${prefix}\n\n${input.text}` : input.text },
             ...(input.extraInput ?? []),
           ],
           // Spread, not `effort: … ?? null`: against codex-cli, null is

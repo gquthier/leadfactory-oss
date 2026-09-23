@@ -964,6 +964,14 @@ export function buildHandlers(
         answer: asAskAnswer(input.answer),
       });
     },
+    "lbz:threads:answerExpired": (args) => {
+      const input = asStrictRecord(at(args, 0), "input", ["runId", "askId", "answer"] as const);
+      return harness.threads.answerExpired({
+        runId: asString(input.runId, "input.runId", 64),
+        askId: asString(input.askId, "input.askId", 64),
+        answer: asAskAnswer(input.answer),
+      });
+    },
 
     "lbz:routines:list": (args) => harness.routines.list(asOptionalString(at(args, 0), "botId", 64)),
     "lbz:routines:create": (args) => {

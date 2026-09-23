@@ -16,11 +16,14 @@ export class RunStore {
     private readonly clock: Clock,
   ) {
     const raw = this.storage.readJson<Run[]>(RUNS_FILE, []);
-    // A run that was in flight when the app was killed cannot resume: its
+    // A run that was in flight when the app was killed cannot continue: its
     // codex process is gone. Reporting it as still working would be a lie.
+    // Its in_progress task is flagged instead, so the next start can resume
+    // it once from its checkpoint (`Dispatcher.resumeInterruptedTasks`).
     this.runs = (Array.isArray(raw) ? raw : []).map((run) =>
       TERMINAL.includes(run.state) ? run : { ...run, state: "cancelled", endedAt: run.endedAt ?? run.startedAt,
         ...(run.task ? { task: { ...run.task, status: "interrupted" as const } } : {}),
+        ...(run.task?.status === "in_progress" ? { interruption: "shutdown" as const } : {}),
       },
     );
   }
@@ -44,13 +47,14 @@ export class RunStore {
     return { ...run };
   }
 
-  update(id: string, patch: Partial<Pick<Run, "state" | "error" | "messageId" | "task" | "inference" | "usage">>): Run | undefined {
+  update(id: string, patch: Partial<Pick<Run, "state" | "error" | "messageId" | "task" | "inference" | "usage" | "interruption" | "restartResumes">>): Run | undefined {
     const index = this.runs.findIndex((run) => run.id === id);
     const current = this.runs[index];
     if (index < 0 || !current) return undefined;
     const next: Run = {
       ...current,
       ...patch,
+      updatedAt: this.clock.nowIso(),
       ...(patch.state && TERMINAL.includes(patch.state) ? { endedAt: this.clock.nowIso() } : {}),
     };
     this.runs[index] = next;
