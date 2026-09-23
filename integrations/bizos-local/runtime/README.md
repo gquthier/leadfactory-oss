@@ -148,6 +148,30 @@ run lineage is limited to the initial run. Normal text chat keeps its existing
 routing, failover and coordination tools. GPT-Live transport and credentials
 remain owned by the desktop main process and never enter this runtime contract.
 
+## Automatic local-agent avatars
+
+Every newly created local bot without an uploaded image gets one durable avatar
+generation job. The safe default asks only for a fictional adult, centered
+head-and-shoulders portrait on that bot's validated palette colour; bot
+instructions, company context and other business data are never copied into the
+provider prompt. A user-provided `avatarPrompt` (or recruitment
+`avatar_prompt`) replaces that default and is limited to 2,000 characters.
+
+The sidecar persists `submitting` before the desktop main process may create a
+paid provider task. An interrupted submission becomes `submission_unknown` and
+is never submitted again automatically; a persisted provider task id resumes
+polling after restart. Upload, reset, removal and explicit regeneration
+invalidate older results, while regeneration keeps the current image visible
+until the replacement is ready. Public bot and agent objects expose only
+`avatarGeneration.status` and an optional bounded `errorCode`.
+
+The bearer-authenticated `/api/local/avatar-worker/*` routes carry prompts,
+leases, task ids and normalized image bytes between the sidecar and Electron
+main. The personal Kie key remains in Electron main and is never stored in this
+runtime, sent to a renderer, put in a child environment, or included in a bot
+prompt. Polling a submitted task uses repeated claim/report checkpoints; only a
+job returned as `submitting` authorizes the provider create request.
+
 ## Routine integrity
 
 Interval routines accept whole-minute intervals from 5 through 10,080 minutes

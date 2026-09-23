@@ -21,7 +21,7 @@ import {
   WRITE_SHEET_LIMIT,
   WRITE_SHEET_WINDOW_MS,
 } from "./access.js";
-import { BotStore } from "./bots.js";
+import { BotStore, publicAvatarGeneration, type AvatarWorkerReport } from "./bots.js";
 import { startComputerBroker, type ComputerBroker } from "../computer/broker.js";
 import type { ComputerHost } from "../computer/host.js";
 import { ComputerManager, type ComputerEvent } from "../computer/manager.js";
@@ -983,7 +983,13 @@ export class LocalBizosHarness {
   /** A bot row as the renderer sees it: the store's fields plus the counts
    * only the dispatcher knows. */
   private decorate(bot: Bot): Bot {
-    return { ...bot, approvalsRemembered: this.dispatcher.approvalsFor(bot.id) };
+    const { avatarGenerationInternal, ...publicBot } = bot;
+    const avatarGeneration = publicAvatarGeneration(avatarGenerationInternal);
+    return {
+      ...publicBot,
+      ...(avatarGeneration ? { avatarGeneration } : {}),
+      approvalsRemembered: this.dispatcher.approvalsFor(bot.id),
+    };
   }
 
   /**
@@ -2968,6 +2974,14 @@ export class LocalBizosHarness {
     clearApprovals: async (id: string): Promise<{ cleared: number }> => ({
       cleared: this.dispatcher.clearApprovals(id),
     }),
+  };
+
+  /** Main-process-only durable worker surface. No provider credential enters this runtime. */
+  readonly avatarGeneration = {
+    claim: (workerId: string, configured: boolean) => this.botStore.claimAvatar(workerId, configured),
+    report: (input: AvatarWorkerReport) => this.botStore.reportAvatar(input),
+    generate: async (id: string, avatarPrompt?: string): Promise<Bot> =>
+      this.decorate(this.botStore.generateAvatar(id, avatarPrompt)),
   };
 
   /** Mark, in every journal that names it, a bot the person deleted. Best

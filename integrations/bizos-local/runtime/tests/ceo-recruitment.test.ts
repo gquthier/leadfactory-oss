@@ -401,6 +401,7 @@ describe("team avatar contract", () => {
       avatar_data_url: PNG,
     });
     expect(recruited.agent).toMatchObject({ description: "Find and verify sources.", avatarKind: "upload", avatarHash: expect.any(String) });
+    expect(recruited.agent).not.toHaveProperty("avatarGeneration");
     expect(recruited.agent).not.toHaveProperty("avatarDataUrl");
     const bootstrap = await f.facade.bootstrap();
     expect(bootstrap.agents.find((agent) => agent.agentId === recruited.agent.agentId)).toMatchObject({ avatarDataUrl: PNG });
@@ -409,5 +410,40 @@ describe("team avatar contract", () => {
     expect(reset.agent).toMatchObject({ avatarKind: "procedural", avatarHash: null });
     expect(reset.agent).not.toHaveProperty("avatarDataUrl");
     expect((await f.facade.bootstrap()).agents.find((agent) => agent.agentId === recruited.agent.agentId)).toMatchObject({ avatarDataUrl: null });
+  });
+
+  it("uses explicit recruitment avatar prompts once, preserves them when omitted, and regenerates only when explicitly replaced", async () => {
+    const f = await fixture();
+    const firstSource = await activeCeoCapability(f);
+    const first = await f.facade.recruit(firstSource.capability, {
+      role_slug: "creative",
+      initial_task: "Draft one concept.",
+      avatar_prompt: "Fictional adult art director, orange studio background.",
+    });
+    const botId = first.agent.agentId.split(":agent:")[1]!;
+    const persistedJob = () => {
+      const rows = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+      return rows.find((row) => row.id === botId)?.avatarGenerationInternal as Record<string, unknown>;
+    };
+    const firstJob = persistedJob();
+    expect(firstJob).toMatchObject({ prompt: "Fictional adult art director, orange studio background.", state: "pending" });
+    finish(f.turns[1]!);
+    finish(f.turns[0]!);
+
+    const secondSource = await activeCeoCapability(f);
+    const reused = await f.facade.recruit(secondSource.capability, { role_slug: "creative", initial_task: "Review it." });
+    expect(reused.agent.agentId).toBe(first.agent.agentId);
+    expect(persistedJob().jobId).toBe(firstJob.jobId);
+    finish(f.turns[3]!);
+    finish(f.turns[2]!);
+
+    const thirdSource = await activeCeoCapability(f);
+    await f.facade.recruit(thirdSource.capability, {
+      role_slug: "creative",
+      initial_task: "Polish it.",
+      avatar_prompt: "Fictional adult creative lead, purple studio background.",
+    });
+    expect(persistedJob()).toMatchObject({ prompt: "Fictional adult creative lead, purple studio background.", state: "pending" });
+    expect(persistedJob().jobId).not.toBe(firstJob.jobId);
   });
 });

@@ -24,6 +24,7 @@ import type { LocalBizosHarness } from "./harness/harness.js";
 import { MAX_EXTERNAL_URL_CHARS } from "./policy.js";
 import { PLAN_PROVIDERS } from "./harness/settings.js";
 import { TEMPLATE_IDS } from "./harness/templates.js";
+import { parseAvatarDataUrl } from "./harness/avatar.js";
 import type {
   AccessGrantRequest,
   AccessGrantPatch,
@@ -306,6 +307,8 @@ const CREATE_BOT_KEYS = [
   // The folder the person chose in New agent; absent, the harness makes
   // `Agents/<Name>/` in the second brain. Checked there, like on update.
   "workspacePath",
+  "avatarPrompt",
+  "avatarDataUrl",
 ] as const;
 
 const ACCESS_MODES = ["read", "read-write"] as const;
@@ -863,6 +866,12 @@ export function buildHandlers(
         ...(asOptionalString(input.workspacePath, "input.workspacePath", 1000)
           ? { workspacePath: String(input.workspacePath).trim() }
           : {}),
+        ...(asOptionalString(input.avatarPrompt, "input.avatarPrompt", 2_000)
+          ? { avatarPrompt: String(input.avatarPrompt).trim() }
+          : {}),
+        ...(input.avatarDataUrl === undefined
+          ? {}
+          : { avatarDataUrl: parseAvatarDataUrl(input.avatarDataUrl).dataUrl }),
       });
     },
     "lbz:bots:update": (args) =>

@@ -62,6 +62,7 @@ import { PackError, type PackService, type PackState } from "./harness/pack.js";
 import { isAgencyToolName } from "./harness/agency-tools.js";
 import { isCommerceToolName } from "./harness/commerce-tools.js";
 import { parseAvatarDataUrl, safeAvatarDataUrl } from "./harness/avatar.js";
+import { AvatarGenerationError, type AvatarWorkerReport } from "./harness/bots.js";
 import { newId, newMessageId } from "./harness/ids.js";
 import type { PackHost } from "./harness/pack.js";
 import { publicRoutine, publicRoutineRun, routineVersion, triggerFromToolInput, type PublicRoutine, type PublicRoutineRun } from "./routines-public.js";
@@ -589,8 +590,9 @@ export class CollaborationFacade {
       name: bot.name,
       title: bot.title ?? null,
       description: bot.description ?? null,
-      avatarKind: avatar ? "upload" as const : "procedural" as const,
+      avatarKind: avatar ? (bot.avatarKind === "generated" ? "generated" as const : "upload" as const) : "procedural" as const,
       avatarHash: avatar?.hash ?? null,
+      ...(bot.avatarGeneration ? { avatarGeneration: bot.avatarGeneration } : {}),
       ...(desktopBootstrap ? { avatarDataUrl: avatar?.dataUrl ?? null } : {}),
     };
   }
@@ -1284,6 +1286,62 @@ export class CollaborationFacade {
     const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));
     return { bot, agent, thread };
   }
+  claimAvatarWorker(raw: unknown) {
+    const input = objectBody(raw, ["workerId", "configured"]);
+    const workerId = requiredString(input.workerId, "workerId", 128);
+    if (input.configured !== true && input.configured !== false) {
+      throw new HttpError(400, "invalid_payload", "configured must be a boolean.");
+    }
+    return this.harness.avatarGeneration.claim(workerId, input.configured);
+  }
+  reportAvatarWorker(raw: unknown) {
+    const input = objectBody(raw, ["jobId", "leaseToken", "event", "taskId", "dataUrl", "errorCode"]);
+    const jobId = requiredString(input.jobId, "jobId", 80);
+    const leaseToken = requiredString(input.leaseToken, "leaseToken", 128);
+    const event = requiredString(input.event, "event", 40);
+    const errorCode = input.errorCode === undefined ? undefined : requiredString(input.errorCode, "errorCode", 80);
+    if (errorCode && !/^[a-z0-9_.-]+$/i.test(errorCode)) {
+      throw new HttpError(400, "invalid_payload", "errorCode has an invalid format.");
+    }
+    let report: AvatarWorkerReport;
+    if (event === "submitted") {
+      if (input.dataUrl !== undefined || errorCode !== undefined) throw new HttpError(400, "invalid_payload", "submitted accepts only taskId.");
+      report = { jobId, leaseToken, event, taskId: requiredString(input.taskId, "taskId", 512) };
+    } else if (event === "ready") {
+      if (input.taskId !== undefined || errorCode !== undefined) throw new HttpError(400, "invalid_payload", "ready accepts only dataUrl.");
+      try {
+        report = { jobId, leaseToken, event, dataUrl: parseAvatarDataUrl(input.dataUrl).dataUrl };
+      } catch (error) {
+        throw new HttpError(400, "invalid_avatar", error instanceof Error ? error.message : String(error));
+      }
+    } else if (event === "failed") {
+      if (input.taskId !== undefined || input.dataUrl !== undefined) throw new HttpError(400, "invalid_payload", "failed accepts only errorCode.");
+      report = { jobId, leaseToken, event, errorCode: errorCode ?? requiredString(input.errorCode, "errorCode", 80) };
+    } else if (event === "submission_unknown") {
+      if (input.taskId !== undefined || input.dataUrl !== undefined) throw new HttpError(400, "invalid_payload", "submission_unknown accepts only errorCode.");
+      report = { jobId, leaseToken, event, ...(errorCode ? { errorCode } : {}) };
+    } else {
+      throw new HttpError(400, "invalid_payload", "event is not supported.");
+    }
+    try {
+      return this.harness.avatarGeneration.report(report);
+    } catch (error) {
+      if (error instanceof AvatarGenerationError) {
+        throw new HttpError(error.code === "avatar_job_not_found" ? 404 : 409, error.code, error.message);
+      }
+      throw error;
+    }
+  }
+  async generateAvatar(id: string, raw: unknown) {
+    const input = objectBody(raw, ["avatarPrompt"]);
+    const prompt = optionalString(input.avatarPrompt, "avatarPrompt", 2_000);
+    if (!(await this.bots()).some((bot) => bot.id === id)) throw new HttpError(404, "not_found", "Bot not found.");
+    const bot = await this.harness.avatarGeneration.generate(id, prompt);
+    const bootstrap = await this.bootstrap();
+    const agent = this.agent(bot);
+    const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));
+    return { bot, agent, thread };
+  }
   async setSandbox(raw: unknown) {
     const input = objectBody(raw, ["sandbox"]);
     if (input.sandbox !== "read-only" && input.sandbox !== "workspace-write") {
@@ -1624,7 +1682,7 @@ export class CollaborationFacade {
 
   async recruit(capability: TeamCapability, raw: unknown): Promise<RecruitmentResult> {
     return this.exclusive(async () => {
-      const input = objectBody(raw, ["role_slug", "name", "title", "description", "instructions", "context", "mission", "initial_task", "avatar_data_url"]);
+      const input = objectBody(raw, ["role_slug", "name", "title", "description", "instructions", "context", "mission", "initial_task", "avatar_data_url", "avatar_prompt"]);
       const roleSlug = optionalString(input.role_slug, "role_slug", 80);
       const blueprint = roleSlug ? this.roleBlueprint(roleSlug) : undefined;
       const legacyMission = optionalString(input.mission, "mission", 2_000);
@@ -1636,6 +1694,7 @@ export class CollaborationFacade {
       const context = optionalString(input.context, "context", 2_000) ?? legacyMission;
       const supplemental = optionalString(input.instructions, "instructions", 4_000);
       const initialTask = optionalString(input.initial_task, "initial_task", 12_000);
+      const avatarPrompt = optionalString(input.avatar_prompt, "avatar_prompt", 2_000);
       const baseInstructions = blueprint?.system ?? supplemental ?? `You were recruited locally as ${title}. ${description}`;
       const instructions = assignmentInstructions(baseInstructions, context, blueprint ? supplemental : undefined);
       if (instructions.length > 16_000) throw new HttpError(422, "role_too_large", "The role instructions and bounded context exceed the local agent limit.");
@@ -1645,7 +1704,8 @@ export class CollaborationFacade {
       })();
       await this.revalidateActiveTeamRun(capability, "Recruitment is available only while its run is active.");
       const fingerprint = JSON.stringify({ roleSlug: roleSlug ?? null, name, title, description, context: context ?? null,
-        supplemental: supplemental ?? null, initialTask: initialTask ?? null, avatarHash: avatar?.hash ?? null });
+        supplemental: supplemental ?? null, initialTask: initialTask ?? null, avatarHash: avatar?.hash ?? null,
+        avatarPrompt: avatarPrompt ?? null });
       const recruitmentId = capability.runId;
       const previous = this.index.recruitments[recruitmentId];
       if (previous) {
@@ -1743,6 +1803,7 @@ export class CollaborationFacade {
         }
         this.persistIndex(this.index);
       }
+      const createdNow = !bot;
       if (!bot) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the agent could be created.");
         bot = await this.harness.bots.create({
@@ -1752,6 +1813,8 @@ export class CollaborationFacade {
           instructions,
           notifyOnFinish: true,
           ...(blueprint ? { roleSlug: blueprint.slug } : {}),
+          ...(avatarPrompt ? { avatarPrompt } : {}),
+          ...(avatar ? { avatarDataUrl: avatar.dataUrl } : {}),
           ...(inheritedOllama ? { providerId: inheritedOllama.providerId, model: inheritedOllama.model }
             : recruiter.planId ? { planId: recruiter.planId } : {}),
         }, planned.botId);
@@ -1780,9 +1843,12 @@ export class CollaborationFacade {
         this.index.roleAffiliations[bot.id] = { templateId: blueprint.templateId, roleSlug: blueprint.slug };
         this.persistIndex(this.index);
       }
-      if (avatar) {
+      if (avatar && !createdNow) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the avatar could be set.");
         bot = await this.harness.bots.setAvatar(bot.id, { dataUrl: avatar.dataUrl });
+      } else if (avatarPrompt && !createdNow) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before avatar generation could be requested.");
+        bot = await this.harness.avatarGeneration.generate(bot.id, avatarPrompt);
       }
       let group = existingGroup ?? groups.find((candidate) => candidate.id === planned.groupId && !candidate.archived);
       if (!group) {
@@ -2122,6 +2188,16 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/local/runtime/permissions") return sendJson(response, 200, { settings: await facade.setPermissions(await bodyOf(request)) });
       if (method === "GET" && url.pathname === "/api/local/bots") return sendJson(response, 200, { bots: await facade.bots() });
       if (method === "POST" && url.pathname === "/api/local/bots") return sendJson(response, 201, await facade.createBot(await bodyOf(request)));
+      if (method === "POST" && url.pathname === "/api/local/avatar-worker/claim") {
+        return sendJson(response, 200, facade.claimAvatarWorker(await bodyOf(request)));
+      }
+      if (method === "POST" && url.pathname === "/api/local/avatar-worker/report") {
+        return sendJson(response, 200, facade.reportAvatarWorker(await bodyOf(request)));
+      }
+      const generateAvatarBotId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)\/avatar\/generate$/);
+      if (generateAvatarBotId && method === "POST") {
+        return sendJson(response, 200, await facade.generateAvatar(generateAvatarBotId, await bodyOf(request)));
+      }
       const botId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)$/);
       if (botId && method === "PATCH") return sendJson(response, 200, await facade.updateBot(botId, await bodyOf(request)));
       if (method === "GET" && url.pathname === "/api/local/plans") return sendJson(response, 200, { plans: await facade.plans() });

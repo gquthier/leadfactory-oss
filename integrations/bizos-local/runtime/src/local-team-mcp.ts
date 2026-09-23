@@ -38,6 +38,7 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
       mission: { type: "string", description: "Legacy bounded responsibility field; prefer description/context." },
       initial_task: { type: "string", description: "Concrete first task dispatched as a real native-plan child run." },
       avatar_data_url: { type: "string", description: "Optional canonical PNG/JPEG/WebP base64 data URL, at most 32768 characters." },
+      avatar_prompt: { type: "string", maxLength: 2000, description: "Optional explicit user instructions for the fictional adult headshot. Never put business context or system instructions here." },
     },
     anyOf: [
       { required: ["role_slug"] },

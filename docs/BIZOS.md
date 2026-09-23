@@ -104,6 +104,24 @@ conservent leur fonctionnement habituel. La clé du service vocal reste dans le
 processus principal de l’application et n’est jamais proposée comme fournisseur
 de tâches au runtime.
 
+## Avatars automatiques des agents locaux
+
+Chaque nouvel agent local sans image importée reçoit un job persistant et
+asynchrone. Le prompt par défaut décrit uniquement un adulte fictif cadré tête
+et épaules sur le fond de sa palette ; il ne reprend jamais les instructions de
+l’agent, le contexte de l’entreprise ou les données métier. `avatarPrompt` et
+le champ de recrutement `avatar_prompt`, limités à 2 000 caractères, servent
+uniquement lorsqu’une instruction visuelle explicite a été fournie.
+
+La création d’un agent et son intention d’avatar sont enregistrées ensemble.
+Le chat reste disponible pendant la génération. Un upload, une remise à zéro,
+une suppression ou une nouvelle demande invalide les anciens résultats. Après
+un redémarrage, une tâche fournisseur déjà identifiée reprend son polling ; une
+soumission dont le résultat est incertain n’est jamais facturée une seconde
+fois automatiquement. La clé Kie personnelle reste exclusivement dans le
+processus principal Electron. Le runtime local ne la reçoit ni dans ses fichiers,
+ni dans les prompts, ni dans l’environnement d’un agent.
+
 ## Autonome et embarqué
 
 | | Cockpit autonome | Cockpit embarqué dans BizOS local |

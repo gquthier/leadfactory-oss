@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sidecarScript = join(runtimeRoot, "dist", "sidecar.js");
 const built = existsSync(sidecarScript) && existsSync(join(runtimeRoot, "dist", "agency-kit", "lib", "app.mjs"));
+const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n8sAAAAASUVORK5CYII=";
 
 interface Descriptor { origin: string; token: string; instanceId: string; pid: number }
 
@@ -132,6 +133,33 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     expect(installed.body.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(installed.body.bots).toHaveLength(1);
     expect(installed.body.bots[0]).toMatchObject({ name: "CEO", slug: "ceo" });
+    expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true }, "")).status).toBe(401);
+    expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true, extra: true })).status).toBe(400);
+    const claimedAvatar = await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true });
+    expect(claimedAvatar.body.job).toMatchObject({ state: "submitting", botId: expect.any(String), prompt: expect.stringContaining("fictional adult human") });
+    expect((await api("POST", "/api/local/avatar-worker/report", {
+      jobId: claimedAvatar.body.job.id, leaseToken: claimedAvatar.body.job.leaseToken, event: "ready",
+    })).status).toBe(400);
+    expect((await api("POST", "/api/local/avatar-worker/report", {
+      jobId: claimedAvatar.body.job.id, leaseToken: claimedAvatar.body.job.leaseToken,
+      event: "submitted", taskId: "kie-sidecar-task",
+    })).body).toMatchObject({ ok: true, applied: true, status: "submitted" });
+    const pollingAvatar = await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true });
+    expect(pollingAvatar.body.job).toMatchObject({ state: "submitted", taskId: "kie-sidecar-task" });
+    expect((await api("POST", "/api/local/avatar-worker/report", {
+      jobId: pollingAvatar.body.job.id, leaseToken: pollingAvatar.body.job.leaseToken, event: "ready", dataUrl: PNG,
+    })).body).toMatchObject({ ok: true, applied: true, status: "ready" });
+    expect((await api("GET", "/api/local/bots")).body.bots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: claimedAvatar.body.job.botId, avatarKind: "generated", avatarGeneration: { status: "ready" } }),
+    ]));
+    const regenerated = await api("POST", `/api/local/bots/${claimedAvatar.body.job.botId}/avatar/generate`, {
+      avatarPrompt: "Fictional adult founder, solid green studio background.",
+    });
+    expect(regenerated.body.bot).toMatchObject({
+      id: claimedAvatar.body.job.botId,
+      avatarKind: "generated",
+      avatarGeneration: { status: "pending" },
+    });
     expect(existsSync(join(vault, "Roles", "strategist", "system.md"))).toBe(true);
     const prefix = `local:${descriptor.instanceId}:`;
     for (const bot of installed.body.bots as Array<{ id: string; name: string; slug: string; threadId: string }>) {

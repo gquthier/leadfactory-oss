@@ -100,8 +100,12 @@ export interface LocalTeamAgent {
   name: string;
   title: string | null;
   description: string | null;
-  avatarKind: "procedural" | "upload";
+  avatarKind: "procedural" | "upload" | "generated";
   avatarHash: string | null;
+  avatarGeneration?: {
+    status: "pending" | "needs_configuration" | "submitting" | "submitted" | "ready" | "failed" | "submission_unknown";
+    errorCode?: string;
+  };
 }
 
 export interface RecruitmentDispatch {

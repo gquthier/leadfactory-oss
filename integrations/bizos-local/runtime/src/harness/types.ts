@@ -158,6 +158,35 @@ export interface CodexStatus {
 
 export type AvatarKind = "procedural" | "upload" | "generated";
 export type BotStatus = "idle" | "working" | "waiting";
+export type AvatarGenerationStatus =
+  | "pending"
+  | "needs_configuration"
+  | "submitting"
+  | "submitted"
+  | "ready"
+  | "failed"
+  | "submission_unknown";
+
+export interface PublicAvatarGeneration {
+  status: AvatarGenerationStatus;
+  errorCode?: string;
+}
+
+/** Persisted atomically with the bot row. This never crosses a public API. */
+export interface InternalAvatarGeneration {
+  active: boolean;
+  state: AvatarGenerationStatus;
+  errorCode?: string;
+  revision: number;
+  jobId: string;
+  prompt: string;
+  taskId?: string;
+  leaseToken?: string;
+  leaseWorkerId?: string;
+  leaseExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface Bot {
   id: string;
@@ -168,6 +197,9 @@ export interface Bot {
   color: string;
   avatarUrl?: string;
   avatarKind: AvatarKind;
+  /** Status-only public projection. Worker details are kept below and stripped by the harness. */
+  avatarGeneration?: PublicAvatarGeneration;
+  avatarGenerationInternal?: InternalAvatarGeneration;
   model?: string;
   thinking?: ReasoningEffort;
   /** Where this bot's turns run, when the person chose a folder. Absolute. */
@@ -210,6 +242,10 @@ export interface CreateBotInput {
   providerId?: string;
   sectionId?: string;
   notifyOnFinish?: boolean;
+  /** Explicit user image direction. Never derived from instructions or business context. */
+  avatarPrompt?: string;
+  /** A canonical local image supplied during creation suppresses automatic generation atomically. */
+  avatarDataUrl?: string;
 }
 
 export type UpdateBotInput = Partial<
