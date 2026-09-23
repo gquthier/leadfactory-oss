@@ -45,7 +45,7 @@ export type AvatarWorkerReport =
   | { jobId: string; leaseToken: string; event: "submission_unknown"; errorCode?: string };
 
 export class AvatarGenerationError extends Error {
-  constructor(readonly code: "avatar_job_not_found" | "invalid_avatar_lease", message: string) {
+  constructor(readonly code: "avatar_job_not_found" | "invalid_avatar_lease" | "avatar_generation_in_flight", message: string) {
     super(message);
   }
 }
@@ -68,7 +68,7 @@ function oneLine(value: unknown, max: number): string | undefined {
 function generationPrompt(value: unknown, color: string): string {
   if (value === undefined || value === null || value === "") {
     const paletteColor = /^#[0-9a-f]{6}$/i.test(color) ? color.toUpperCase() : BOT_COLORS[0];
-    return `${DEFAULT_AVATAR_PROMPT.slice(0, -1)} in palette color ${paletteColor}.`;
+    return `Create a fictional adult human professional headshot, centered head and shoulders, looking at the camera, clean studio lighting, a solid ${paletteColor} colored background, no text, no letters, no logo, no watermark.`;
   }
   if (typeof value !== "string" || !value.trim() || value.length > 2_000) {
     throw new Error("avatarPrompt must be a non-empty string of at most 2000 characters");
@@ -338,6 +338,15 @@ export class BotStore {
     const index = this.bots.findIndex((bot) => bot.id === id);
     const current = this.bots[index];
     if (index < 0 || !current) throw new Error("bot not found");
+    const currentJob = current.avatarGenerationInternal;
+    const leaseIsLive = currentJob?.leaseExpiresAt !== undefined
+      && Date.parse(currentJob.leaseExpiresAt) > this.clock.now().getTime();
+    if (currentJob?.active && (currentJob.state === "submitting" || currentJob.state === "submitted" || leaseIsLive)) {
+      throw new AvatarGenerationError(
+        "avatar_generation_in_flight",
+        "Avatar generation is already in flight. Wait for it to finish before requesting another image.",
+      );
+    }
     const revision = (current.avatarGenerationInternal?.revision ?? 0) + 1;
     const next: Bot = { ...current, avatarGenerationInternal: newGeneration(id, prompt, current.color, this.clock.nowIso(), revision) };
     delete next.avatarGeneration;

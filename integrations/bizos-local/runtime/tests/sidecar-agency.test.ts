@@ -137,6 +137,9 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true, extra: true })).status).toBe(400);
     const claimedAvatar = await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true });
     expect(claimedAvatar.body.job).toMatchObject({ state: "submitting", botId: expect.any(String), prompt: expect.stringContaining("fictional adult human") });
+    expect(await api("POST", `/api/local/bots/${claimedAvatar.body.job.botId}/avatar/generate`, {
+      avatarPrompt: "A different avatar while submission is active.",
+    })).toMatchObject({ status: 409, body: { error: { code: "avatar_generation_in_flight" } } });
     expect((await api("POST", "/api/local/avatar-worker/report", {
       jobId: claimedAvatar.body.job.id, leaseToken: claimedAvatar.body.job.leaseToken, event: "ready",
     })).status).toBe(400);
@@ -144,6 +147,9 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       jobId: claimedAvatar.body.job.id, leaseToken: claimedAvatar.body.job.leaseToken,
       event: "submitted", taskId: "kie-sidecar-task",
     })).body).toMatchObject({ ok: true, applied: true, status: "submitted" });
+    expect(await api("POST", `/api/local/bots/${claimedAvatar.body.job.botId}/avatar/generate`, {
+      avatarPrompt: "A different avatar while provider polling is active.",
+    })).toMatchObject({ status: 409, body: { error: { code: "avatar_generation_in_flight" } } });
     const pollingAvatar = await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true });
     expect(pollingAvatar.body.job).toMatchObject({ state: "submitted", taskId: "kie-sidecar-task" });
     expect((await api("POST", "/api/local/avatar-worker/report", {

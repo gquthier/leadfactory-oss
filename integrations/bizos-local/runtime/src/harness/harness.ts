@@ -2753,7 +2753,7 @@ export class LocalBizosHarness {
         name: "Remote",
         title: "Runs the tasks a BizOS admin sends to this Mac",
       });
-      this.events.publish({ type: "bot.spawned", bot });
+      this.events.publish({ type: "bot.spawned", bot: this.decorate(bot) });
     }
     if (!existing) {
       const group = this.groupStore.create({ name: REMOTE_TASKS_THREAD, memberIds: [bot.id] });
@@ -2965,7 +2965,7 @@ export class LocalBizosHarness {
     },
     duplicate: async (id: string): Promise<Bot> => {
       const bot = this.botStore.duplicate(id);
-      this.events.publish({ type: "bot.spawned", bot });
+      this.events.publish({ type: "bot.spawned", bot: this.decorate(bot) });
       return this.decorate(bot);
     },
     setAvatar: async (id: string, avatar: { dataUrl: string } | { url: string } | null): Promise<Bot> =>
@@ -3045,7 +3045,7 @@ export class LocalBizosHarness {
       }).path;
     }
     const bot = this.botStore.create({ ...input, ...(workspacePath ? { workspacePath } : {}) }, id);
-    this.events.publish({ type: "bot.spawned", bot });
+    this.events.publish({ type: "bot.spawned", bot: this.decorate(bot) });
     return this.decorate(bot);
   }
 

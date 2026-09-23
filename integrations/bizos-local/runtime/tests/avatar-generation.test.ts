@@ -48,6 +48,7 @@ describe("durable automatic avatar generation", () => {
     const persisted = JSON.parse(readFileSync(join(root, "bots.json"), "utf8")) as Array<Record<string, unknown>>;
     const internal = JSON.stringify(persisted[0]?.avatarGenerationInternal);
     expect(internal).toContain("fictional adult human");
+    expect(internal).toContain("solid #7C5CFF colored background");
     expect(internal).not.toMatch(/Secret Client|Private business|SYSTEM PROMPT/);
 
     const uploaded = await harness.bots.create({ name: "Uploaded", avatarDataUrl: PNG });
@@ -86,6 +87,43 @@ describe("durable automatic avatar generation", () => {
     const firstJobId = persistedJobId();
     await harness.avatarGeneration.generate(bot.id, prompt);
     expect(persistedJobId()).not.toBe(firstJobId);
+  });
+
+  it("does not replace a generation during provider submission or polling", async () => {
+    const { harness } = fixture();
+    const bot = await harness.bots.create({ name: "Ada", avatarPrompt: "A hand-painted forest portrait." });
+    const claimed = harness.avatarGeneration.claim("desktop-main", true).job!;
+    await expect(harness.avatarGeneration.generate(bot.id, "A different portrait."))
+      .rejects.toMatchObject({ code: "avatar_generation_in_flight" });
+    harness.avatarGeneration.report({
+      jobId: claimed.id,
+      leaseToken: claimed.leaseToken,
+      event: "submitted",
+      taskId: "kie-paid-task",
+    });
+    await expect(harness.avatarGeneration.generate(bot.id, "A different portrait."))
+      .rejects.toMatchObject({ code: "avatar_generation_in_flight" });
+    expect(harness.avatarGeneration.claim("desktop-main", true).job).toMatchObject({
+      id: claimed.id,
+      taskId: "kie-paid-task",
+      state: "submitted",
+    });
+  });
+
+  it("publishes only the public avatar projection in bot spawn events", async () => {
+    const { harness } = fixture();
+    const events: unknown[] = [];
+    const unsubscribe = harness.subscribe((event) => events.push(event));
+    const bot = await harness.bots.create({ name: "Ada" });
+    await harness.bots.duplicate(bot.id);
+    unsubscribe();
+    const spawned = events.filter((event: any) => event?.type === "bot.spawned") as Array<Record<string, any>>;
+    expect(spawned).toHaveLength(2);
+    expect(spawned.map((event) => event.bot.avatarGeneration)).toEqual([
+      { status: "pending" },
+      { status: "pending" },
+    ]);
+    expect(JSON.stringify(spawned)).not.toMatch(/avatarGenerationInternal|leaseToken|jobId|prompt/);
   });
 
   it("never retries an uncertain paid submission after a restart", async () => {

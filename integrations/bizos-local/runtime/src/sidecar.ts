@@ -1336,7 +1336,15 @@ export class CollaborationFacade {
     const input = objectBody(raw, ["avatarPrompt"]);
     const prompt = optionalString(input.avatarPrompt, "avatarPrompt", 2_000);
     if (!(await this.bots()).some((bot) => bot.id === id)) throw new HttpError(404, "not_found", "Bot not found.");
-    const bot = await this.harness.avatarGeneration.generate(id, prompt);
+    let bot;
+    try {
+      bot = await this.harness.avatarGeneration.generate(id, prompt);
+    } catch (error) {
+      if (error instanceof AvatarGenerationError) {
+        throw new HttpError(error.code === "avatar_job_not_found" ? 404 : 409, error.code, error.message);
+      }
+      throw error;
+    }
     const bootstrap = await this.bootstrap();
     const agent = this.agent(bot);
     const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));
@@ -1843,16 +1851,22 @@ export class CollaborationFacade {
         this.index.roleAffiliations[bot.id] = { templateId: blueprint.templateId, roleSlug: blueprint.slug };
         this.persistIndex(this.index);
       }
-      // A pending recruitment is a recovery of the SAME fingerprint and
-      // stable plan. Creation already persisted its upload/job atomically;
-      // applying the visual intent again could replace a submitted job and
-      // authorize a second paid POST.
-      if (!previous && avatar && !createdNow) {
+      // Reconcile the requested visual intent on every recovery. Equality is
+      // the idempotency proof: a persisted upload/prompt is kept, while a
+      // different intent whose earlier write failed is attempted again.
+      if (avatar && !createdNow && safeAvatarDataUrl(bot.avatarUrl)?.hash !== avatar.hash) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the avatar could be set.");
         bot = await this.harness.bots.setAvatar(bot.id, { dataUrl: avatar.dataUrl });
-      } else if (!previous && avatarPrompt && !createdNow) {
+      } else if (avatarPrompt && !createdNow) {
         await this.revalidateActiveTeamRun(capability, "Recruitment stopped before avatar generation could be requested.");
-        bot = await this.harness.avatarGeneration.ensureIntent(bot.id, avatarPrompt);
+        try {
+          bot = await this.harness.avatarGeneration.ensureIntent(bot.id, avatarPrompt);
+        } catch (error) {
+          if (error instanceof AvatarGenerationError) {
+            throw new HttpError(error.code === "avatar_job_not_found" ? 404 : 409, error.code, error.message);
+          }
+          throw error;
+        }
       }
       let group = existingGroup ?? groups.find((candidate) => candidate.id === planned.groupId && !candidate.archived);
       if (!group) {

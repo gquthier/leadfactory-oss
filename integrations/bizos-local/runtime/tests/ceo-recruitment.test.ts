@@ -338,6 +338,102 @@ describe("CEO on-demand recruitment", () => {
     });
   });
 
+  it("reconciles a different existing-role avatar prompt when its first persistence attempt failed", async () => {
+    const f = await fixture();
+    await f.harness.bots.setAvatar(f.ceoId, { dataUrl: PNG });
+    const firstPrompt = "Fictional adult creative director, solid orange background.";
+    const replacementPrompt = "Fictional adult creative director, solid purple background.";
+    const firstSource = await activeCeoCapability(f);
+    const first = await f.facade.recruit(firstSource.capability, {
+      role_slug: "creative",
+      initial_task: "Draft once.",
+      avatar_prompt: firstPrompt,
+    });
+    const botId = first.agent.agentId.split(":agent:")[1]!;
+    const originalJob = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8"))
+      .find((row: Record<string, any>) => row.id === botId)?.avatarGenerationInternal as Record<string, unknown>;
+    finish(f.turns[1]!);
+    finish(f.turns[0]!);
+
+    const secondSource = await activeCeoCapability(f);
+    const replacementRequest = {
+      role_slug: "creative",
+      initial_task: "Review once.",
+      avatar_prompt: replacementPrompt,
+    };
+    const writeJson = f.harness.storage.writeJson.bind(f.harness.storage);
+    let failed = false;
+    Object.defineProperty(f.harness.storage, "writeJson", {
+      configurable: true,
+      value: (name: string, value: unknown) => {
+        const rows = Array.isArray(value) ? value as Array<Record<string, any>> : [];
+        const writesReplacement = rows.some((row) => row.id === botId
+          && row.avatarGenerationInternal?.prompt === replacementPrompt);
+        if (!failed && name === "bots.json" && writesReplacement) {
+          failed = true;
+          throw new Error("simulated replacement avatar persistence failure");
+        }
+        return writeJson(name, value);
+      },
+    });
+    try {
+      await expect(f.facade.recruit(secondSource.capability, replacementRequest))
+        .rejects.toThrow("simulated replacement avatar persistence failure");
+    } finally {
+      Object.defineProperty(f.harness.storage, "writeJson", { configurable: true, value: writeJson });
+    }
+    const persistedJob = () => {
+      const rows = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+      return rows.find((row) => row.id === botId)?.avatarGenerationInternal as Record<string, unknown>;
+    };
+    expect(persistedJob()).toMatchObject({
+      jobId: originalJob.jobId,
+      prompt: firstPrompt,
+      state: "pending",
+    });
+
+    await f.facade.recruit(secondSource.capability, replacementRequest);
+    expect(persistedJob()).toMatchObject({ prompt: replacementPrompt, state: "pending" });
+    expect(persistedJob().jobId).not.toBe(originalJob.jobId);
+  });
+
+  it("rejects a different recruitment avatar prompt while its paid generation is in flight", async () => {
+    const f = await fixture();
+    await f.harness.bots.setAvatar(f.ceoId, { dataUrl: PNG });
+    const firstPrompt = "Fictional adult creative director, solid orange background.";
+    const firstSource = await activeCeoCapability(f);
+    const first = await f.facade.recruit(firstSource.capability, {
+      role_slug: "creative",
+      initial_task: "Draft once.",
+      avatar_prompt: firstPrompt,
+    });
+    const botId = first.agent.agentId.split(":agent:")[1]!;
+    const claimed = f.harness.avatarGeneration.claim("desktop-main", true).job!;
+    f.harness.avatarGeneration.report({
+      jobId: claimed.id,
+      leaseToken: claimed.leaseToken,
+      event: "submitted",
+      taskId: "kie-paid-task",
+    });
+    finish(f.turns[1]!);
+    finish(f.turns[0]!);
+
+    const secondSource = await activeCeoCapability(f);
+    await expect(f.facade.recruit(secondSource.capability, {
+      role_slug: "creative",
+      initial_task: "Review once.",
+      avatar_prompt: "Fictional adult creative director, solid purple background.",
+    })).rejects.toMatchObject({ status: 409, code: "avatar_generation_in_flight" });
+
+    const rows = JSON.parse(readFileSync(join(f.root, "bots.json"), "utf8")) as Array<Record<string, any>>;
+    expect(rows.find((row) => row.id === botId)?.avatarGenerationInternal).toMatchObject({
+      jobId: claimed.id,
+      prompt: firstPrompt,
+      state: "submitted",
+      taskId: "kie-paid-task",
+    });
+  });
+
   it("copies the recruiter's trusted personal native plan pin to a new role", async () => {
     const f = await fixture();
     await f.harness.bots.update(f.ceoId, { planId: "pln_fixture_primary" });
