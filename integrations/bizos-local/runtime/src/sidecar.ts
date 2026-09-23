@@ -1424,7 +1424,18 @@ export class CollaborationFacade {
   async createBot(raw: unknown) {
     const model = raw && typeof raw === "object" ? (raw as Record<string, unknown>).model : undefined;
     if (typeof model === "string" && model.trim()) this.requirePro("customModels");
-    const bot = await this.invoke<Bot>("lbz:bots:create", [raw]);
+    // `language` is the owner's app language for the greeting, not a bot field.
+    let language: "fr" | "en" = "fr";
+    if (raw && typeof raw === "object" && !Array.isArray(raw) && "language" in raw) {
+      const { language: requested, ...rest } = raw as Record<string, unknown>;
+      if (requested !== undefined && requested !== "fr" && requested !== "en") throw new HttpError(400, "invalid_payload", "language must be \"fr\" or \"en\".");
+      if (requested === "en") language = "en";
+      raw = rest;
+    }
+    const created = await this.invoke<Bot>("lbz:bots:create", [raw]);
+    // An agent the owner creates says hello first (Grok-bot style): a
+    // complete bot message in its chat, no model run.
+    const bot = await this.harness.bots.greet(created.id, language);
     const bootstrap = await this.bootstrap();
     const agent = this.agent(bot);
     const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));

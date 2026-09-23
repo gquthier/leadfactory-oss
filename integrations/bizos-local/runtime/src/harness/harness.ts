@@ -2987,6 +2987,24 @@ export class LocalBizosHarness {
      * be changed.
      */
     create: async (input: CreateBotInput, id?: string): Promise<Bot> => this.spawnBot(input, id),
+    /**
+     * The first words of an agent the OWNER just created, in its direct chat:
+     * the same immutable public message as a template welcome (complete, no
+     * run behind it, no model called), the chat marked unread with the
+     * preview. French unless the owner's app speaks English.
+     */
+    greet: async (id: string, language: "fr" | "en" = "fr"): Promise<Bot> => {
+      const bot = this.botStore.get(id);
+      if (!bot) throw new SettingsError("unknown bot");
+      const name = bot.name.trim();
+      const text = language === "en" ? `Hi, I'm ${name}. What would you like me to do?` : `Salut, je suis ${name}. Qu'est-ce que je peux faire pour toi ?`;
+      const threadId = threadIdForTarget({ botId: id });
+      const message = this.threadStore.append(threadId, { role: "bot", deliveryState: "complete", botId: id, blocks: [{ kind: "text", text }] });
+      this.botStore.update(id, { unread: true });
+      this.botStore.setStatus(id, "idle", text);
+      this.events.publish({ type: "thread.message.created", threadId, message });
+      return this.decorate(this.botStore.get(id)!);
+    },
     update: async (id: string, patch: UpdateBotInput): Promise<Bot> => {
       if (patch.workspacePath) this.requireFolder(patch.workspacePath);
       if (patch.planId && !this.planRegistry.get(patch.planId)) throw new SettingsError("unknown plan");
