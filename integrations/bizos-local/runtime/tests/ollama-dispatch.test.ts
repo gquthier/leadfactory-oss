@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { LocalBizosHarness } from "../src/harness/harness.js";
 import { CollaborationFacade, LocalTeamBroker } from "../src/sidecar.js";
+import { emptyDurableIndex } from "../src/sidecar-contract.js";
 
 const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -42,7 +43,7 @@ async function fixture(answer: (body: any) => unknown, options: { recruit?: bool
     onLocalRunStopped: runId => broker.revoke(runId),
     onLocalRunSettled: runId => broker.revoke(runId),
   });
-  facade = new CollaborationFacade(harness, "fixture", broker);
+  facade = new CollaborationFacade(harness, "fixture", broker, emptyDurableIndex(), null, () => undefined);
   cleanup.push(() => { harness.stop(); rmSync(root, { recursive: true, force: true }); });
   const provider = await harness.inference.add({ kind: "ollama", baseUrl: `http://127.0.0.1:${(server.address() as any).port}/v1`, model: "fixture:1" });
   await harness.runtime.setInference({ source: "provider", providerId: provider.id });

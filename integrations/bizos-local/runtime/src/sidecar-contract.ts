@@ -135,21 +135,44 @@ export interface DurableRecruitmentPlan {
   ollamaBinding?: { providerId: string; model: string };
 }
 
-export interface LocalTeamEvent {
+export type LocalAgentEventType = "agent.recruited" | "agent.updated";
+export type LocalRoutineEventType = "routine.created" | "routine.updated" | "routine.deleted" | "routine.fired";
+
+/** `changes` of a routine event. `schedule` is the same string as the
+ * `schedule` of a `GET /api/crons` row; `trigger` is that row's trigger. */
+export interface LocalRoutineEventChanges {
+  routineId: string;
+  routineName: string;
+  schedule: string;
+  trigger?: unknown;
+  nextRunAt?: string | null;
+  endsAt?: string | null;
+  enabled?: boolean;
+  /** Why the runtime itself changed it (`routine.updated` only). */
+  reason?: "expired" | "ended";
+}
+
+interface LocalTeamEventBase {
   eventId: string;
-  type: "agent.recruited" | "agent.updated";
   actorAgentId: string;
   subjectAgentId: string;
+  /** Public run id; `runId("none")` when no run caused it (a UI edit). */
   runId: string;
   threadId: string;
   createdAt: string;
-  changes: {
-    name?: string;
-    title?: string;
-    missionChanged?: boolean;
-    active?: boolean;
-  };
 }
+
+export type LocalTeamEvent =
+  | (LocalTeamEventBase & {
+      type: LocalAgentEventType;
+      changes: {
+        name?: string;
+        title?: string;
+        missionChanged?: boolean;
+        active?: boolean;
+      };
+    })
+  | (LocalTeamEventBase & { type: LocalRoutineEventType; changes: LocalRoutineEventChanges });
 
 export type DurableRecruitmentMutation =
   | (MutationBase & {
@@ -251,12 +274,26 @@ function validManagementResult(value: unknown): value is AgentManagementResult {
     && (value.agent.description === undefined || typeof value.agent.description === "string" || value.agent.description === null);
 }
 
-function validTeamEvent(value: unknown): value is LocalTeamEvent {
+const TEAM_EVENT_TYPES = new Set([
+  "agent.recruited", "agent.updated",
+  "routine.created", "routine.updated", "routine.deleted", "routine.fired",
+]);
+
+function validRoutineChanges(value: Record<string, unknown>): boolean {
+  return typeof value.routineId === "string" && typeof value.routineName === "string"
+    && typeof value.schedule === "string"
+    && (value.nextRunAt === undefined || value.nextRunAt === null || typeof value.nextRunAt === "string")
+    && (value.endsAt === undefined || value.endsAt === null || typeof value.endsAt === "string")
+    && (value.enabled === undefined || typeof value.enabled === "boolean");
+}
+
+export function validTeamEvent(value: unknown): value is LocalTeamEvent {
   return isRecord(value)
-    && (value.type === "agent.recruited" || value.type === "agent.updated")
+    && typeof value.type === "string" && TEAM_EVENT_TYPES.has(value.type)
     && ["eventId", "actorAgentId", "subjectAgentId", "runId", "threadId", "createdAt"]
       .every((key) => typeof value[key] === "string")
-    && isRecord(value.changes);
+    && isRecord(value.changes)
+    && (!value.type.startsWith("routine.") || validRoutineChanges(value.changes));
 }
 
 export function emptyDurableIndex(): DurableIndex {

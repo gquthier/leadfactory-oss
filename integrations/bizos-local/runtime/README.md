@@ -168,6 +168,29 @@ they cannot advance schedule bookkeeping or start a provider turn. Archiving
 does not interrupt a provider turn that already started; STOP remains the
 explicit control for work already executing.
 
+## Proactive routines, heartbeat and push events
+
+A routine run is wrapped in a short prompt (`harness/routine-run.ts`): deliver
+the result casually, answer exactly `[SILENT]` when nothing is new, don't
+repeat the previous report (quoted, ≤1,200 chars), and end with `[DONE]` when
+the watched thing is over. Routine and heartbeat replies are held until the
+turn ends: `[SILENT]` publishes nothing and records run outcome `silent`;
+otherwise `routine.fired` is recorded just before the reply messages.
+`endsAt` (tool `until`, PATCH `ends_at`) makes a watch self-expiring: no window
+at or after it ever fires, and the routine is then disabled with `expiredAt`.
+A routine or heartbeat run cannot create routines.
+
+Routine team events (`routine.created|updated|deleted|fired`) share the durable
+team-event history with recruitment. `GET /api/local/events` (same bearer and
+origin checks) streams `ready`, `message`, `team-event` and `run` frames with a
+15-second ping; it is a refresh hint, never the source of truth.
+
+The sidecar heartbeat (default every 30 minutes, 08:00–21:00 local, set with
+`POST /api/local/runtime/heartbeat`) wakes an idle agent only for its latest
+unfinished task checkpoint, or to nudge once on a task blocked for two hours
+with no reply. The gate reads the run store only; each task is woken at most
+once per two hours and three times in all.
+
 ## Local team-tool status
 
 `/api/local/runtime` reports `tools.scope = "local"` and separate Codex,
