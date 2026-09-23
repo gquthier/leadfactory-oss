@@ -17,8 +17,23 @@ function atLocalTime(day: Date, time: string): Date | null {
 }
 
 /** The next moment a trigger should fire strictly after `from`, or `null`
- * when it never will again (a `once` whose moment has passed). */
-export function computeNextRun(trigger: RoutineTrigger, from: Date): Date | null {
+ * when it never will again (a `once` whose moment has passed, or a watch
+ * whose next window would fall at or after its `endsAt`). */
+export function computeNextRun(trigger: RoutineTrigger, from: Date, endsAt?: string | null): Date | null {
+  const next = nextWindow(trigger, from);
+  if (!next || !endsAt) return next;
+  const end = Date.parse(endsAt);
+  return Number.isFinite(end) && next.getTime() >= end ? null : next;
+}
+
+/** Whether a routine's end has come: it must never fire from here on. */
+export function routineEnded(routine: Pick<Routine, "endsAt">, now: Date): boolean {
+  if (!routine.endsAt) return false;
+  const end = Date.parse(routine.endsAt);
+  return Number.isFinite(end) && now.getTime() >= end;
+}
+
+function nextWindow(trigger: RoutineTrigger, from: Date): Date | null {
   if (trigger.frequency === "interval") {
     return new Date(from.getTime() + trigger.everyMinutes * 60_000);
   }
@@ -45,12 +60,14 @@ export interface SchedulerDependencies {
   /** Preparation that may yield (session refresh today). Eligibility is
    * checked again after it, before any schedule timestamp moves. */
   prepare?(): Promise<void>;
+  /** A routine reached its `endsAt` and was disabled (marked expired). */
+  onExpired?(routine: Routine): void;
   /** A clear refusal when the routine's owner cannot execute. */
   ineligibleReason?(routine: Routine): string | null;
   /** Start a routine turn. Returns the run it started, so a manual run and
    * a scheduled one are literally the same code path — `runNow` used to
    * bypass every piece of bookkeeping below. */
-  fire(input: { routine: Routine; missed: boolean }): Promise<{ runId: string } | undefined> | ({ runId: string } | undefined);
+  fire(input: { routine: Routine; missed: boolean; final?: boolean }): Promise<{ runId: string } | undefined> | ({ runId: string } | undefined);
 }
 
 export class Scheduler {
@@ -128,14 +145,21 @@ export class Scheduler {
         this.pauseIneligible(routine, reason);
         continue;
       }
+      // A watch whose end passed while the app was closed does NOT run late:
+      // "never after endsAt" is the whole promise of an end.
+      if (routineEnded(routine, now)) {
+        this.expire(routine);
+        continue;
+      }
       if (!routine.nextRunAt) {
-        const next = computeNextRun(routine.trigger, now);
+        const next = computeNextRun(routine.trigger, now, routine.endsAt);
         this.deps.routines.setSchedule(routine.id, {
           nextRunAt: next ? next.toISOString() : null,
           // A routine with no next window is not armed. Leaving it enabled
           // drew a switch that was on and a schedule that never came.
           ...(next ? {} : { enabled: false }),
         });
+        if (!next && routine.endsAt) this.expire(routine);
         continue;
       }
       if (new Date(routine.nextRunAt).getTime() <= now.getTime()) this.fire(routine, true);
@@ -149,6 +173,10 @@ export class Scheduler {
       const reason = this.ineligibleReason(routine);
       if (reason) {
         this.pauseIneligible(routine, reason);
+        continue;
+      }
+      if (routineEnded(routine, now)) {
+        this.expire(routine);
         continue;
       }
       if (new Date(routine.nextRunAt).getTime() <= now.getTime()) this.fire(routine, false);
@@ -190,6 +218,10 @@ export class Scheduler {
     if (held && runId !== undefined && held.runId !== undefined && held.runId !== runId) return;
     if (held) this.inFlight.delete(routineId);
     this.deps.routines.setSchedule(routineId, { running: false });
+    // The last check of a watch just finished: nothing can fire before its end.
+    const routine = this.deps.routines.get(routineId);
+    if (routine?.endsAt && !routine.expiredAt && !routine.enabled
+      && !computeNextRun(routine.trigger, this.deps.clock.now(), routine.endsAt)) this.expire(routine);
   }
 
   /**
@@ -241,7 +273,14 @@ export class Scheduler {
         return undefined;
       }
       const now = this.deps.clock.now();
-      const next = computeNextRun(current.trigger, now);
+      if (!manual && routineEnded(current, now)) {
+        this.release(routine.id, token);
+        this.expire(current);
+        return undefined;
+      }
+      const next = computeNextRun(current.trigger, now, current.endsAt);
+      // The end, not the trigger, is why nothing follows: this is the last check.
+      const final = Boolean(current.endsAt && !next && computeNextRun(current.trigger, now));
       this.deps.routines.setSchedule(current.id, {
         lastRunAt: now.toISOString(),
         nextRunAt: next ? next.toISOString() : null,
@@ -253,7 +292,9 @@ export class Scheduler {
         // date would make it look armed forever.
         ...(next ? {} : { enabled: false }),
       });
-      const started = await this.deps.fire({ routine: current, missed });
+      // Marked expired when this last run SETTLES (see `settle`), so the
+      // "routine ended" line follows its final report instead of preceding it.
+      const started = await this.deps.fire({ routine: current, missed, ...(final ? { final } : {}) });
       // Nothing started (the bot is gone): the lock goes back immediately, or
       // the routine could never be run again without a restart.
       if (!started) {
@@ -288,6 +329,11 @@ export class Scheduler {
     if (this.inFlight.get(routineId)?.token !== token) return;
     this.inFlight.delete(routineId);
     this.deps.routines.setSchedule(routineId, { running: false });
+  }
+
+  private expire(routine: Routine): void {
+    const expired = this.deps.routines.expire(routine.id);
+    if (expired) this.deps.onExpired?.(expired);
   }
 
   private ineligibleReason(routine: Routine): string | null {

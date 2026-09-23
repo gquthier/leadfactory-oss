@@ -58,6 +58,7 @@ import { buildQuickChatPrompt, buildPersonaPrompt, type LocalArchitectureManifes
 import { redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
 import { approvalTitle, labelForTool } from "./style.js";
+import { classifyRoutineReply } from "./routine-run.js";
 import type { RunStore } from "./runs.js";
 import { safeFileName, type Storage } from "./storage.js";
 import { previewOf, type ThreadStore } from "./threads.js";
@@ -69,6 +70,8 @@ import {
   type Attachment,
   type Bot,
   type MessageBlock,
+  type RoutineRunOutcome,
+  type RoutineTrigger,
   type RuntimeSettings,
   type StepItem,
   type ThreadMessage,
@@ -222,6 +225,20 @@ export interface DispatchDependencies {
    * routine's mutex back. `runId` names WHICH run ended: a terminal event that
    * arrives late must not unlock the run that replaced it. */
   onRoutineIdle?(routineId: string, runId: string): void;
+  /** A routine or heartbeat turn reached its end: how it ended for the person
+   * (`silent` published nothing), the text it published (for continuity) and
+   * whether its owner ended the routine with `[DONE]`. Called BEFORE
+   * `onRoutineIdle`. */
+  onQuietTurnSettled?(input: {
+    runId: string;
+    botId: string;
+    threadId: string;
+    routineId?: string;
+    heartbeat: boolean;
+    outcome: RoutineRunOutcome;
+    report: string;
+    done: boolean;
+  }): void;
   /** Test seam. */
   startTurn?: (input: CodexTurnInput) => CodexTurnHandle;
   /** Test seam for Claude print-mode turns. */
@@ -254,6 +271,13 @@ interface QueuedTurn {
   chainId: string;
   attachments?: Attachment[];
   routineId?: string;
+  /** The routine this turn runs for, as it was when it fired. */
+  routine?: { name: string; trigger: RoutineTrigger; endsAt?: string };
+  /** A proactive heartbeat wake. */
+  heartbeat?: boolean;
+  /** Routine/heartbeat replies are held until the turn ends, then published
+   * together — or not at all when the verdict is `[SILENT]`. */
+  quietTexts?: string[];
   /** Present when a teammate handed this turn over. */
   fromBotId?: string;
   executionPolicy?: TurnExecutionPolicy;
@@ -443,24 +467,52 @@ export class Dispatcher {
     return { runIds };
   }
 
-  runRoutine(input: { botId: string; prompt: string; routineId: string }): { runId: string } {
+  /**
+   * Start a routine turn in its owner's direct thread.
+   *
+   * Nothing is written to the thread up front any more: a routine whose verdict
+   * is `[SILENT]` must leave no trace in the conversation, and one that speaks
+   * is announced by `routine.fired` right before its reply (see `deliverQuiet`).
+   */
+  runRoutine(input: {
+    botId: string;
+    prompt: string;
+    routineId: string;
+    routine?: { name: string; trigger: RoutineTrigger; endsAt?: string };
+  }): { runId: string } {
     const threadId = threadIdForTarget({ botId: input.botId });
-    const message = this.deps.threads.append(threadId, {
-      role: "system",
-      blocks: [{ kind: "meta", text: `Routine: ${input.prompt.slice(0, 160)}` }],
-    });
-    this.deps.events.publish({ type: "thread.message.created", threadId, message });
     const runId = this.enqueue({
       threadId,
       botId: input.botId,
       text: input.prompt,
       hop: 0,
-      chainId: message.id,
+      chainId: `routine:${input.routineId}:${newAskId()}`,
       routineId: input.routineId,
+      ...(input.routine ? { routine: input.routine } : {}),
     });
     if (!runId) throw new Error(QUEUE_FULL_NOTE);
-    this.deps.events.publish({ type: "routine.fired", routineId: input.routineId, botId: input.botId, runId });
     return { runId };
+  }
+
+  /** Wake an agent proactively (the sidecar heartbeat). Same quiet delivery
+   * as a routine, no routine attached. */
+  runHeartbeat(input: { botId: string; threadId: string; prompt: string }): { runId: string } | null {
+    const runId = this.enqueue({
+      threadId: input.threadId,
+      botId: input.botId,
+      text: input.prompt,
+      hop: 0,
+      chainId: `heartbeat:${input.botId}:${newAskId()}`,
+      heartbeat: true,
+    });
+    return runId ? { runId } : null;
+  }
+
+  /** Whether this bot has a turn running or waiting anywhere. */
+  isBusy(botId: string): boolean {
+    if (this.hasActiveTurn(botId)) return true;
+    for (const queue of this.queues.values()) if (queue.some((queued) => queued.botId === botId)) return true;
+    return false;
   }
 
   /** Dispatch a real child turn from an active parent capability. Unlike a
@@ -858,6 +910,8 @@ export class Dispatcher {
     chainId: string;
     attachments?: Attachment[];
     routineId?: string;
+    routine?: { name: string; trigger: RoutineTrigger; endsAt?: string };
+    heartbeat?: boolean;
     fromBotId?: string;
     executionPolicy?: TurnExecutionPolicy;
   }): string | null {
@@ -882,6 +936,7 @@ export class Dispatcher {
       botId: input.botId,
       state: "queued",
       ...(input.routineId ? { routineId: input.routineId } : {}),
+      ...(input.heartbeat ? { heartbeat: true } : {}),
     });
     this.runChains.set(run.id, input.chainId);
     chain.turns += 1;
@@ -896,6 +951,8 @@ export class Dispatcher {
       chainId: input.chainId,
       ...(input.attachments?.length ? { attachments: input.attachments } : {}),
       ...(input.routineId ? { routineId: input.routineId } : {}),
+      ...(input.routine ? { routine: input.routine } : {}),
+      ...(input.heartbeat ? { heartbeat: true } : {}),
       ...(input.fromBotId ? { fromBotId: input.fromBotId } : {}),
       ...(input.executionPolicy ? { executionPolicy: input.executionPolicy } : {}),
     });
@@ -1149,6 +1206,7 @@ export class Dispatcher {
       asks: new Map(),
       publicMessages: new Set(),
       publicMessagesEnabled,
+      ...(queued.routineId || queued.heartbeat ? { quietTexts: [...(queued.quietTexts ?? [])] } : {}),
       finalText: "",
       localAsks: new Map(),
       cancelled: false,
@@ -1333,6 +1391,7 @@ export class Dispatcher {
       botId: bot.id,
       state: "queued",
       ...(turn.routineId ? { routineId: turn.routineId } : {}),
+      ...(turn.heartbeat ? { heartbeat: true } : {}),
     });
     const previousTask = this.deps.runs.get(turn.runId)?.task;
     if (previousTask) this.deps.runs.update(replacement.id, { task: previousTask });
@@ -1351,6 +1410,9 @@ export class Dispatcher {
         chainId: turn.chainId,
         ...(turn.attachments?.length ? { attachments: turn.attachments } : {}),
         ...(turn.routineId ? { routineId: turn.routineId } : {}),
+        ...(turn.routine ? { routine: turn.routine } : {}),
+        ...(turn.heartbeat ? { heartbeat: true } : {}),
+        ...(turn.quietTexts ? { quietTexts: turn.quietTexts } : {}),
         ...(turn.fromBotId ? { fromBotId: turn.fromBotId } : {}),
       },
       bot,
@@ -1518,6 +1580,11 @@ export class Dispatcher {
           turn.publicMessages.add(key);
           state.text = event.text;
           turn.finalText = event.phase === "commentary" ? "" : event.text;
+          if (turn.quietTexts) {
+            // Held back: a routine's verdict may still be [SILENT].
+            turn.quietTexts.push(event.text);
+            break;
+          }
           const message = this.deps.threads.append(turn.threadId, {
             role: "bot", deliveryState: "complete", blocks: [{ kind: "text", text: event.text }],
             botId: bot.id, runId: turn.runId,
@@ -1737,12 +1804,15 @@ export class Dispatcher {
     }
     turn.localAsks.clear();
     this.persist(turn);
+    const quiet = this.deliverQuiet(turn, bot, state, ok);
 
     // One preview, for the roster row and for the system notification alike:
     // the message is whole, so there is no longer a "first paragraph" that says
     // less than the answer does.
-    const preview = previewOf(state.text ? [{ kind: "text", text: state.text }] : turn.message.blocks);
-    this.deps.bots.setStatus(bot.id, "idle", preview);
+    const preview = quiet
+      ? quiet.published ? previewOf([{ kind: "text", text: quiet.published }]) : ""
+      : previewOf(state.text ? [{ kind: "text", text: state.text }] : turn.message.blocks);
+    this.deps.bots.setStatus(bot.id, "idle", preview || undefined);
     if (turn.threadId.startsWith("group:")) {
       this.deps.groups.setPreview(turn.threadId.slice(6), preview);
     }
@@ -1763,7 +1833,8 @@ export class Dispatcher {
         threadId: turn.threadId,
         botId: bot.id,
       });
-      this.deps.onRunFinished?.({ bot, outcome: "completed", preview });
+      // A silent routine has nothing to tell anybody, banners included.
+      if (quiet?.outcome !== "silent") this.deps.onRunFinished?.({ bot, outcome: "completed", preview });
       this.handoff(turn, bot, turn.publicMessagesEnabled ? turn.finalText : state.text);
     } else {
       const error = state.failure ?? stopReason ?? "the turn failed";
@@ -1785,6 +1856,75 @@ export class Dispatcher {
     // the parent turn ended, which is exactly when the fan-out starts.
     this.releaseChain(turn.chainId);
     this.pump(turn.threadId);
+  }
+
+  /**
+   * A routine or heartbeat turn is over: publish what it said, or nothing.
+   *
+   * Its replies were held (`quietTexts`) so a `[SILENT]` verdict never reaches
+   * the thread. A routine that speaks is announced by `routine.fired` FIRST —
+   * with a timestamp taken before the replies are appended, so the origin
+   * marker sorts right above them. STOP publishes nothing. Returns `null` for
+   * an ordinary turn.
+   */
+  private deliverQuiet(
+    turn: ActiveTurn,
+    bot: Bot,
+    state: { text: string },
+    ok: boolean,
+  ): { outcome: RoutineRunOutcome; published: string } | null {
+    if (!turn.routineId && !turn.heartbeat) return null;
+    const heldTexts = turn.publicMessagesEnabled ? turn.quietTexts ?? [] : [state.text];
+    turn.quietTexts = [];
+    const reply = classifyRoutineReply(turn.cancelled || turn.discarded ? [] : heldTexts);
+    const outcome: RoutineRunOutcome = turn.cancelled ? "cancelled"
+      : !ok ? "failed"
+      : reply.silent ? "silent" : "ok";
+    const texts = turn.cancelled || turn.discarded ? [] : reply.texts;
+    if (texts.length && turn.routineId && turn.routine) {
+      this.deps.events.publish({
+        type: "routine.fired",
+        routineId: turn.routineId,
+        botId: bot.id,
+        runId: turn.runId,
+        threadId: turn.threadId,
+        at: this.deps.clock.nowIso(),
+        routine: turn.routine,
+      });
+    }
+    let lastMessageId: string | undefined;
+    if (turn.publicMessagesEnabled) {
+      for (const text of texts) {
+        const message = this.deps.threads.append(turn.threadId, {
+          role: "bot", deliveryState: "complete", blocks: [{ kind: "text", text }],
+          botId: bot.id, runId: turn.runId,
+        });
+        lastMessageId = message.id;
+        this.deps.events.publish({ type: "thread.message.created", threadId: turn.threadId, message });
+      }
+    } else if (!turn.discarded) {
+      // The legacy transcript streamed into the turn's own message: a silent
+      // verdict is taken back out of it, a [DONE] marker is stripped.
+      const index = turn.message.blocks.findIndex((block) => block.kind === "text");
+      if (index >= 0) {
+        if (texts.length) turn.message.blocks[index] = { kind: "text", text: texts.join("\n\n") };
+        else turn.message.blocks.splice(index, 1);
+        this.persist(turn);
+      }
+    }
+    this.deps.runs.update(turn.runId, { outcome, ...(lastMessageId ? { messageId: lastMessageId } : {}) });
+    const published = texts.join("\n\n");
+    this.deps.onQuietTurnSettled?.({
+      runId: turn.runId,
+      botId: bot.id,
+      threadId: turn.threadId,
+      ...(turn.routineId ? { routineId: turn.routineId } : {}),
+      heartbeat: turn.heartbeat === true,
+      outcome,
+      report: published,
+      done: reply.done && !turn.cancelled,
+    });
+    return { outcome, published };
   }
 
   /** A reply that names a teammate hands the turn over. */

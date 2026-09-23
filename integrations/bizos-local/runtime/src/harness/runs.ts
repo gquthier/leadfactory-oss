@@ -30,7 +30,7 @@ export class RunStore {
     this.storage.writeJson(RUNS_FILE, this.runs);
   }
 
-  start(input: { threadId: string; botId: string; routineId?: string; state?: RunState }): Run {
+  start(input: { threadId: string; botId: string; routineId?: string; heartbeat?: boolean; state?: RunState }): Run {
     const run: Run = {
       id: newRunId(),
       threadId: input.threadId,
@@ -38,13 +38,14 @@ export class RunStore {
       state: input.state ?? "working",
       startedAt: this.clock.nowIso(),
       ...(input.routineId ? { routineId: input.routineId } : {}),
+      ...(input.heartbeat ? { heartbeat: true } : {}),
     };
     this.runs.push(run);
     this.persist();
     return { ...run };
   }
 
-  update(id: string, patch: Partial<Pick<Run, "state" | "error" | "messageId" | "task" | "inference" | "usage">>): Run | undefined {
+  update(id: string, patch: Partial<Pick<Run, "state" | "error" | "messageId" | "task" | "inference" | "usage" | "outcome">>): Run | undefined {
     const index = this.runs.findIndex((run) => run.id === id);
     const current = this.runs[index];
     if (index < 0 || !current) return undefined;

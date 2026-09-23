@@ -292,7 +292,15 @@ export function asBotPatch(value: unknown): Record<string, unknown> {
 const ATTACHMENT_KEYS = ["id", "name", "mimeType", "size", "dataUrl", "url"] as const;
 const SEND_KEYS = ["text", "mentionBotIds", "attachments", "replyToMessageId", "role"] as const;
 const GROUP_PATCH_KEYS = ["name", "memberIds", "pinned", "archived"] as const;
-const ROUTINE_CREATE_KEYS = ["botId", "name", "prompt", "trigger", "enabled"] as const;
+const ROUTINE_CREATE_KEYS = ["botId", "name", "prompt", "trigger", "enabled", "endsAt"] as const;
+
+/** `endsAt`: an ISO instant, or null to clear. Future-ness is the store's call. */
+function asRoutineEndsAt(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  const at = asString(value, field, 64);
+  if (Number.isNaN(Date.parse(at))) throw new PayloadError(`${field} must be an ISO instant or null`);
+  return at;
+}
 const CREATE_BOT_KEYS = [
   "name",
   "title",
@@ -358,6 +366,7 @@ const RUNTIME_LOCAL_KEYS = [
   "activePlanId",
   "provider",
   "inferenceProviderId",
+  "heartbeat",
 ] as const;
 
 /** `lbz:runtime:setSettings` was the one channel that forwarded whatever object
@@ -404,6 +413,11 @@ export function asRuntimePatch(value: unknown): Record<string, unknown> {
         local.inferenceProviderId === null || local.inferenceProviderId === undefined
           ? null
           : asProviderId(local.inferenceProviderId);
+    }
+    if (local.heartbeat !== undefined) {
+      // Range and shape are the settings store's own rule (`validateLocalPatch`).
+      const heartbeat = asStrictRecord(local.heartbeat, "patch.local.heartbeat", ["enabled", "everyMinutes"] as const);
+      next.heartbeat = { enabled: heartbeat.enabled, everyMinutes: heartbeat.everyMinutes };
     }
     out.local = next;
   }
@@ -457,7 +471,7 @@ export function asAccessPatch(value: unknown): AccessGrantPatch {
   };
 }
 
-const ROUTINE_PATCH_KEYS = ["botId", "name", "prompt", "trigger", "enabled"] as const;
+const ROUTINE_PATCH_KEYS = ["botId", "name", "prompt", "trigger", "enabled", "endsAt"] as const;
 
 /**
  * The three shapes the scheduler can honour, and no key beyond them.
@@ -497,6 +511,7 @@ export function asRoutinePatch(value: unknown): Record<string, unknown> {
   if (patch.prompt !== undefined) out.prompt = asString(patch.prompt, "patch.prompt", 6000);
   if (patch.trigger !== undefined) out.trigger = asRoutineTrigger(patch.trigger, "patch.trigger");
   if (patch.enabled !== undefined) out.enabled = patch.enabled === true;
+  if (patch.endsAt !== undefined) out.endsAt = asRoutineEndsAt(patch.endsAt, "patch.endsAt");
   return out;
 }
 
@@ -974,6 +989,7 @@ export function buildHandlers(
         prompt: asString(input.prompt, "input.prompt", 6000),
         trigger: asRoutineTrigger(input.trigger, "input.trigger") as never,
         ...(input.enabled === undefined ? {} : { enabled: input.enabled === true }),
+        ...(input.endsAt === undefined ? {} : { endsAt: asRoutineEndsAt(input.endsAt, "input.endsAt") }),
       });
     },
     "lbz:routines:update": (args) =>

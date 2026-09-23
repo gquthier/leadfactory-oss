@@ -38,6 +38,9 @@ export interface LocalRuntimeSettings {
    * turns instead of a plan, through codex's `model_providers`. `null` or
    * absent means the plans do. */
   inferenceProviderId?: string | null;
+  /** Proactive heartbeat (sidecar only). Absent ⇒ ON every 30 minutes,
+   * 08:00–21:00 local. See `harness/heartbeat.ts`. */
+  heartbeat?: { enabled: boolean; everyMinutes: number };
 }
 
 export interface RuntimeSettings {
@@ -333,12 +336,19 @@ export interface Run {
   error?: string;
   messageId?: string;
   routineId?: string;
+  /** A proactive heartbeat wake (sidecar only), never a person's message. */
+  heartbeat?: boolean;
+  /** How a routine/heartbeat run ended for the person: `silent` answered
+   * exactly [SILENT] and published nothing. */
+  outcome?: RoutineRunOutcome;
   task?: import("./task.js").TaskCheckpoint;
   inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" };
   usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
 }
 
 export type RoutineFrequency = "once" | "daily" | "interval";
+
+export type RoutineRunOutcome = "ok" | "failed" | "silent" | "cancelled";
 
 /** The only triggers that exist.
  *
@@ -364,6 +374,16 @@ export interface Routine {
   running: boolean;
   createdAt: string;
   updatedAt?: string;
+  /** Self-expiring watch: the scheduler never fires at or after this ISO
+   * instant, and disables the routine (marking `expiredAt`) once it passes. */
+  endsAt?: string;
+  /** Set when the routine ended by itself (its `endsAt` passed, or its owner
+   * reported the watched thing finished). Cleared when it is re-armed. */
+  expiredAt?: string;
+  /** The last terminal outcome of one of its runs. */
+  lastOutcome?: { outcome: RoutineRunOutcome; at: string; runId?: string };
+  /** The previous NON-silent result, truncated: continuity for the next run. */
+  lastReport?: { text: string; at: string };
 }
 
 export interface CreateRoutineInput {
@@ -372,6 +392,8 @@ export interface CreateRoutineInput {
   prompt: string;
   trigger: RoutineTrigger;
   enabled?: boolean;
+  /** ISO instant in the future, or null/absent for no end. */
+  endsAt?: string | null;
 }
 
 /** What a person can send back. `expired` is absent on purpose: it is an
@@ -396,7 +418,19 @@ export type ProductEvent =
   | { type: "run.failed"; runId: string; threadId: string; botId: string; error?: string }
   | { type: "run.cancelled"; runId: string; threadId: string; botId: string }
   | { type: "agent.tool.called"; threadId: string; runId: string; tool: string }
-  | { type: "routine.fired"; routineId: string; botId: string; runId: string }
+  /** A routine delivered a NON-silent reply. Published right BEFORE the reply
+   * messages are appended, so `at` sorts before them. */
+  | {
+      type: "routine.fired";
+      routineId: string;
+      botId: string;
+      runId: string;
+      threadId: string;
+      at: string;
+      routine: { name: string; trigger: RoutineTrigger; endsAt?: string };
+    }
+  /** The runtime itself changed a routine: it expired or its owner ended it. */
+  | { type: "routine.updated"; routineId: string; botId: string; reason: "expired" | "ended"; at: string }
   | { type: "bot.spawned"; bot: Bot }
   | { type: "bot.archived"; botId: string }
   | { type: "bot.deleted"; botId: string }

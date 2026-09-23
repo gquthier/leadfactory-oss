@@ -1,7 +1,9 @@
 import type { Clock } from "./clock.js";
 import { newId } from "./ids.js";
 import type { Storage } from "./storage.js";
-import type { CreateRoutineInput, Routine, RoutineTrigger } from "./types.js";
+import type { CreateRoutineInput, Routine, RoutineRunOutcome, RoutineTrigger } from "./types.js";
+import { computeNextRun } from "./scheduler.js";
+import { truncateReport } from "./routine-run.js";
 
 export const ROUTINES_FILE = "routines.json";
 
@@ -95,6 +97,27 @@ export function normalizeTrigger(raw: unknown, options: NormalizeTriggerOptions 
   return null;
 }
 
+/** `endsAt` as the store keeps it: an ISO instant, `null` to clear. It must
+ * be in the future when it is set — a watch that already ended is not armed.
+ * Throws `RoutineTriggerError` for anything else. */
+export function normalizeEndsAt(raw: unknown, now: Date): string | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  if (typeof raw !== "string" || Number.isNaN(Date.parse(raw))) {
+    throw new RoutineTriggerError("endsAt must be an ISO instant");
+  }
+  const at = new Date(raw);
+  if (at.getTime() <= now.getTime()) throw new RoutineTriggerError("endsAt must be in the future");
+  return at.toISOString();
+}
+
+/** A trigger whose first window falls at or after its end would never run. */
+function assertRunsBeforeEnd(trigger: RoutineTrigger, endsAt: string | null, now: Date): void {
+  if (!endsAt) return;
+  if (!computeNextRun(trigger, now, endsAt)) {
+    throw new RoutineTriggerError("the routine would never run before its end (endsAt)");
+  }
+}
+
 /** `normalizeTrigger` for a row already on disk: never throws, so one bad
  * routine cannot brick the store. */
 function readTrigger(raw: unknown): RoutineTrigger | null {
@@ -151,6 +174,8 @@ export class RoutineStore {
     const name = String(input.name ?? "").trim().slice(0, 80);
     const prompt = String(input.prompt ?? "").trim().slice(0, 6000);
     if (!name || !prompt || !input.botId) throw new Error("a routine needs a bot, a name and a prompt");
+    const endsAt = normalizeEndsAt(input.endsAt, this.clock.now());
+    assertRunsBeforeEnd(trigger, endsAt, this.clock.now());
     const routine: Routine = {
       id: newId("rtn"),
       botId: input.botId,
@@ -161,6 +186,7 @@ export class RoutineStore {
       running: false,
       createdAt: this.clock.nowIso(),
       updatedAt: this.clock.nowIso(),
+      ...(endsAt ? { endsAt } : {}),
     };
     this.routines.push(routine);
     this.persist();
@@ -175,6 +201,19 @@ export class RoutineStore {
       ? normalizeTrigger(patch.trigger, { now: this.clock.now() })
       : current.trigger;
     if (!trigger) throw new RoutineTriggerError("invalid routine trigger");
+    const endsAt = patch.endsAt === undefined
+      ? current.endsAt ?? null
+      : normalizeEndsAt(patch.endsAt, this.clock.now());
+    const enabled = patch.enabled === undefined ? current.enabled : patch.enabled === true;
+    // Re-arming (or moving the end of) a watch whose end has passed needs a
+    // new end: an enabled routine that can never fire again is the lie the
+    // scheduler exists to prevent.
+    if (enabled && endsAt && (patch.enabled !== undefined || patch.trigger || patch.endsAt !== undefined)) {
+      if (Date.parse(endsAt) <= this.clock.now().getTime()) {
+        throw new RoutineTriggerError("this routine's end (endsAt) has passed; set a later end to resume it");
+      }
+      assertRunsBeforeEnd(trigger, endsAt, this.clock.now());
+    }
     const lastVersion = Math.max(...[current.createdAt, current.updatedAt, current.lastRunAt]
       .map((at) => at ? Date.parse(at) : 0).filter(Number.isFinite));
     const next: Routine = {
@@ -187,6 +226,11 @@ export class RoutineStore {
       updatedAt: new Date(Math.max(this.clock.now().getTime(), lastVersion + 1)).toISOString(),
     };
     if (patch.trigger && JSON.stringify(trigger) !== JSON.stringify(current.trigger)) delete next.nextRunAt;
+    if (endsAt) next.endsAt = endsAt;
+    else delete next.endsAt;
+    if (patch.endsAt !== undefined && endsAt !== (current.endsAt ?? null)) delete next.nextRunAt;
+    // Turned back on (or given a new end) by a person: no longer expired.
+    if (next.expiredAt && (patch.enabled === true || patch.endsAt !== undefined)) delete next.expiredAt;
     this.routines[index] = next;
     this.persist();
     return { ...next };
@@ -205,6 +249,34 @@ export class RoutineStore {
     const next: Routine = { ...current, ...patch, nextRunAt: current.nextRunAt };
     if (patch.nextRunAt === null) delete next.nextRunAt;
     else if (patch.nextRunAt) next.nextRunAt = patch.nextRunAt;
+    this.routines[index] = next;
+    this.persist();
+  }
+
+  /** The routine ended by itself: its `endsAt` passed, or its owner reported
+   * the watched thing finished. Disabled, never deleted — it stays auditable
+   * in Apps → Routines. Returns the row when it changed. */
+  expire(id: string): Routine | undefined {
+    const index = this.routines.findIndex((routine) => routine.id === id);
+    const current = this.routines[index];
+    if (index < 0 || !current || current.expiredAt) return undefined;
+    const next: Routine = { ...current, enabled: false, expiredAt: this.clock.nowIso() };
+    delete next.nextRunAt;
+    this.routines[index] = next;
+    this.persist();
+    return { ...next };
+  }
+
+  /** Run bookkeeping: the last outcome, and the last non-silent report. */
+  recordOutcome(id: string, input: { outcome: RoutineRunOutcome; at: string; runId?: string; report?: string }): void {
+    const index = this.routines.findIndex((routine) => routine.id === id);
+    const current = this.routines[index];
+    if (index < 0 || !current) return;
+    const next: Routine = {
+      ...current,
+      lastOutcome: { outcome: input.outcome, at: input.at, ...(input.runId ? { runId: input.runId } : {}) },
+      ...(input.report?.trim() ? { lastReport: { text: truncateReport(input.report), at: input.at } } : {}),
+    };
     this.routines[index] = next;
     this.persist();
   }
