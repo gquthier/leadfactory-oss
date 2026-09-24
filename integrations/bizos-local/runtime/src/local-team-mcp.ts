@@ -23,6 +23,10 @@ export function toolsetsFromArgv(argv: readonly string[]): Set<string> {
   return new Set(["team", ...names]);
 }
 
+/** Shared by every cloud tool description: what the machine is, and the manners. */
+const CLOUD_NOTE = "Cloud computer (Linux, shared by the user's agents; your folder and Chrome profile there are yours alone). Wake it when you need it, sleep it when done.";
+const CLOUD_TOOL_NAMES = new Set(["cloud_computer_wake", "cloud_computer_sleep", "cloud_computer_status", "cloud_computer_run", "cloud_browser_fetch"]);
+
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
   description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain.",
@@ -99,7 +103,44 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
     required: ["objective", "status", "summary", "next_step", "evidence"],
     additionalProperties: false,
   },
+}, {
+  name: "cloud_computer_wake",
+  description: `${CLOUD_NOTE} Wake it (created the first time); the other cloud tools also wake it by themselves.`,
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+}, {
+  name: "cloud_computer_sleep",
+  description: `${CLOUD_NOTE} Put it to sleep when you are done: the disk, your folder and your Chrome cookies are kept, running processes stop.`,
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+}, {
+  name: "cloud_computer_status",
+  description: `${CLOUD_NOTE} Is it awake or asleep, and when it will sleep by itself.`,
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+}, {
+  name: "cloud_computer_run",
+  description: `${CLOUD_NOTE} Run a bash command in your own folder there and get stdout, stderr and the exit code.`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      command: { type: "string", maxLength: 20000, description: "Bash command, run from your own folder on the cloud computer." },
+      timeout_seconds: { type: "integer", minimum: 1, maximum: 600, description: "Wait at most this long (default 120)." },
+    },
+    required: ["command"],
+    additionalProperties: false,
+  },
+}, {
+  name: "cloud_browser_fetch",
+  description: `${CLOUD_NOTE} Open a URL in headless Chrome with your own profile (your cookies and logins persist) and get the page title and text.`,
+  inputSchema: {
+    type: "object",
+    properties: { url: { type: "string", maxLength: 4000, description: "Absolute http(s) URL." } },
+    required: ["url"],
+    additionalProperties: false,
+  },
 }] as const;
+
+export function isCloudToolName(name: unknown): boolean {
+  return typeof name === "string" && CLOUD_TOOL_NAMES.has(name);
+}
 
 function requireEnvironment(name: string): string {
   const value = process.env[name]?.trim();
@@ -126,7 +167,7 @@ function sessionToken(): Promise<string> {
   return sessionPromise;
 }
 
-async function callEndpoint(path: string, input: Json): Promise<unknown> {
+async function callEndpoint(path: string, input: Json, timeoutMs = 15_000): Promise<unknown> {
   const origin = requireEnvironment("LOCALBIZOS_TEAM_ORIGIN");
   const response = await fetch(new URL(path, origin), {
     method: "POST",
@@ -135,7 +176,7 @@ async function callEndpoint(path: string, input: Json): Promise<unknown> {
       "content-type": "application/json",
     },
     body: JSON.stringify(input),
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const body = await response.json() as unknown;
   if (!response.ok) {
@@ -153,6 +194,9 @@ const callSchedule: TeamCall = (input) => callEndpoint("/api/internal/local-team
 const callCheckpoint: TeamCall = (input) => callEndpoint("/api/internal/local-team/checkpoint", input);
 /** One endpoint for every pack tool: `{ tool, arguments }`. */
 const callPack: TeamCall = (input) => callEndpoint("/api/internal/local-team/pack", input);
+/** One endpoint for the cloud computer tools: `{ tool, arguments }`. A wake
+ * plus a 600 s command can take far longer than a team call. */
+const callCloud: TeamCall = (input) => callEndpoint("/api/internal/local-team/cloud", input, 15 * 60_000);
 
 function textResult(value: unknown, isError = false, max = MAX_RESULT_CHARS): Json {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -168,6 +212,8 @@ export interface LocalTeamMcpOptions {
   pack?: TeamCall | null;
   /** Which pack's specs to list: `agency`, `commerce`, or none. */
   toolsets?: ReadonlySet<string>;
+  /** The cloud computer invoker (defaults to the sidecar route). */
+  cloud?: TeamCall;
 }
 
 const READ_ONLY_TOOL = /^(agency|commerce)_(context|schema|list_|read_)/;
@@ -181,6 +227,7 @@ export async function handleLocalTeamMessage(
   options: LocalTeamMcpOptions = {},
 ): Promise<Json | null> {
   const invokePack = options.pack ?? null;
+  const invokeCloud = options.cloud ?? callCloud;
   const toolsets = options.toolsets ?? new Set(invokePack ? ["team", "agency", "commerce"] : ["team"]);
   const id = message.id;
   const method = message.method;
@@ -198,7 +245,7 @@ export async function handleLocalTeamMessage(
   if (method === "tools/list") {
     const teamTools = LOCAL_TEAM_TOOL_SPECS.map((tool) => ({
       ...tool,
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: isCloudToolName(tool.name) },
     }));
     const packTools = invokePack
       ? [
@@ -217,6 +264,7 @@ export async function handleLocalTeamMessage(
       if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
+      if (isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
       if (invokePack && ((toolsets.has("agency") && isAgencyToolName(params.name)) || (toolsets.has("commerce") && isCommerceToolName(params.name)))) {
         return reply(textResult(await invokePack({ tool: params.name, arguments: params.arguments ?? {} }), false, MAX_PACK_RESULT_CHARS));
       }

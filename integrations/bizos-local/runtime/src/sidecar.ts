@@ -60,7 +60,9 @@ import {
   type VoiceCallState,
 } from "./voice-tasks.js";
 import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-state.js";
-import { LOCAL_TEAM_TOOL_SPECS } from "./local-team-mcp.js";
+import { LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
+import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
+import { Storage } from "./harness/storage.js";
 import { AgencyService } from "./harness/agency.js";
 import { EcommerceService } from "./harness/ecommerce.js";
 import { PackError, type PackService, type PackState } from "./harness/pack.js";
@@ -305,6 +307,17 @@ function requestError(response: ServerResponse, error: unknown): void {
   sendJson(response, failure.status, { error: { code: failure.code, message: failure.message.slice(0, 500) } });
 }
 
+/** A cloud computer failure, as the local HTTP contract speaks it. */
+function cloudHttpError(error: unknown): unknown {
+  if (error instanceof CloudComputerError) {
+    if (error.code === "pro_required") return new ProRequiredError("cloudComputer");
+    const status = error.code === "invalid_payload" ? 400 : error.code === "not_configured" ? 409 : 502;
+    return new HttpError(status, error.code, error.message);
+  }
+  if (error instanceof BoatError) return new HttpError(502, `boat_${error.code}`, error.message);
+  return error;
+}
+
 function routeId(pathname: string, pattern: RegExp): string | null {
   const match = pathname.match(pattern);
   if (!match?.[1]) return null;
@@ -497,13 +510,13 @@ export class LocalTeamBroker {
 
   /** Every team and pack tool call passes here (dynamic tools and the Claude
    * MCP bridge alike), so this is where a voice run's calls are refused. */
-  authorize(session: string): TeamCapability {
+  authorize(session: string, options: { allowDuringVoice?: boolean } = {}): TeamCapability {
     const capability = this.sessions.get(session);
     if (!capability || capability.expiresAt <= Date.now()) {
       this.sessions.delete(session);
       throw new HttpError(401, "invalid_team_capability", "Local team capability is invalid or expired.");
     }
-    if (capability.teamDelegationBlocked) {
+    if (capability.teamDelegationBlocked && !options.allowDuringVoice) {
       throw new HttpError(
         403,
         "team_delegation_unavailable_in_voice",
@@ -2324,6 +2337,7 @@ async function serve(): Promise<void> {
   let facade: CollaborationFacade | null = null;
   let connector: RelayConnector | null = null;
   let packs: Packs | null = null;
+  let cloud: CloudComputer | null = null;
   const packOf = (botId: string): PackService | null =>
     packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
   let origin = "";
@@ -2360,6 +2374,17 @@ async function serve(): Promise<void> {
       }
       if (method === "POST" && (url.pathname === "/api/internal/local-team/agency" || url.pathname === "/api/internal/local-team/pack")) {
         return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
+      }
+      if (method === "POST" && url.pathname === "/api/internal/local-team/cloud") {
+        const capability = teamBroker.authorize(bearer, { allowDuringVoice: true });
+        const input = objectBody(await bodyOf(request), ["tool", "arguments"]);
+        if (!cloud || !isCloudToolName(input.tool)) throw new HttpError(404, "not_found", "Unknown cloud computer tool.");
+        const args = input.arguments && typeof input.arguments === "object" && !Array.isArray(input.arguments) ? input.arguments as Record<string, unknown> : {};
+        try {
+          return sendJson(response, 200, await cloud.tool(capability.botId, String(input.tool), args));
+        } catch (error) {
+          throw cloudHttpError(error);
+        }
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
@@ -2475,6 +2500,35 @@ async function serve(): Promise<void> {
         return sendJson(response, 200, { settings: await facade.setModel(await bodyOf(request)) });
       }
       if (method === "GET" && url.pathname === "/api/local/entitlement") return sendJson(response, 200, await facade.entitlement());
+      // The cloud computer (one Boat sandbox for this workspace). Status and
+      // settings carry no secret; `desktop` returns a secret-bearing stream
+      // URL, which is why it is owner-bearer only like everything here.
+      if (url.pathname === "/api/local/cloud-computer" || url.pathname.startsWith("/api/local/cloud-computer/")) {
+        if (!cloud) throw new HttpError(503, "starting", "Local harness is starting.");
+        const machine = cloud;
+        const action = url.pathname.slice("/api/local/cloud-computer".length);
+        try {
+          if (method === "GET" && action === "") return sendJson(response, 200, await machine.status());
+          if (method === "PUT" && action === "") {
+            const input = objectBody(await bodyOf(request), ["machineClass", "idleMinutes"]);
+            return sendJson(response, 200, machine.setSettings(input));
+          }
+          if (method === "POST" && action === "/key") {
+            const input = objectBody(await bodyOf(request), ["apiKey"]);
+            return sendJson(response, 200, machine.setApiKey(input.apiKey));
+          }
+          if (method === "POST" && (action === "/wake" || action === "/sleep" || action === "/desktop")) {
+            objectBody((await bodyOf(request)) ?? {}, []);
+            if (!(await facade.entitlement()).features.cloudComputer) throw new ProRequiredError("cloudComputer");
+            if (action === "/wake") return sendJson(response, 200, await machine.wake());
+            if (action === "/sleep") return sendJson(response, 200, await machine.sleep("owner"));
+            return sendJson(response, 200, await machine.desktop());
+          }
+        } catch (error) {
+          throw cloudHttpError(error);
+        }
+        throw new HttpError(404, "not_found", "Local endpoint not found.");
+      }
       if (method === "PUT" && url.pathname === "/api/local/entitlement") return sendJson(response, 200, await facade.setEntitlement(await bodyOf(request)));
       if (method === "GET" && url.pathname === "/api/local/providers") return sendJson(response, 200, await facade.inferenceProviders());
       if (method === "POST" && url.pathname === "/api/local/providers") {
@@ -2609,6 +2663,12 @@ async function serve(): Promise<void> {
         inputSchema: tool.inputSchema,
         call: async (argumentsValue: unknown) => {
           if (!facade) throw new HttpError(503, "not_ready", "Local team runtime is not ready.");
+          if (isCloudToolName(tool.name)) {
+            if (!cloud) throw new HttpError(503, "not_ready", "Local team runtime is not ready.");
+            const { botId } = teamBroker.authorize(session, { allowDuringVoice: true });
+            const args = argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue) ? argumentsValue as Record<string, unknown> : {};
+            return cloud.tool(botId, tool.name, args);
+          }
           if (tool.name === "schedule_routine") return facade.scheduleRoutine(() => teamBroker.authorize(session), argumentsValue);
           const capability = teamBroker.authorize(session);
           if (tool.name === "recruit_agent") return facade.recruit(capability, argumentsValue);
@@ -2684,6 +2744,12 @@ async function serve(): Promise<void> {
       .map(([botId, affiliation]) => [affiliation.roleSlug, botId])),
   };
   const log = (line: string) => process.stderr.write(`[localbizos] ${line}\n`);
+  cloud = new CloudComputer({
+    storage: new Storage(harnessRoot),
+    isAllowed: async () => (await harness.entitlement.get()).features.cloudComputer,
+    log,
+  });
+  cloud.start();
   packs = {
     agency: new AgencyService({ host: packHost, log }),
     ecommerce: new EcommerceService({ host: packHost, log }),

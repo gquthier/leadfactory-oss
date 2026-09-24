@@ -5,7 +5,7 @@
 // Nothing here talks to a billing system, verifies a purchase or signs
 // anything: anyone who can write this file or set that variable is Pro. It
 // exists so the product can be built and tested against the free/pro split
-// (custom models and custom connectors are Pro; connecting a personal
+// (custom models, custom connectors and the cloud computer are Pro; connecting a personal
 // Codex / Claude Code / Cursor plan stays free). Linking it to real billing
 // (a signed, expiring entitlement from the account) is future work.
 import type { Storage } from "./storage.js";
@@ -14,7 +14,7 @@ export const ENTITLEMENT_FILE = "entitlement.json";
 export const PLAN_ENV = "BIZOS_LOCAL_PLAN";
 
 export type PlanTier = "free" | "pro";
-export type ProFeature = "customModels" | "customConnectors";
+export type ProFeature = "customModels" | "customConnectors" | "cloudComputer";
 
 export interface Entitlement {
   tier: PlanTier;
@@ -28,7 +28,9 @@ export class ProRequiredError extends Error {
   constructor(readonly feature: ProFeature) {
     super(feature === "customConnectors"
       ? "Adding your own apps and connectors needs BizOS Pro."
-      : "Custom models and API providers need BizOS Pro.");
+      : feature === "cloudComputer"
+        ? "The cloud computer needs BizOS Pro."
+        : "Custom models and API providers need BizOS Pro.");
     this.name = "pro_required";
   }
 }
@@ -40,7 +42,7 @@ function asTier(value: unknown): PlanTier | null {
 
 export function entitlementFor(tier: PlanTier, source: Entitlement["source"]): Entitlement {
   const pro = tier === "pro";
-  return { tier, source, features: { customModels: pro, customConnectors: pro } };
+  return { tier, source, features: { customModels: pro, customConnectors: pro, cloudComputer: pro } };
 }
 
 export class EntitlementStore {

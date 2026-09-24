@@ -2,7 +2,7 @@
 // a REAL sidecar process on a temporary state root and HOME. Skipped when
 // `dist/` is not built (`npm run build` first).
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -89,7 +89,7 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
     expect((await api("GET", "/api/local/entitlement", undefined, "")).status).toBe(401);
     expect(await api("GET", "/api/local/entitlement")).toEqual({
       status: 200,
-      body: { tier: "free", source: "default", features: { customModels: false, customConnectors: false } },
+      body: { tier: "free", source: "default", features: { customModels: false, customConnectors: false, cloudComputer: false } },
     });
     const gemini = { kind: "openai-compatible", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: "k", model: "gemini-2.5-flash" };
     const refused = await api("POST", "/api/local/providers", gemini);
@@ -102,7 +102,7 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
     expect((await api("PUT", "/api/local/entitlement", { tier: "gold" })).status).toBe(400);
     expect(await api("PUT", "/api/local/entitlement", { tier: "pro" })).toEqual({
       status: 200,
-      body: { tier: "pro", source: "local", features: { customModels: true, customConnectors: true } },
+      body: { tier: "pro", source: "local", features: { customModels: true, customConnectors: true, cloudComputer: true } },
     });
     const added = await api("POST", "/api/local/providers", gemini);
     expect(added.status).toBe(201);
@@ -110,5 +110,23 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
     expect((await api("PATCH", `/api/local/providers/${added.body.provider.id}`, { model: "gemini-3.5-flash-lite" })).status).toBe(200);
     expect((await api("PUT", "/api/local/entitlement", { tier: "free" })).body.tier).toBe("free");
     expect((await api("PATCH", `/api/local/providers/${added.body.provider.id}`, { model: "x" })).status).toBe(402);
+  });
+
+  it("serves the cloud computer: no secrets in status, key stored 0600, Pro-gated wake, team route needs a capability", async () => {
+    expect((await api("GET", "/api/local/cloud-computer", undefined, "")).status).toBe(401);
+    expect(await api("GET", "/api/local/cloud-computer")).toMatchObject({
+      status: 200,
+      body: { configured: false, keySource: null, allowed: false, sandboxId: null, state: "none", machineClass: "small", idleMinutes: 15 },
+    });
+    expect((await api("POST", "/api/local/cloud-computer/key", { apiKey: "boat_secret_value" })).body).toMatchObject({ configured: true, keySource: "local" });
+    const status = await api("GET", "/api/local/cloud-computer");
+    expect(JSON.stringify(status.body)).not.toContain("boat_secret_value");
+    const file = join(temp, "state", "runtime", "cloud-computer.json");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect((await api("PUT", "/api/local/cloud-computer", { machineClass: "huge" })).status).toBe(400);
+    expect((await api("PUT", "/api/local/cloud-computer", { idleMinutes: 5 })).body.idleMinutes).toBe(5);
+    expect(await api("POST", "/api/local/cloud-computer/wake", {}))
+      .toMatchObject({ status: 402, body: { error: "pro_required", feature: "cloudComputer" } });
+    expect((await api("POST", "/api/internal/local-team/cloud", { tool: "cloud_computer_status", arguments: {} }, "forged")).status).toBe(401);
   });
 });

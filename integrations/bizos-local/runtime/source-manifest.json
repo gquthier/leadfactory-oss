@@ -4,6 +4,7 @@
   "files": {
     "src/computer/actions.ts": "f7de6baad41ad796afecb5b89741d1edae4f0bf4f7d85d62e682f5b0bd53b8ae",
     "src/computer/broker.ts": "44514352a39534bd585b984bbbace6a2d0dd87abbd05030dae6332bbf708388c",
+    "src/computer/cloud.ts": "5d95357fdf65ec0757d55d5e8084145a482fbf57888f1083025b80303b32d1da",
     "src/computer/host.ts": "5254ad9c2e13dc3bb7f50241abceb7868047781b7c772933181dfc40f4779ac7",
     "src/computer/manager.ts": "a40e5a0503cc49e45c4d3d60a3b986cddb7aa51e1c3646a96057ba29eeb52bca",
     "src/computer/native.ts": "b4f27527ed6a7c7d9a21cebb03268fc578703ddeb8f9b3598cac65dda051c098",
@@ -36,7 +37,7 @@
     "src/harness/device-agent.ts": "b09d1d2801a037bd0d5a0251b9b475e16c7369e0b31cf17df2ef17ffba640b15",
     "src/harness/dispatch.ts": "e44001e7d6336ab9ae88248514a21734751758d9044e41ee2552aedbee942e2e",
     "src/harness/ecommerce.ts": "bf1a7ed7c1ab41c5b83db7cfb682b14864736a0eba170ab8f010596beee3c7ba",
-    "src/harness/entitlement.ts": "fee5aff1ba5c8cc085e97e4be7deb4993e035d08bf0e7eaff86aa59e45497671",
+    "src/harness/entitlement.ts": "3f3e2d344790ad40bb34de73adf937d3b845fa5d528868016da8641771bb55bb",
     "src/harness/env-path.ts": "4ba59ff3b3cc9f6475fc241570dbe495f996e3ea03ba3a70bfc6395595d26f08",
     "src/harness/events.ts": "2a9b27ae6b149a713bb1653dc94b69bdbf4e63bd4aa76a418117dd26915059d3",
     "src/harness/groups.ts": "079d659348d016860caaf0e89e099ac473a6031756a9832518bb15e6aed1980b",
@@ -72,7 +73,7 @@
     "src/harness/threads.ts": "b285760405f6c7059bb55e631cfee3085a1eb41139f6e348eed69e5ce594a026",
     "src/harness/types.ts": "e9abe390df394b9d8b85e2bfbaf2224d0b787400daed8ec097e43a4b3af48e64",
     "src/ipc.ts": "e1115556ccc8c90ca4618a033cf42892bb292bd6c7e0c8bd444d96311766984a",
-    "src/local-team-mcp.ts": "1e70f2946a294df4ef97df2ce07e6f39248b5acd68183bc1044e4ba702a61aca",
+    "src/local-team-mcp.ts": "65a63f36b61ace4c1f77b401645adc766ca0f59997db1c663b690dd12a5e8757",
     "src/mobile/admin-routes.ts": "4c248a718161b25b854611a7cf970619c0f4ac5faea4a86ba4e4fff49097c68f",
     "src/mobile/backend.ts": "d8a557de739f3379fab5ec3bc62229e1c6bca7300cf14e08b95aa2834e36ba7e",
     "src/mobile/connector.ts": "4c7680f2d10f671237f528676e9b96c9a93fb0022e318719f12b85d68452010f",
@@ -83,7 +84,7 @@
     "src/routines-public.ts": "41e46b8cdffc47396556d8b054782c02b3f911a569f460fbd9eaae0ef9d25fcb",
     "src/sidecar-contract.ts": "10c2d18c2560c1b3451f53ea8115ce75e2a7aed4c674e6d059e0e36c03a317e2",
     "src/sidecar-state.ts": "61c9149007198577dde498a3154ae5bd45aae0396630e1fb57a09a140973332b",
-    "src/sidecar.ts": "68a2ac3b9c60afc01ca3f0c632d92f5d6613c8e2c0c76ef52914de9b212e24c8",
+    "src/sidecar.ts": "d9c8b3795a1d4f077ec88388acf53027894793d10c625e0c86bc74b723e91fa1",
     "src/voice-tasks.ts": "1d89d16114d21481360d2715a316db900694e70f154313075318e1e8ab36fb1e"
   }
 }

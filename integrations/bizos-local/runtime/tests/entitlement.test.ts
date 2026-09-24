@@ -22,9 +22,9 @@ describe("EntitlementStore", () => {
     const storage = new Storage(join(root, "state"));
     let env: NodeJS.ProcessEnv = {};
     const store = new EntitlementStore(storage, () => env);
-    expect(store.get()).toEqual({ tier: "free", source: "default", features: { customModels: false, customConnectors: false } });
+    expect(store.get()).toEqual({ tier: "free", source: "default", features: { customModels: false, customConnectors: false, cloudComputer: false } });
     expect(() => store.require("customModels")).toThrow(ProRequiredError);
-    expect(store.set("pro")).toEqual({ tier: "pro", source: "local", features: { customModels: true, customConnectors: true } });
+    expect(store.set("pro")).toEqual({ tier: "pro", source: "local", features: { customModels: true, customConnectors: true, cloudComputer: true } });
     expect(JSON.parse(readFileSync(join(root, "state", ENTITLEMENT_FILE), "utf8"))).toMatchObject({ tier: "pro" });
     expect(() => store.require("customConnectors")).not.toThrow();
     env = { BIZOS_LOCAL_PLAN: "free" };
