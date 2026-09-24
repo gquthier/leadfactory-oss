@@ -48,7 +48,7 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
   },
 }, {
   name: "schedule_routine",
-  description: "Create a routine on this Mac yourself — no confirmation question — whenever the person asks you to watch, remind, follow up, check back or ping them later. A short-lived watch (a delivery, a deploy, a reply, today's meeting) MUST have an end: set `until`. Write `prompt` to your future self as an intent (what to check, what counts as news, what they already know), not as an order to the person. It fires in your own direct chat; when nothing is new you will answer [SILENT] and nothing is shown. The result gives nextRunAt and endsAt: announce it in one short line. Routines cannot be created from a routine or heartbeat run. The owner is you unless owner_agent_id names a teammate; the person sees every routine in Apps → Routines.",
+  description: "Create a routine on this Mac yourself — no confirmation question — whenever the person asks you to watch, remind, follow up, check back or ping them later. A short-lived watch (a delivery, a deploy, a reply, today's meeting) MUST have an end: set `until`. Write `prompt` to your future self as an intent (what to check, what counts as news, what they already know), not as an order to the person. It fires in your own direct chat; when nothing is new you will answer [SILENT] and nothing is shown. The result gives nextRunAt and endsAt: announce it in one short line. Routines cannot be created from a routine or heartbeat run. The owner is you unless owner_agent_id names a teammate; the person sees and edits every routine in Settings → Routines (Réglages → Routines).",
   inputSchema: {
     type: "object",
     properties: {

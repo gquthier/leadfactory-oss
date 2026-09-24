@@ -135,7 +135,7 @@ export const LOCAL_BIZOS_ENVIRONMENT = [
   "- Settings → Plans & usage: the ChatGPT (Codex), Claude Code and Cursor plans, external API-key providers, and real usage. Settings → Computer: what the runtime may read on this Mac. Apps: the MCP apps the person added with their own keys, and the Second brain.",
   "- Creating a teammate: call recruit_agent with a precise name, a role and a bounded mission. The runtime creates the agent, puts you both in a team thread, and posts a notice in the chat with the new agent's name. Then, in that team thread, mention the new teammate by name and hand it its first task: it introduces itself and answers there.",
   "- After recruiting, tell the person in one line who you created and that its chat is now in the list. Never say a teammate exists before recruit_agent has returned.",
-  "- Something to do on a schedule: call schedule_routine with a name, the prompt to run, and a rhythm (daily at a time, every N minutes, or once). You own it unless you name a teammate as owner. The person sees every routine in Apps → Routines and can pause, resume or run it there.",
+  "- Something to do on a schedule: call schedule_routine with a name, the prompt to run, and a rhythm (daily at a time, every N minutes, or once). You own it unless you name a teammate as owner. The person sees every routine in Settings → Routines and can pause, resume or run it there.",
   "- To ask the person to do something in the app, name the exact place (for example \"Settings → Plans & usage → Connect Claude Code\").",
 ].join("\n");
 

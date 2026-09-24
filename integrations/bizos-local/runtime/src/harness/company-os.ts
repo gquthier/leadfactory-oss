@@ -533,7 +533,7 @@ One task, one budget. Two failed attempts on the same problem → stop, write wh
 When you change something (a process, a tool configuration, code), update its documentation in the same change and delete what is no longer true. One canonical note per subject in \`Knowledge/Draft/\`: update it, never write \`subject v2\`.
 
 ## R8 — Loops
-A routine (Apps → Routines, or the \`schedule_routine\` tool when the person asks for one) has three organs written down before it exists: **VERIFY** (a gate that can reject the work), **STATE** (memory of what was tried), **STOP** (measurable success and a hard cap, then a human). Build order: a manual run proven, then the routine. Maker ≠ checker.
+A routine (Settings → Routines, or the \`schedule_routine\` tool when the person asks for one) has three organs written down before it exists: **VERIFY** (a gate that can reject the work), **STATE** (memory of what was tried), **STOP** (measurable success and a hard cap, then a human). Build order: a manual run proven, then the routine. Maker ≠ checker.
 `;
 
 const AUTONOMY_MD = `# Autonomy
