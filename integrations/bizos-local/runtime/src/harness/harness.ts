@@ -3232,7 +3232,7 @@ export class LocalBizosHarness {
     },
     dispatchChild: async (
       scope: { botId: string; threadId: string; runId: string },
-      target: { botId: string },
+      target: { botId: string; groupId?: string },
       input: { text: string; messageId: string },
     ) => {
       await this.refreshSessionCookie();

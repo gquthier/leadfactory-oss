@@ -99,7 +99,8 @@ it("pins an Ollama recruit to its parent's exact verified model when global sele
   expect(childRun).toBeDefined();
   expect((await settled(f.harness, childRun!.id)).state).toBe("completed");
   const requests = f.requests.map(body => ({ model: body.model, text: body.messages.at(-1)?.content }));
-  expect(requests).toContainEqual({ model: "fixture:1", text: "Child task" });
+  // The recruiter addresses the recruit by name in their team channel.
+  expect(requests).toContainEqual({ model: "fixture:1", text: "@Analyst Child task" });
   await expect(f.facade.localRuntime()).resolves.toMatchObject({ inference: { source: "auto" } });
 });
 

@@ -1966,7 +1966,9 @@ export class CollaborationFacade {
         if (previous.fingerprint !== fingerprint) throw new HttpError(409, "recruitment_limit", "One turn may recruit only one teammate.");
         if (previous.state === "pending" && !previous.plan) throw new HttpError(409, "idempotency_in_doubt", "The earlier legacy recruitment has an uncertain outcome and will not be repeated.");
         if (previous.state === "pending" && previous.plan) {
-          const existingMessage = await this.harness.threads.message({ botId: previous.plan.botId }, previous.plan.messageId);
+          // The task now lands in the team group; older plans put it in the DM.
+          const existingMessage = await this.harness.threads.message({ groupId: previous.plan.groupId }, previous.plan.messageId)
+            ?? await this.harness.threads.message({ botId: previous.plan.botId }, previous.plan.messageId);
           if (existingMessage) throw new HttpError(409, "idempotency_in_doubt", "The initial task message exists but its launch result was not recorded; it will not be dispatched twice.");
         }
         if (previous.state === "pending") {
@@ -2143,8 +2145,8 @@ export class CollaborationFacade {
       try {
         const launched = await this.harness.threads.dispatchChild(
           { botId: capability.botId, threadId: capability.threadId, runId: capability.runId },
-          { botId: bot.id },
-          { text: task, messageId: planned.messageId },
+          { botId: bot.id, groupId: group.id },
+          { text: `@${bot.name} ${task}`, messageId: planned.messageId },
         );
         dispatch = {
           status: launched.state === "queued" ? "queued"
@@ -2156,7 +2158,7 @@ export class CollaborationFacade {
           ...(launched.error ? { error: launched.error } : {}),
         };
       } catch (error) {
-        const existingMessage = await this.harness.threads.message({ botId: bot.id }, planned.messageId);
+        const existingMessage = await this.harness.threads.message({ groupId: group.id }, planned.messageId);
         dispatch = {
           status: "failed",
           parentRunId: this.runId(capability.runId),

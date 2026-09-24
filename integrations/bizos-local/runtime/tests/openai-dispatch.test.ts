@@ -98,5 +98,8 @@ it("a plain API-backed bot recruits a teammate that immediately works on the sam
   expect(childRun).toBeDefined();
   expect(await settled(f.harness, childRun!.id)).toMatchObject({ state: "completed", inference: { kind: "api", providerId: f.provider.id } });
   expect(f.requests.some((request) => String(request.body.messages.at(-1)?.content).includes("Child task: size the market"))).toBe(true);
-  expect(JSON.stringify(await f.harness.threads.get({ botId: child!.id }))).toContain("Child answered");
+  // The task and the answer live in the recruiter's team channel.
+  const team = (await f.harness.groups.list()).find((group) => group.memberIds.includes(child!.id));
+  expect(team).toBeDefined();
+  expect(JSON.stringify(await f.harness.threads.get({ groupId: team!.id }))).toContain("Child answered");
 });

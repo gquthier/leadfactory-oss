@@ -642,7 +642,7 @@ export class Dispatcher {
    * fresh `send`, this inherits the parent's chain budget and STOP lineage. */
   dispatchChild(
     scope: { botId: string; threadId: string; runId: string },
-    target: { botId: string },
+    target: { botId: string; groupId?: string },
     input: { text: string; messageId: string },
   ): ChildDispatchResult {
     const parent = this.active.get(scope.threadId);
@@ -650,15 +650,19 @@ export class Dispatcher {
       throw new Error("initial task requires the matching active parent run");
     }
     if (parent.hop >= MAX_HOPS) throw new Error("the parent mission reached its handoff depth limit");
-    const threadId = threadIdForTarget(target);
+    // Through the team channel when there is one: the recruiter's words stand
+    // in the group as its own message, and the answer lands beside them — a
+    // conversation between agents the person can read. Without a group, the
+    // task stays a system line in the recruit's own chat, as before.
+    const threadId = target.groupId
+      ? threadIdForTarget({ groupId: target.groupId })
+      : threadIdForTarget({ botId: target.botId });
     if (this.deps.threads.get(threadId, input.messageId)) {
       throw new Error("the initial task message already exists and will not be dispatched twice");
     }
-    const message = this.deps.threads.append(threadId, {
-      id: input.messageId,
-      role: "system",
-      blocks: [{ kind: "text", text: input.text }],
-    });
+    const message = this.deps.threads.append(threadId, target.groupId
+      ? { id: input.messageId, role: "bot", botId: scope.botId, deliveryState: "complete", blocks: [{ kind: "text", text: input.text }] }
+      : { id: input.messageId, role: "system", blocks: [{ kind: "text", text: input.text }] });
     this.deps.events.publish({ type: "thread.message.created", threadId, message });
     const owned = this.chainOwners.get(scope.threadId) ?? new Set<string>();
     owned.add(parent.chainId);
