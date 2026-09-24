@@ -783,9 +783,12 @@ export class CollaborationFacade {
   }
 
   private message(message: ThreadMessage, target: ThreadTarget, bots: readonly Bot[]): CollaborationMessage | null {
-    const publicBlocks = message.deliveryState === "control"
-      ? message.blocks.filter(block => block.kind === "meta") : message.blocks;
-    if (message.role === "system" || (message.deliveryState === "control" && !textOf(publicBlocks))) return null;
+    // A run's control line (e.g. "permissions are off") is a note about the
+    // turn, kept in the transcript for the record — never a chat bubble:
+    // bubbles are what the agents actually say.
+    if (message.role === "system" || message.deliveryState === "control") return null;
+    const publicBlocks = message.blocks.filter(block => block.kind !== "meta");
+    if (message.role === "bot" && !textOf(publicBlocks) && message.blocks.length > 0 && message.blocks.every(block => block.kind === "meta")) return null;
     const publicThreadId = this.publicThreadId(target);
     const botId = message.botId ?? ("botId" in target ? target.botId : undefined);
     const bot = botId ? bots.find((candidate) => candidate.id === botId) : undefined;
