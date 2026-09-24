@@ -441,6 +441,8 @@ describe("the harness", () => {
     const facade = new CollaborationFacade(harness, "fixture", new LocalTeamBroker(), emptyDurableIndex(), null, () => undefined);
     expect(await facade.computerState(bot.id, true)).toMatchObject({ backend: "container", fullDataUrl: expect.stringMatching(/^data:image\/jpeg;base64,/) });
     expect(await facade.computerState(`local:fixture:agent:${bot.id}`)).toMatchObject({ backend: "container", status: "ready" });
+    // The desktop panel names the agent by its chat's thread id.
+    expect(await facade.computerState(`local:fixture:thread:bot:${bot.id}`)).toMatchObject({ backend: "container", status: "ready" });
     // No key: no cloud computer, no tools, and the panel keeps its own browser.
     machine.configured = false;
     expect(harness.computerToolsAvailable()).toBe(false);

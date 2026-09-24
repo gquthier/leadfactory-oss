@@ -1934,6 +1934,10 @@ export class CollaborationFacade {
   /** The panel names an agent by its public id (`local:<instance>:agent:…`);
    * a bare bot id is accepted too. */
   private computerBotId(id: string): string {
+    // The desktop tags an agent's chat with its THREAD id
+    // (`local:<instance>:thread:bot:<botId>`): that names the same agent.
+    const thread = /^local:[^:]+:thread:bot:([A-Za-z0-9_-]+)$/.exec(id);
+    if (thread) return thread[1]!;
     return id.startsWith("local:") ? this.internalAgentId(id) : id;
   }
 
