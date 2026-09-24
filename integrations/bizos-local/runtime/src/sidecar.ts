@@ -174,6 +174,8 @@ function safeHarnessEnvironment(): NodeJS.ProcessEnv {
     "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM", "COLORTERM", "PATH",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
     "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+    // The local plan tier override (entitlement.ts) is read by the harness.
+    "BIZOS_LOCAL_PLAN",
   ]) {
     if (process.env[key] !== undefined) environment[key] = process.env[key];
   }
