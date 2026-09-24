@@ -832,10 +832,14 @@ export class CollaborationFacade {
     }
     const group = groups.find((candidate) => candidate.id === target.groupId);
     if (!group) throw new HttpError(404, "not_found", "Thread not found.");
+    // A team group made by a recruitment is the agents' own channel: the
+    // person reads it from each member's chat, it is not a group of theirs.
+    const teamOnly = Object.values(this.index.recruiterGroups).includes(group.id)
+      || Object.values(this.index.roleBindings).some((binding) => binding.groupId === group.id);
     return {
       id: this.publicThreadId(target), kind: "group" as const, name: group.name,
       updatedAt: snapshot.updatedAt, humanUserIds: [this.userId], agentIds: group.memberIds.map((id) => this.agentId(id)),
-      canPost: true, canManage: true, lastMessage: messages.at(-1) ?? null,
+      canPost: true, canManage: true, lastMessage: messages.at(-1) ?? null, teamOnly,
     };
   }
 
