@@ -23,7 +23,11 @@ import {
   WRITE_SHEET_WINDOW_MS,
 } from "./access.js";
 import { BotStore, publicAvatarGeneration, type AvatarWorkerReport } from "./bots.js";
-import { startComputerBroker, type ComputerBroker } from "../computer/broker.js";
+import { BoatComputerBackend, type BoatMachine } from "../computer/boat.js";
+import { NOT_ALLOWED_MESSAGE, NOT_CONFIGURED_MESSAGE } from "../computer/cloud.js";
+import { handleComputerCall, startComputerBroker, type ComputerBroker } from "../computer/broker.js";
+import { computerCallBody, isComputerToolName } from "../computer/tools.js";
+import { richToolResult, type RichToolResult } from "./tool-result.js";
 import type { ComputerHost } from "../computer/host.js";
 import { ComputerManager, type ComputerEvent } from "../computer/manager.js";
 import { NativeComputerBackend } from "../computer/native.js";
@@ -317,6 +321,13 @@ export interface HarnessOptions {
    * for every unit test, and it is why this is an option rather than an import.
    */
   computerHost?: ComputerHost;
+  /**
+   * The workspace's shared cloud computer (`computer/cloud.ts`). When it is
+   * given, a configured Boat key and a plan that allows it make each agent's
+   * computer a seat on that machine (`computer/boat.ts`) — its own display,
+   * Chrome and profile — and the native one is the fallback.
+   */
+  cloudComputer?: BoatMachine;
   /** Optional local-only team tool. It is never mounted by cloud composition. */
   localTeamMcp?(input: LocalTeamMountInput): StdioMcpServer | null;
   /** Compiled bridge used by `localTeamMcp`. Status checks the real file so a
@@ -510,6 +521,7 @@ export class LocalBizosHarness {
    * one is keyed by nothing but its age. */
   private cursorCatalog: { at: number; value: ModelCatalog } | null = null;
   private readonly computerManager: ComputerManager;
+  private readonly boatComputer: BoatComputerBackend | null = null;
   private readonly computerListeners = new Set<(event: ComputerEvent) => void>();
   private computerBroker: ComputerBroker | null = null;
   private computerBrokerStarting: Promise<ComputerBroker | null> | null = null;
@@ -657,7 +669,7 @@ export class LocalBizosHarness {
       ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       workspaceFor: (bot) => this.workspaceFor(bot),
       // Only a build with a machine tells its bots they have one.
-      hasComputer: bot => !bot.id.startsWith("qchat_") && Boolean(options.computerHost),
+      hasComputer: bot => !bot.id.startsWith("qchat_") && this.computerToolsAvailable(),
       sharedAccess: (bot) => ({
         folders: this.effectiveSharedFolders(bot),
         fullDiskRead: this.settingsStore.get().access.fullDiskRead,
@@ -715,6 +727,27 @@ export class LocalBizosHarness {
     // host in the SAME approvals file as every other standing grant, so
     // Settings → Approvals lists it and `bots.clearApprovals` revokes it with
     // no extra code on either side.
+    const nativeComputer = options.computerHost
+      ? new NativeComputerBackend({
+          host: options.computerHost,
+          workspaceFor: (botId) => {
+            const bot = this.botStore.get(botId);
+            return bot ? this.workspaceFor(bot) : this.storage.workspacePath(botId);
+          },
+          nowIso: () => this.clock.nowIso(),
+          now: () => this.clock.now().getTime(),
+          onFrame: (botId, frame) => this.computerManager.onFrame(botId, frame),
+          onStateChanged: (botId) => this.computerManager.publishStatus(botId),
+        })
+      : null;
+    this.boatComputer = options.cloudComputer
+      ? new BoatComputerBackend({
+          machine: options.cloudComputer,
+          nowIso: () => this.clock.nowIso(),
+          onFrame: (botId, frame) => this.computerManager.onFrame(botId, frame),
+          onStateChanged: (botId) => this.computerManager.publishStatus(botId),
+        })
+      : null;
     this.computerManager = new ComputerManager({
       approvals: {
         hasActiveTurn: (botId) => this.dispatcher.hasActiveTurn(botId),
@@ -746,19 +779,12 @@ export class LocalBizosHarness {
         read: () => this.storage.readJson<string[]>(COMPUTERS_FILE, []),
         write: (botIds) => this.storage.writeJson(COMPUTERS_FILE, botIds),
       },
-      ...(options.computerHost
+      ...(nativeComputer || this.boatComputer
         ? {
-            backend: new NativeComputerBackend({
-              host: options.computerHost,
-              workspaceFor: (botId) => {
-                const bot = this.botStore.get(botId);
-                return bot ? this.workspaceFor(bot) : this.storage.workspacePath(botId);
-              },
-              nowIso: () => this.clock.nowIso(),
-              now: () => this.clock.now().getTime(),
-              onFrame: (botId, frame) => this.computerManager.onFrame(botId, frame),
-              onStateChanged: (botId) => this.computerManager.publishStatus(botId),
-            }),
+            // The cloud computer when it is configured and allowed, the
+            // native one otherwise — and none at all when neither can serve
+            // (the desktop panel then keeps its own browser).
+            backend: () => (this.boatComputer?.usable() ? this.boatComputer : nativeComputer),
           }
         : {}),
     });
@@ -3330,7 +3356,36 @@ export class LocalBizosHarness {
     },
     takeControl: async (botId: string): Promise<ComputerState> => this.computerManager.takeControl(botId),
     giveBack: async (botId: string): Promise<ComputerState> => this.computerManager.giveBack(botId),
+    /** The latest full frame of this agent's screen (the cloud computer's is
+     * the last one an action produced — no round trip). */
+    frame: async (botId: string) => this.computerManager.frame(botId),
   };
+
+  /** Whether this build can give its agents a computer right now: the
+   * native one (Electron), or a configured cloud computer. */
+  computerToolsAvailable(): boolean {
+    return Boolean(this.options.computerHost) || Boolean(this.boatComputer?.usable());
+  }
+
+  /**
+   * One `computer_*` call from a host tool bridge (Codex dynamic tools, the
+   * Claude MCP bridge). Same door as the loopback broker: `handleComputerCall`,
+   * so the turn rule and the signed-in-host cards apply exactly as there.
+   */
+  async computerTool(botId: string, name: string, args: unknown): Promise<RichToolResult> {
+    if (!isComputerToolName(name)) return richToolResult(`Unknown computer tool: ${name}`);
+    if (this.boatComputer && !this.options.computerHost && !this.boatComputer.usable()) {
+      throw new Error(this.options.cloudComputer?.isConfigured() ? NOT_ALLOWED_MESSAGE : NOT_CONFIGURED_MESSAGE);
+    }
+    const input = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
+    const { payload } = await handleComputerCall(this.computerManager, botId, computerCallBody(name, input));
+    const answer = (payload ?? {}) as { ok?: boolean; text?: unknown; error?: unknown; image?: { mimeType?: unknown; data?: unknown } | null };
+    if (!answer.ok) throw new Error(String(answer.error ?? "the computer refused that"));
+    const image = answer.image && typeof answer.image.data === "string" && answer.image.data
+      ? { mimeType: String(answer.image.mimeType ?? "image/jpeg"), data: answer.image.data }
+      : null;
+    return richToolResult(String(answer.text ?? ""), image);
+  }
 
   /** The manager itself, for the pieces of the main process that need more than
    * the bridge does — the viewer window's frame feed. */

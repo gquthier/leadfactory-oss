@@ -148,6 +148,11 @@ export class BoatClient {
       { command, timeoutSeconds }, { timeoutMs: (timeoutSeconds + 30) * 1000 });
   }
 
+  /** Write a file under /home/user (or /tmp) of the sandbox. */
+  async writeFile(id: string, path: string, content: string): Promise<void> {
+    await this.request("PUT", `/sandboxes/${encodeURIComponent(id)}/files`, { path, content, encoding: "utf8" }, { timeoutMs: 60_000 });
+  }
+
   async desktop(id: string): Promise<{ desktopUrl?: string | null; provisioning?: boolean; mode?: string }> {
     return this.request("POST", `/sandboxes/${encodeURIComponent(id)}/desktop`, {});
   }
@@ -295,6 +300,9 @@ export class CloudComputer {
   private busy = 0;
   private idleTimer: unknown = null;
   private autoSleepAt: number | null = null;
+  /** Runs before every stop, while the machine is still up (best effort). */
+  private beforeSleepHook: ((sandboxId: string) => Promise<void>) | null = null;
+  private readonly sleepListeners = new Set<() => void>();
 
   constructor(private readonly options: CloudComputerOptions) {
     this.clock = options.clock ?? systemClock;
@@ -351,6 +359,28 @@ export class CloudComputer {
     const next = this.lifecycleTail.then(work, work);
     this.lifecycleTail = next.catch(() => undefined);
     return next;
+  }
+
+  /** A Boat key is set (env or local). Says nothing about the plan. */
+  isConfigured(): boolean {
+    return Boolean(this.apiKey());
+  }
+
+  /** Is the plan allowed to use it right now? */
+  async allowed(): Promise<boolean> {
+    return Boolean(await this.options.isAllowed());
+  }
+
+  /** Something that must happen on the machine before it is stopped — the
+   * agents' Chromes are closed cleanly so their cookies reach the disk. */
+  setBeforeSleep(hook: ((sandboxId: string) => Promise<void>) | null): void {
+    this.beforeSleepHook = hook;
+  }
+
+  /** Told after the machine was put to sleep (every process on it is gone). */
+  onSleep(listener: () => void): () => void {
+    this.sleepListeners.add(listener);
+    return () => this.sleepListeners.delete(listener);
   }
 
   // ── settings (owner only) ───────────────────────────────────────────
@@ -509,9 +539,19 @@ export class CloudComputer {
         throw error;
       }
       if (state !== "archived" && state !== "archiving") {
+        if (this.beforeSleepHook && USABLE.has(state)) {
+          try {
+            await this.beforeSleepHook(id);
+          } catch (error) {
+            this.options.log?.(`cloud computer pre-sleep step failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
         await client.stop(id);
         state = "archiving";
         this.options.log?.(`cloud computer ${id} stopped (${reason})`);
+      }
+      for (const listener of [...this.sleepListeners]) {
+        try { listener(); } catch { /* one listener must not stop the rest */ }
       }
       return { state, sandboxId: id, note: "Asleep. Its disk, your folder and your Chrome profile (cookies) are kept; running processes are not." };
     });
@@ -610,6 +650,27 @@ export class CloudComputer {
       this.busy -= 1;
       this.touch();
     }
+  }
+
+  /** Wake if needed, then run `command` as is (no agent folder prefix) —
+   * the computer backend's own seam, for the helper it ships. */
+  async computerExec(command: string, timeoutSeconds: number): Promise<{ result: BoatCommandResult; wokeFromSleep: boolean; sandboxId: string }> {
+    const woke = await this.wake();
+    const result = await this.exec(woke.sandboxId, command, Math.max(1, Math.min(MAX_RUN_TIMEOUT_SECONDS, Math.round(timeoutSeconds))));
+    return { result, wokeFromSleep: woke.wokeFromSleep, sandboxId: woke.sandboxId };
+  }
+
+  /** Put a file on the machine (it must be awake: call after `computerExec`). */
+  async writeFile(path: string, content: string): Promise<void> {
+    const id = this.record.sandboxId;
+    if (!id) throw new CloudComputerError("machine_asleep", "The cloud computer is not running.");
+    await this.client().writeFile(id, path, content);
+  }
+
+  /** Run a command on a machine that is ALREADY awake — never wakes it (the
+   * pre-sleep step runs inside `sleep`, which holds the lifecycle lock). */
+  async execAwake(sandboxId: string, command: string, timeoutSeconds: number): Promise<BoatCommandResult> {
+    return this.client().command(sandboxId, command, timeoutSeconds);
   }
 
   /** The secret-bearing desktop stream URL, for the local owner only. */

@@ -21,13 +21,13 @@
 import { hostOf, hostsNeedingApproval, hostsTouched } from "./actions.js";
 import type { CapturedFrame } from "./host.js";
 import { formatObservation } from "./observe.js";
-import { NativeComputerBackend } from "./native.js";
 import type {
   ComputerAction,
   ComputerActionResult,
   ComputerDownloadResult,
   ComputerObservation,
   ComputerState,
+  ManagedComputerBackend,
 } from "./types.js";
 
 /** What the manager needs from the turn machinery. Implemented by the harness
@@ -62,8 +62,12 @@ export interface ComputerManagerOptions {
   now?(): number;
   publish(event: ComputerEvent): void;
   /** Built in `application.ts`. Absent in a build with no Electron — then the
-   * whole feature answers `backend: "none"` rather than half-existing. */
-  backend?: NativeComputerBackend;
+   * whole feature answers `backend: "none"` rather than half-existing.
+   *
+   * A function is a CHOICE made per call: the cloud computer when a Boat key
+   * is configured and the plan allows it, the native one otherwise. `null`
+   * from it means there is no computer at all right now. */
+  backend?: ManagedComputerBackend | (() => ManagedComputerBackend | null);
   /** The 1 fps clock the panel turns on. Injected for tests. */
   setInterval?(fn: () => void, ms: number): { cancel(): void };
   /**
@@ -91,7 +95,7 @@ const defaultInterval = (fn: () => void, ms: number): { cancel(): void } => {
 };
 
 export class ComputerManager {
-  private readonly backend: NativeComputerBackend | null;
+  private readonly pick: () => ManagedComputerBackend | null;
   private readonly watchers = new Map<string, { cancel(): void }>();
   private readonly frameListeners = new Map<
     string,
@@ -102,21 +106,33 @@ export class ComputerManager {
   private readonly provisioned: Set<string>;
 
   constructor(private readonly options: ComputerManagerOptions) {
-    this.backend = options.backend ?? null;
+    const backend = options.backend;
+    this.pick = typeof backend === "function" ? backend : () => backend ?? null;
     this.interval = options.setInterval ?? defaultInterval;
     this.provisioned = new Set(options.provisioned?.read() ?? []);
+  }
+
+  /** Whichever machine serves this call. */
+  private get backend(): ManagedComputerBackend | null {
+    return this.pick();
+  }
+
+  /** Which kind of machine an agent would get right now. */
+  backendKind(): ManagedComputerBackend["kind"] {
+    return this.backend?.kind ?? "none";
   }
 
   /** `none` in a build without Electron, and in the cloud runtime, which has no
    * desktop to run a browser on. The panel says so in one sentence. */
   state(botId: string): ComputerState {
-    if (!this.backend) return { backend: "none", status: "none", apps: [] };
-    const live = this.backend.state(botId);
+    const backend = this.backend;
+    if (!backend) return { backend: "none", status: "none", apps: [] };
+    const live = backend.state(botId);
     if (live.status !== "none") return live;
     // It exists, it is simply not running: its partition and everything it is
     // signed into are on disk, waiting for the next task.
     if (this.provisioned.has(botId)) {
-      return { backend: "native", status: "sleeping", apps: [{ id: "browser", open: false }] };
+      return { backend: backend.kind, status: "sleeping", apps: [{ id: "browser", open: false }] };
     }
     return live;
   }
@@ -150,7 +166,7 @@ export class ComputerManager {
   }
 
   /** The agent has (or is about to have) a running machine. */
-  private async ensure(botId: string): Promise<NativeComputerBackend> {
+  private async ensure(botId: string): Promise<ManagedComputerBackend> {
     const backend = this.machineFor(botId);
     if (!backend.has(botId)) {
       this.remember(botId);
@@ -161,8 +177,9 @@ export class ComputerManager {
   }
 
   /** A tool call arrived. Everything that can refuse it, refuses it here. */
-  private machineFor(botId: string): NativeComputerBackend {
-    if (!this.backend) {
+  private machineFor(botId: string): ManagedComputerBackend {
+    const backend = this.backend;
+    if (!backend) {
       throw new Error("Computers run on the desktop app. This runtime does not have one.");
     }
     if (!this.options.approvals.hasActiveTurn(botId)) {
@@ -170,7 +187,7 @@ export class ComputerManager {
         "This computer only runs while you are answering someone. There is no turn in flight for this agent.",
       );
     }
-    return this.backend;
+    return backend;
   }
 
   async observe(botId: string): Promise<{ observation: ComputerObservation; text: string }> {
@@ -190,7 +207,7 @@ export class ComputerManager {
    * shown two questions at once and never agrees to a host by agreeing to
    * another.
    */
-  async act(botId: string, actions: ComputerAction[], observe: boolean): Promise<ComputerActionResult> {
+  async act(botId: string, actions: ComputerAction[], observe: boolean, settleMs = 0): Promise<ComputerActionResult> {
     const backend = await this.ensure(botId);
     const touched = hostsTouched(actions, backend.currentUrl(botId));
     const signedIn = await backend.signedInHosts(botId);
@@ -203,7 +220,7 @@ export class ComputerManager {
         throw new Error(`Your user did not allow acting on ${host}. Tell them what you wanted to do there.`);
       }
     }
-    const result = await backend.act(botId, actions, observe);
+    const result = await backend.act(botId, actions, observe, settleMs);
     this.publishScreen(botId);
     return result;
   }
@@ -274,6 +291,11 @@ export class ComputerManager {
         void this.backend?.capture(botId).then(() => this.publishScreen(botId));
       }, WATCH_INTERVAL_MS),
     );
+  }
+
+  /** The latest frame of this agent's screen, for the viewer window. */
+  async frame(botId: string): Promise<CapturedFrame | null> {
+    return (await this.backend?.capture(botId)) ?? null;
   }
 
   publishStatus(botId: string): void {

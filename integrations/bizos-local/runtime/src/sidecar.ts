@@ -61,6 +61,7 @@ import {
 } from "./voice-tasks.js";
 import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-state.js";
 import { LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
+import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
 import { Storage } from "./harness/storage.js";
 import { AgencyService } from "./harness/agency.js";
@@ -1909,6 +1910,33 @@ export class CollaborationFacade {
     return this.packCall(async () => this.publicPack(await this.requirePack(name).open()));
   }
 
+  /** An agent's own `computer_*` call (Claude's MCP twin of the dynamic
+   * tools); the capability already named the agent. */
+  computerTool(botId: string, name: string, args: unknown) {
+    return this.harness.computerTool(botId, name, args);
+  }
+
+  /** The panel's view of one agent's computer; with `full`, its latest
+   * full-size frame too (for the viewer window). */
+  async computerState(id: string, full = false) {
+    const botId = this.computerBotId(id);
+    const state = await this.harness.computer.get(botId);
+    if (!full || state.status === "none") return state;
+    const frame = await this.harness.computer.frame(botId);
+    return frame ? { ...state, fullDataUrl: frame.full } : state;
+  }
+
+  /** The owner set the computer up from the panel. */
+  computerSetUp(id: string) {
+    return this.harness.computer.setUp(this.computerBotId(id));
+  }
+
+  /** The panel names an agent by its public id (`local:<instance>:agent:…`);
+   * a bare bot id is accepted too. */
+  private computerBotId(id: string): string {
+    return id.startsWith("local:") ? this.internalAgentId(id) : id;
+  }
+
   /** A pack tool call from the MCP twin: `{ tool, arguments }`, under the
    * run's capability — the same check the dynamic tools make. The tool's
    * prefix names the pack; the pack refuses a bot that is not its own. */
@@ -2397,7 +2425,27 @@ async function serve(): Promise<void> {
           throw cloudHttpError(error);
         }
       }
+      if (method === "POST" && url.pathname === "/api/internal/local-team/computer") {
+        const capability = teamBroker.authorize(bearer);
+        const input = objectBody(await bodyOf(request), ["tool", "arguments"]);
+        if (!isComputerToolName(input.tool)) throw new HttpError(404, "not_found", "Unknown computer tool.");
+        try {
+          const result = await facade.computerTool(capability.botId, input.tool, input.arguments ?? {});
+          return sendJson(response, 200, { ok: true, text: result.text, ...(result.image ? { image: result.image } : {}) });
+        } catch (error) {
+          // A refusal is a result the model reads, not a transport failure.
+          return sendJson(response, 200, { ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
+      }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      // An agent's computer as the desktop panel draws it: status, page and
+      // its latest screen (the agent's own seat — never anybody else's).
+      const computerBot = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)$/);
+      if (computerBot && method === "GET") {
+        return sendJson(response, 200, await facade.computerState(computerBot, url.searchParams.get("full") === "1"));
+      }
+      const computerSetUp = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/setup$/);
+      if (computerSetUp && method === "POST") return sendJson(response, 200, await facade.computerSetUp(computerSetUp));
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
       if (url.pathname === "/api/local/quick-chats" && method === "GET") return sendJson(response, 200, await facade.quickChats("list"));
       if (url.pathname === "/api/local/quick-chats" && method === "POST") return sendJson(response, 201, await facade.createQuickChat(await bodyOf(request)));
@@ -2648,8 +2696,17 @@ async function serve(): Promise<void> {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Local sidecar did not bind a TCP port.");
   origin = `http://127.0.0.1:${address.port}`;
-  const harness = new LocalBizosHarness({
+  // The workspace's cloud computer exists before the harness: agents' computers
+  // are seats on it. Its plan check reads the harness lazily.
+  const cloudComputer: CloudComputer = new CloudComputer({
+    storage: new Storage(harnessRoot),
+    isAllowed: async (): Promise<boolean> => (await harness.entitlement.get()).features.cloudComputer,
+    log: (line) => process.stderr.write(`[localbizos] ${line}\n`),
+  });
+  cloud = cloudComputer;
+  const harness: LocalBizosHarness = new LocalBizosHarness({
     rootDir: harnessRoot,
+    cloudComputer,
     baseUrl: origin,
     readSessionCookie: async () => "",
     orgName: () => "Local workspace",
@@ -2696,7 +2753,20 @@ async function serve(): Promise<void> {
           return { botId: capability.botId, threadId: capability.threadId, runId: capability.runId };
         })
         : [];
-      return [...teamTools, ...packTools];
+      // The agent's own computer (a seat on the cloud computer), under the
+      // SAME capability: nothing outside this run can drive it.
+      const computerTools = harness.computerToolsAvailable()
+        ? COMPUTER_TOOL_SPECS.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema as unknown as Record<string, unknown>,
+          call: async (argumentsValue: unknown) => {
+            const { botId } = teamBroker.authorize(session);
+            return harness.computerTool(botId, tool.name, argumentsValue);
+          },
+        }))
+        : [];
+      return [...teamTools, ...packTools, ...computerTools];
     },
     // The same tools for Claude Code, which has no dynamic-tool slot:
     // a stdio MCP server, one per turn, holding a one-shot ticket that only
@@ -2707,7 +2777,7 @@ async function serve(): Promise<void> {
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
-        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}`,
+        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },
@@ -2755,12 +2825,7 @@ async function serve(): Promise<void> {
       .map(([botId, affiliation]) => [affiliation.roleSlug, botId])),
   };
   const log = (line: string) => process.stderr.write(`[localbizos] ${line}\n`);
-  cloud = new CloudComputer({
-    storage: new Storage(harnessRoot),
-    isAllowed: async () => (await harness.entitlement.get()).features.cloudComputer,
-    log,
-  });
-  cloud.start();
+  cloudComputer.start();
   packs = {
     agency: new AgencyService({ host: packHost, log }),
     ecommerce: new EcommerceService({ host: packHost, log }),

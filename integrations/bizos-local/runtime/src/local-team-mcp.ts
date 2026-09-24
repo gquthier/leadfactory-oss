@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENCY_TOOL_SPECS, isAgencyToolName } from "./harness/agency-tools.js";
 import { COMMERCE_TOOL_SPECS, isCommerceToolName } from "./harness/commerce-tools.js";
+import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 
 type Json = Record<string, unknown>;
 type TeamCall = (input: Json) => Promise<unknown>;
@@ -198,6 +199,21 @@ const callPack: TeamCall = (input) => callEndpoint("/api/internal/local-team/pac
  * plus a 600 s command can take far longer than a team call. */
 const callCloud: TeamCall = (input) => callEndpoint("/api/internal/local-team/cloud", input, 15 * 60_000);
 
+/** The agent's own computer: `{ tool, arguments }` → `{ ok, text, image? }`.
+ * A wake of the cloud computer plus a slow page can take minutes. */
+const callComputer: TeamCall = (input) => callEndpoint("/api/internal/local-team/computer", input, 6 * 60_000);
+
+/** A computer answer as MCP content: the words, then the screenshot as an
+ * image block the model sees. */
+export function computerResult(value: unknown): Json {
+  const answer = (value ?? {}) as { ok?: unknown; text?: unknown; error?: unknown; image?: { mimeType?: unknown; data?: unknown } };
+  if (answer.ok !== true) return textResult(String(answer.error ?? "the computer refused that"), true);
+  const image = answer.image && typeof answer.image.data === "string" && answer.image.data
+    ? [{ type: "image", data: answer.image.data, mimeType: String(answer.image.mimeType ?? "image/jpeg") }]
+    : [];
+  return { content: [{ type: "text", text: String(answer.text ?? "").slice(0, MAX_RESULT_CHARS) }, ...image] };
+}
+
 function textResult(value: unknown, isError = false, max = MAX_RESULT_CHARS): Json {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return {
@@ -214,6 +230,8 @@ export interface LocalTeamMcpOptions {
   toolsets?: ReadonlySet<string>;
   /** The cloud computer invoker (defaults to the sidecar route). */
   cloud?: TeamCall;
+  /** The agent's own computer (`--toolset=…,computer`; defaults to the sidecar route). */
+  computer?: TeamCall;
 }
 
 const READ_ONLY_TOOL = /^(agency|commerce)_(context|schema|list_|read_)/;
@@ -228,6 +246,7 @@ export async function handleLocalTeamMessage(
 ): Promise<Json | null> {
   const invokePack = options.pack ?? null;
   const invokeCloud = options.cloud ?? callCloud;
+  const invokeComputer = options.computer ?? callComputer;
   const toolsets = options.toolsets ?? new Set(invokePack ? ["team", "agency", "commerce"] : ["team"]);
   const id = message.id;
   const method = message.method;
@@ -256,7 +275,13 @@ export async function handleLocalTeamMessage(
         annotations: { readOnlyHint: READ_ONLY_TOOL.test(tool.name), destructiveHint: false, idempotentHint: false, openWorldHint: false },
       }))
       : [];
-    return reply({ tools: [...teamTools, ...packTools] });
+    const computerTools = toolsets.has("computer")
+      ? COMPUTER_TOOL_SPECS.map((tool) => ({
+        ...tool,
+        annotations: { readOnlyHint: tool.name === "computer_observe", destructiveHint: false, idempotentHint: false, openWorldHint: true },
+      }))
+      : [];
+    return reply({ tools: [...teamTools, ...packTools, ...computerTools] });
   }
   if (method === "tools/call") {
     try {
@@ -265,6 +290,9 @@ export async function handleLocalTeamMessage(
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
       if (isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
+      if (toolsets.has("computer") && isComputerToolName(params.name)) {
+        return reply(computerResult(await invokeComputer({ tool: params.name, arguments: params.arguments ?? {} })));
+      }
       if (invokePack && ((toolsets.has("agency") && isAgencyToolName(params.name)) || (toolsets.has("commerce") && isCommerceToolName(params.name)))) {
         return reply(textResult(await invokePack({ tool: params.name, arguments: params.arguments ?? {} }), false, MAX_PACK_RESULT_CHARS));
       }

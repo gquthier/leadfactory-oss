@@ -26,6 +26,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { parseComputerActions, settleMs, ComputerActionError } from "./actions.js";
 import type { ComputerManager } from "./manager.js";
+import { formatObservation } from "./observe.js";
 import { MAX_ACTIONS } from "./types.js";
 
 export const COMPUTER_PATH = "/computer";
@@ -111,12 +112,15 @@ export async function handleComputerCall(
       const actions = parseComputerActions(request.actions);
       const settle = settleMs(request.settle_ms);
       const wantsObservation = request.observe !== false;
-      const result = await manager.act(botId, actions, false);
-      if (settle > 0) await new Promise<void>((resolve) => setTimeout(resolve, settle).unref?.());
+      // The settle wait and the look happen in the backend, in the same round
+      // trip as the batch — one call on the cloud computer, not three.
+      const result = await manager.act(botId, actions, wantsObservation, settle);
       if (!wantsObservation) {
         return { status: 200, payload: { ok: true, completed: result.completed, text: `${result.completed} action(s) done.` } };
       }
-      const { observation, text } = await manager.observe(botId);
+      const { observation, text } = result.observation
+        ? { observation: result.observation, text: formatObservation(result.observation) }
+        : await manager.observe(botId);
       return {
         status: 200,
         payload: {
@@ -131,11 +135,14 @@ export async function handleComputerCall(
     }
     if (op === "download") {
       const outcome = await manager.download(botId, String(request.url ?? ""));
+      const where = manager.backendKind() === "container"
+        ? "It is in your own folder on the cloud computer; cloud_computer_run can read it there."
+        : "It is inside your own workspace, so upload_document can read it.";
       return {
         status: 200,
         payload: {
           ok: true,
-          text: `Saved ${outcome.name} (${outcome.bytes} bytes) to ${outcome.path}. It is inside your own workspace, so upload_document can read it.`,
+          text: `Saved ${outcome.name} (${outcome.bytes} bytes) to ${outcome.path}. ${where}`,
           path: outcome.path,
         },
       };

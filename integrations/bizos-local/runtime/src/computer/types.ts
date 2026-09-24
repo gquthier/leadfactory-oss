@@ -16,7 +16,10 @@
 // `files`, `terminal`) and never an application list, and the observation
 // carries a URL and a title — which a page has and a desktop does not.
 
-/** Which machine is behind the panel. `none` is the honest cloud answer. */
+import type { CapturedFrame } from "./host.js";
+
+/** Which machine is behind the panel. `none` is the honest cloud answer;
+ * `container` is the shared cloud computer (Boat: Xvfb + Chrome per agent). */
 export type ComputerBackendKind = "native" | "container" | "none";
 
 /**
@@ -165,13 +168,33 @@ export interface ComputerBackend {
   start(botId: string): Promise<ComputerState>;
   state(botId: string): ComputerState;
   observe(botId: string): Promise<ComputerObservation>;
-  act(botId: string, actions: ComputerAction[], observe: boolean): Promise<ComputerActionResult>;
+  /** Run the batch, wait `settleMs` for the page, then (when `observe`) look. */
+  act(botId: string, actions: ComputerAction[], observe: boolean, settleMs?: number): Promise<ComputerActionResult>;
   download(botId: string, url: string): Promise<ComputerDownloadResult>;
   /** Which hosts this agent is SIGNED IN to — the ones acting on needs a card. */
   signedInHosts(botId: string): Promise<string[]>;
   sleep(botId: string): void;
   dispose(botId: string): void;
   disposeAll(): void;
+}
+
+/**
+ * What `ComputerManager` drives: the contract above plus the user's side of
+ * the panel (the viewer, Take control) and the frame feed. The native
+ * backend has all of it; the cloud one answers the user-side calls with a
+ * sentence rather than pretending.
+ */
+export interface ManagedComputerBackend extends ComputerBackend {
+  has(botId: string): boolean;
+  currentUrl(botId: string): string;
+  /** The latest frame. A backend where a capture costs a round trip may
+   * answer its last one instead of taking a new one. */
+  capture(botId: string): Promise<CapturedFrame | null>;
+  takeControl(botId: string): void;
+  giveBack(botId: string): void;
+  navigateForUser(botId: string, what: "back" | "forward" | "reload"): void;
+  history(botId: string): { back: boolean; forward: boolean };
+  forwardInput(botId: string, event: Record<string, unknown>): void;
 }
 
 /**

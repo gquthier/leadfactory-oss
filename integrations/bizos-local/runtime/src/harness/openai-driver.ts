@@ -13,6 +13,7 @@
 // The key travels only in the `authorization` header of the request to the
 // address the person configured; it is never put in a prompt or an event.
 import type { CodexDynamicTool, CodexTurnHandle, RuntimeEvent } from "./codex-driver.js";
+import { isRichToolResult } from "./tool-result.js";
 
 export interface OpenAiTurnInput {
   baseUrl: string;
@@ -247,7 +248,7 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
             emit({ type: "item.started", itemType: "tool", itemId: callId, title: call.name });
             try {
               const value = await tool.call(args, { callId, threadId: input.threadId, turnId: input.runId });
-              result = JSON.stringify(value ?? null);
+              result = isRichToolResult(value) ? JSON.stringify(value.text) : JSON.stringify(value ?? null);
               if (result.length > MAX_TOOL_OUTPUT) result = JSON.stringify({
                 status: "completed", result_truncated: true,
                 message: "The host tool completed, but its result exceeded the local display limit. Do not repeat a write; inspect current state with an available read tool if needed.",

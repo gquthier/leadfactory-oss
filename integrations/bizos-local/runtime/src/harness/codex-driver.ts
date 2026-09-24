@@ -23,6 +23,7 @@ import type { CodexModelProvider } from "./inference.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
 import { redactSecrets, redactSecretsInText } from "./redact.js";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.js";
+import { isRichToolResult, toolResultText } from "./tool-result.js";
 import type { ReasoningEffort, SandboxMode } from "./types.js";
 
 export const APPROVAL_TIMEOUT_MS = 15 * 60_000;
@@ -566,11 +567,15 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
           try {
             if (!tool || !callId || !threadId || !turnId) throw new Error("Unknown or malformed local dynamic tool call.");
             const value = await tool.call(params.arguments, { callId, threadId, turnId });
-            const text = typeof value === "string" ? value : JSON.stringify(value);
+            const text = toolResultText(value);
+            // A screenshot travels as an image the model SEES, not as text.
+            const image = isRichToolResult(value) && value.image
+              ? [{ type: "inputImage", imageUrl: `data:${value.image.mimeType};base64,${value.image.data}` }]
+              : [];
             send({
               jsonrpc: "2.0",
               id: message.id,
-              result: { success: true, contentItems: [{ type: "inputText", text: text.slice(0, 16_000) }] },
+              result: { success: true, contentItems: [{ type: "inputText", text: text.slice(0, 16_000) }, ...image] },
             });
           } catch (caught) {
             const text = redactSecretsInText(caught instanceof Error ? caught.message : String(caught)).slice(0, 4_000);

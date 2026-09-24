@@ -22,8 +22,8 @@ import {
   SLEEP_AFTER_MS,
   type ComputerAction,
   type ComputerActionResult,
-  type ComputerBackend,
   type ComputerDownloadResult,
+  type ManagedComputerBackend,
   type ComputerObservation,
   type ComputerState,
 } from "./types.js";
@@ -73,7 +73,7 @@ const defaultTimer = (fn: () => void, ms: number): { cancel(): void } => {
   return { cancel: () => clearTimeout(handle) };
 };
 
-export class NativeComputerBackend implements ComputerBackend {
+export class NativeComputerBackend implements ManagedComputerBackend {
   readonly kind = "native" as const;
   private readonly machines = new Map<string, Machine>();
   private readonly sleepAfterMs: number;
@@ -238,7 +238,7 @@ export class NativeComputerBackend implements ComputerBackend {
     };
   }
 
-  async act(botId: string, actions: ComputerAction[], observe: boolean): Promise<ComputerActionResult> {
+  async act(botId: string, actions: ComputerAction[], observe: boolean, settleMs = 0): Promise<ComputerActionResult> {
     const machine = this.require(botId);
     if (machine.userInControl) {
       throw new Error("the user has taken control of this computer; wait until they give it back");
@@ -247,6 +247,12 @@ export class NativeComputerBackend implements ComputerBackend {
     for (const action of actions) {
       await this.run(machine, action);
       completed += 1;
+    }
+    if (settleMs > 0) {
+      await new Promise<void>((resolve) => {
+        const handle = setTimeout(resolve, settleMs);
+        handle.unref?.();
+      });
     }
     await this.captureInto(botId, machine);
     this.options.onStateChanged?.(botId);
