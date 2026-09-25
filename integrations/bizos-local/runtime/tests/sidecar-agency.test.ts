@@ -166,6 +166,16 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       avatarKind: "generated",
       avatarGeneration: { status: "pending" },
     });
+    const uploadedId = claimedAvatar.body.job.botId;
+    expect((await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: "data:image/png;base64,AAAA" })).status).toBe(400);
+    expect((await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG, extra: true })).status).toBe(400);
+    expect((await api("POST", "/api/local/bots/missing-bot/avatar", { dataUrl: PNG })).status).toBe(404);
+    const uploaded = await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG });
+    expect(uploaded.status).toBe(200);
+    expect(uploaded.body.bot).toMatchObject({ id: uploadedId, avatarKind: "upload" });
+    expect(uploaded.body.bot.avatarGeneration?.status).not.toBe("pending");
+    expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true })).body.job ?? null)
+      .not.toMatchObject({ botId: uploadedId });
     expect(existsSync(join(vault, "Roles", "strategist", "system.md"))).toBe(true);
     const prefix = `local:${descriptor.instanceId}:`;
     for (const bot of installed.body.bots as Array<{ id: string; name: string; slug: string; threadId: string }>) {
