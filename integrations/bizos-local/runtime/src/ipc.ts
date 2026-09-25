@@ -826,8 +826,20 @@ export function buildHandlers(
     "lbz:brain:templates": () => harness.templates.list(),
     // `rootId` is an id the harness resolves (`new`, or one of the vaults it
     // offers) — never a path.
-    "lbz:brain:applyTemplate": (args) =>
-      harness.templates.apply(asEnum(at(args, 0), "id", TEMPLATE_IDS), asOptionalString(at(args, 1), "rootId", 64)),
+    // `options` (onboarding in the chat): the account's name and the app's
+    // language, for the CEO's welcome and Company.md. Strict here; the
+    // sidecar already dropped anything malformed.
+    "lbz:brain:applyTemplate": (args) => {
+      const raw = at(args, 2);
+      const options = raw === undefined || raw === null ? {} : asStrictRecord(raw, "options", ["owner", "language"]);
+      const owner = options.owner === undefined || options.owner === null ? undefined : asStrictRecord(options.owner, "owner", ["name"]);
+      const name = owner ? asOptionalString(owner.name, "owner.name", 80) : undefined;
+      const language = options.language === undefined || options.language === null ? undefined : asEnum(options.language, "language", ["fr", "en"] as const);
+      return harness.templates.apply(asEnum(at(args, 0), "id", TEMPLATE_IDS), asOptionalString(at(args, 1), "rootId", 64), {
+        ...(name ? { owner: { name } } : {}),
+        ...(language ? { language } : {}),
+      });
+    },
     // The workspace's template and vault: chosen once, then pinned.
     "lbz:brain:workspaceTemplate": () => harness.workspaceTemplate.get(),
     "lbz:brain:bindTemplate": (args) => {

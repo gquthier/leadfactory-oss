@@ -126,6 +126,7 @@ import {
   VAULTS_DIRECTORY,
   writeTemplateRegistry,
   writeWorkspaceBinding,
+  type CreationOptions,
   type PendingInstallation,
   type TemplateId,
   type TemplateInstallation,
@@ -1786,7 +1787,7 @@ export class LocalBizosHarness {
    * nothing twice. In an existing vault, an agent that already works from
    * its role folder is adopted rather than made again.
    */
-  private async applyTemplate(id: TemplateId, target: InstallTarget): Promise<TemplateApplyResult> {
+  private async applyTemplate(id: TemplateId, target: InstallTarget, options: CreationOptions = {}): Promise<TemplateApplyResult> {
     const sourceTemplate = templateOf(id);
     const registry = readTemplateRegistry(this.storage);
     const existing = this.installationOf(registry, id);
@@ -1810,7 +1811,7 @@ export class LocalBizosHarness {
     // A pre-feature pending journal has no creation snapshot. It must finish
     // the old six/eleven-agent install it started; only a newly journalled
     // creation receives the CEO-only derived template.
-    const template = creationMode ? creationTemplateOf(sourceTemplate) : sourceTemplate;
+    const template = creationMode ? creationTemplateOf(sourceTemplate, options) : sourceTemplate;
     validateTemplate(template);
     if (existing) {
       if (existing.rootId !== target.rootId || LocalBizosHarness.comparableVaultPath(installationVaultDir(this.storage, existing)) !== LocalBizosHarness.comparableVaultPath(target.path)) {
@@ -2091,7 +2092,7 @@ export class LocalBizosHarness {
   }
 
   /** Bind (or confirm the binding) and install (or resume) — the one door. */
-  private async bindAndApply(templateId: TemplateId, rootId: string): Promise<TemplateApplyResult> {
+  private async bindAndApply(templateId: TemplateId, rootId: string, options: CreationOptions = {}): Promise<TemplateApplyResult> {
     return this.serialized(async () => {
       // A malformed built-in pack must fail before the durable one-way
       // binding exists. `applyTemplate` validates again at its own boundary.
@@ -2124,7 +2125,7 @@ export class LocalBizosHarness {
           binding = fresh;
         }
       }
-      return this.applyTemplate(binding.templateId, this.targetOf(binding));
+      return this.applyTemplate(binding.templateId, this.targetOf(binding), options);
     });
   }
 
@@ -2341,11 +2342,11 @@ export class LocalBizosHarness {
      * template (`rootId`, default `new`); a bound one answers its own
      * installation and refuses any other template or root.
      */
-    apply: async (id: string, rootId?: string): Promise<TemplateApplyResult> => {
+    apply: async (id: string, rootId?: string, options: CreationOptions = {}): Promise<TemplateApplyResult> => {
       if (!isTemplateId(id)) throw new BrainError("that template is not in the catalogue", "not_found");
       const binding = this.bindingOf();
       if (binding && !LocalBizosHarness.sameBinding(binding, id, rootId)) throw bindingConflict(binding, id, rootId);
-      return this.bindAndApply(id, rootId ?? binding?.rootId ?? "new");
+      return this.bindAndApply(id, rootId ?? binding?.rootId ?? "new", options);
     },
   };
 

@@ -2053,11 +2053,19 @@ export class CollaborationFacade {
   // half-written roster.
   brainTemplates() { return this.brainCall("lbz:brain:templates", []); }
   async applyBrainTemplate(raw: unknown) {
-    const input = objectBody(raw, ["id", "rootId"]);
+    const input = objectBody(raw, ["id", "rootId", "owner", "language"]);
     const id = requiredString(input.id, "id", 64);
     if (!isTemplateId(id)) throw new HttpError(404, "not_found", "That template is not in the catalogue.");
     const rootId = input.rootId === undefined || input.rootId === null ? undefined : requiredString(input.rootId, "rootId", 64);
-    return this.exclusive(() => this.brainCall("lbz:brain:applyTemplate", rootId ? [id, rootId] : [id]));
+    // Optional (onboarding in the chat): the account's name and the app's
+    // language. A value of the wrong shape is ignored, never a 400 — an
+    // older or newer desktop still installs the same company.
+    const owner = input.owner && typeof input.owner === "object" && !Array.isArray(input.owner) ? input.owner as Record<string, unknown> : {};
+    const name = typeof owner.name === "string" && owner.name.trim() && owner.name.trim().length <= 80 ? owner.name.trim() : undefined;
+    const language = input.language === "fr" || input.language === "en" ? input.language : undefined;
+    const options = { ...(name ? { owner: { name } } : {}), ...(language ? { language } : {}) };
+    const args: unknown[] = Object.keys(options).length ? [id, rootId ?? null, options] : rootId ? [id, rootId] : [id];
+    return this.exclusive(() => this.brainCall("lbz:brain:applyTemplate", args));
   }
   /** The workspace's template and vault: the catalogue, the candidate
    * vaults, the binding. `bind` is the one write; the same request twice is
