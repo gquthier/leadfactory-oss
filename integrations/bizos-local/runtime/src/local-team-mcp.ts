@@ -130,6 +130,28 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
     additionalProperties: false,
   },
 }, {
+  name: "offer_quick_replies",
+  description: "Offer 1 to 4 short answers the person can tap under your next message (same message as your text). Use it when the natural next step is a choice — \"Oui\" / \"Autre nom…\", \"Une agence\" / \"Des services\" — never for open questions. Each answer is a few words in the person's language; the latest call replaces the previous one for that message. Do not repeat the answers in prose.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      choices: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", minLength: 1, maxLength: 40 }, description: "Short tappable answers, in order." },
+    },
+    required: ["choices"],
+    additionalProperties: false,
+  },
+}, {
+  name: "propose_company_name",
+  description: "Propose one name for the person's company, shown as a card under your next message with a button to accept it or choose another. One good name, 1 to 48 characters, no explanation inside the name. The person decides; nothing is renamed by this call.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", minLength: 1, maxLength: 48, description: "The proposed company name." },
+    },
+    required: ["name"],
+    additionalProperties: false,
+  },
+}, {
   name: "cloud_computer_wake",
   description: `${CLOUD_NOTE} Wake it (created the first time); the other cloud tools also wake it by themselves.`,
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -219,6 +241,8 @@ const callManage: TeamCall = (input) => callEndpoint("/api/internal/local-team/m
 const callSchedule: TeamCall = (input) => callEndpoint("/api/internal/local-team/routine", input);
 const callCheckpoint: TeamCall = (input) => callEndpoint("/api/internal/local-team/checkpoint", input);
 const callSend: TeamCall = (input) => callEndpoint("/api/internal/local-team/send", input);
+const callQuickReplies: TeamCall = (input) => callEndpoint("/api/internal/local-team/quick-replies", input);
+const callProposeName: TeamCall = (input) => callEndpoint("/api/internal/local-team/propose-name", input);
 /** One endpoint for every pack tool: `{ tool, arguments }`. */
 const callPack: TeamCall = (input) => callEndpoint("/api/internal/local-team/pack", input);
 /** One endpoint for the cloud computer tools: `{ tool, arguments }`. A wake
@@ -260,6 +284,9 @@ export interface LocalTeamMcpOptions {
   computer?: TeamCall;
   /** `send_to_chat` (defaults to the sidecar route). */
   send?: TeamCall;
+  /** `offer_quick_replies` / `propose_company_name` (default to the sidecar routes). */
+  quickReplies?: TeamCall;
+  proposeName?: TeamCall;
 }
 
 const READ_ONLY_TOOL = /^(agency|commerce)_(context|schema|list_|read_)/;
@@ -276,6 +303,8 @@ export async function handleLocalTeamMessage(
   const invokeCloud = options.cloud ?? callCloud;
   const invokeComputer = options.computer ?? callComputer;
   const invokeSend = options.send ?? callSend;
+  const invokeQuickReplies = options.quickReplies ?? callQuickReplies;
+  const invokeProposeName = options.proposeName ?? callProposeName;
   const toolsets = options.toolsets ?? new Set(invokePack ? ["team", "agency", "commerce"] : ["team"]);
   const id = message.id;
   const method = message.method;
@@ -319,6 +348,8 @@ export async function handleLocalTeamMessage(
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
       if (params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
+      if (params.name === "offer_quick_replies") return reply(textResult(await invokeQuickReplies((params.arguments ?? {}) as Json)));
+      if (params.name === "propose_company_name") return reply(textResult(await invokeProposeName((params.arguments ?? {}) as Json)));
       if (isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
       if (toolsets.has("computer") && isComputerToolName(params.name)) {
         return reply(computerResult(await invokeComputer({ tool: params.name, arguments: params.arguments ?? {} })));

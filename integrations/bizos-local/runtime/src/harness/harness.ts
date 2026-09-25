@@ -3346,6 +3346,16 @@ export class LocalBizosHarness {
     return this.dispatcher.sendToChat(scope, raw);
   }
 
+  /** `offer_quick_replies` / `propose_company_name`: staged on the current
+   * reply the same way. See `Dispatcher.offerQuickReplies`. */
+  offerQuickReplies(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {
+    return this.dispatcher.offerQuickReplies(scope, raw);
+  }
+
+  proposeCompanyName(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {
+    return this.dispatcher.proposeCompanyName(scope, raw);
+  }
+
   readonly runs = {
     get: async (id: string): Promise<Run | undefined> => this.runStore.get(id),
     list: async (input?: { limit?: number }): Promise<Run[]> => this.runStore.list(input?.limit ?? 50),

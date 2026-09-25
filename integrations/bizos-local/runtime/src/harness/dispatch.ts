@@ -88,6 +88,8 @@ import {
   fetchLinkPreview as defaultFetchLinkPreview,
   formatBytes,
   outputsDirFor,
+  parseCompanyName,
+  parseQuickReplies,
   parseSendToChat,
   resolveAttachment,
   type FetchedPreview,
@@ -1094,6 +1096,35 @@ export class Dispatcher {
         ...(outside.length ? [`Files you produce belong under ${outputs}; these were sent from where they are.`] : []),
       ].join(" "),
     };
+  }
+
+  /**
+   * `offer_quick_replies` / `propose_company_name`: staged on the NEXT reply
+   * exactly like `send_to_chat`, as `quick_replies` / `proposal` blocks —
+   * one of each per reply, the latest call winning.
+   */
+  offerQuickReplies(scope: { botId: string; threadId: string; runId: string }, raw: unknown): { choices: string[]; note: string } {
+    const turn = this.activeTurnFor(scope, "Offering quick replies");
+    const choices = parseQuickReplies(raw);
+    turn.pendingOutputs = turn.pendingOutputs.filter((block) => block.kind !== "quick_replies");
+    turn.pendingOutputs.push({ kind: "quick_replies", choices });
+    return { choices, note: `${choices.length} quick ${choices.length === 1 ? "reply" : "replies"} will appear under your next message in this chat — write that message now; do not list them again in prose.` };
+  }
+
+  proposeCompanyName(scope: { botId: string; threadId: string; runId: string }, raw: unknown): { name: string; note: string } {
+    const turn = this.activeTurnFor(scope, "Proposing a company name");
+    const name = parseCompanyName(raw);
+    turn.pendingOutputs = turn.pendingOutputs.filter((block) => block.kind !== "proposal");
+    turn.pendingOutputs.push({ kind: "proposal", proposalKind: "company-name", value: name });
+    return { name, note: `The name “${name}” will be proposed under your next message, with a button to accept it — write that message now; the person decides.` };
+  }
+
+  private activeTurnFor(scope: { botId: string; threadId: string; runId: string }, what: string): ActiveTurn {
+    const turn = this.active.get(scope.threadId);
+    if (!turn || turn.runId !== scope.runId || turn.botId !== scope.botId || turn.cancelled || turn.discarded) {
+      throw new Error(`${what} requires the matching active run`);
+    }
+    return turn;
   }
 
   /** Where an agent may send files from: its own folder, then the company

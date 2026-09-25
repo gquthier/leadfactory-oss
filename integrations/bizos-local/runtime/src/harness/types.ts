@@ -370,6 +370,12 @@ export type MessageBlock =
    * the sidecar serves under `id` — and what it knows about it. */
   | { kind: "image"; url: string; alt?: string; id?: string; path?: string; fileName?: string; mimeType?: string; size?: number; width?: number; height?: number }
   | { kind: "file"; name: string; url?: string; mimeType?: string; id?: string; path?: string; size?: number }
+  /** Onboarding in the chat (2026-09-26): short answers the agent offered
+   * under its reply (`offer_quick_replies`), and one proposal the person can
+   * accept or change (`propose_company_name`). Additive: an older renderer
+   * skips the kinds it does not draw. */
+  | { kind: "quick_replies"; choices: string[] }
+  | { kind: "proposal"; proposalKind: "company-name"; value: string }
   | { kind: "handoff"; fromBotId: string; toBotId: string; reason?: string }
   | { kind: "bot_message_sent"; toBotId: string; preview?: string }
   | { kind: "bot_message_received"; fromBotId: string; preview?: string };

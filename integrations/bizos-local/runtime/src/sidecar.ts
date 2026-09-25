@@ -180,6 +180,10 @@ interface CollaborationMessage {
   preview?: CollaborationPreview;
   /** The latest ask card on this message, when it carries one. */
   ask?: CollaborationAsk;
+  /** Onboarding in the chat (2026-09-26): short tappable answers under this
+   * reply, and one proposal the person accepts or changes. Absent otherwise. */
+  quickReplies?: string[];
+  proposal?: { kind: "company-name"; value: string };
 }
 
 class HttpError extends Error {
@@ -960,6 +964,8 @@ export class CollaborationFacade {
     const preview = message.role === "bot" ? previewOfMessage(message) : undefined;
     if (message.preview?.image) this.attachments.remember(message.preview.image.id, message.preview.image.path);
     const askBlock = [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "ask" }> => block.kind === "ask");
+    const quickReplies = message.role === "bot" ? [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "quick_replies" }> => block.kind === "quick_replies")?.choices : undefined;
+    const proposal = message.role === "bot" ? [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "proposal" }> => block.kind === "proposal") : undefined;
     return {
       id: this.messageId(message.id),
       threadId: publicThreadId,
@@ -978,6 +984,8 @@ export class CollaborationFacade {
       ...(message.links?.length ? { links: message.links } : {}),
       ...(preview ? { preview } : {}),
       ...(askBlock ? { ask: askOf(askBlock) } : {}),
+      ...(quickReplies?.length ? { quickReplies } : {}),
+      ...(proposal ? { proposal: { kind: proposal.proposalKind, value: proposal.value } } : {}),
     };
   }
 
@@ -1884,6 +1892,26 @@ export class CollaborationFacade {
     }
   }
 
+  /** `offer_quick_replies` / `propose_company_name`: staged on the calling
+   * run's next reply, like `send_to_chat`. */
+  offerQuickReplies(capability: TeamCapability, raw: unknown) {
+    try {
+      return this.harness.offerQuickReplies(capability, raw);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(422, "invalid_payload", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  proposeCompanyName(capability: TeamCapability, raw: unknown) {
+    try {
+      return this.harness.proposeCompanyName(capability, raw);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(422, "invalid_payload", error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async scheduleRoutine(authorize: () => TeamCapability, raw: unknown): Promise<{ routine: PublicRoutine; nextRunAt: string | null; endsAt: string | null; note: string }> {
     return this.exclusive(async () => {
       const capability = authorize();
@@ -2628,6 +2656,12 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/internal/local-team/send") {
         return sendJson(response, 200, facade.sendToChat(teamBroker.authorize(bearer), await bodyOf(request)));
       }
+      if (method === "POST" && url.pathname === "/api/internal/local-team/quick-replies") {
+        return sendJson(response, 200, facade.offerQuickReplies(teamBroker.authorize(bearer), await bodyOf(request)));
+      }
+      if (method === "POST" && url.pathname === "/api/internal/local-team/propose-name") {
+        return sendJson(response, 200, facade.proposeCompanyName(teamBroker.authorize(bearer), await bodyOf(request)));
+      }
       if (method === "POST" && (url.pathname === "/api/internal/local-team/agency" || url.pathname === "/api/internal/local-team/pack")) {
         return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
       }
@@ -3015,6 +3049,8 @@ async function serve(): Promise<void> {
           if (tool.name === "recruit_agent") return facade.recruit(capability, argumentsValue);
           if (tool.name === "checkpoint_task") return facade.checkpointTask(capability, argumentsValue);
           if (tool.name === "send_to_chat") return facade.sendToChat(capability, argumentsValue);
+          if (tool.name === "offer_quick_replies") return facade.offerQuickReplies(capability, argumentsValue);
+          if (tool.name === "propose_company_name") return facade.proposeCompanyName(capability, argumentsValue);
           return facade.manageAgent(capability, argumentsValue);
         },
       }));

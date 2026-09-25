@@ -92,7 +92,7 @@ const TOOL_IMPACT: Array<[RegExp, { impact: AskImpact; reversible?: boolean }]> 
   [/^computer_(?:observe)$/, { impact: "low", reversible: true }],
   [/^computer_(?:act|download)$/, { impact: "medium" }],
   [/^cloud_computer_/, { impact: "medium" }],
-  [/^(?:recruit_agent|manage_agent|schedule_routine|checkpoint_task|send_to_chat)$/, { impact: "low", reversible: true }],
+  [/^(?:recruit_agent|manage_agent|schedule_routine|checkpoint_task|send_to_chat|offer_quick_replies|propose_company_name)$/, { impact: "low", reversible: true }],
 ];
 
 function bareToolName(tool: string): string {

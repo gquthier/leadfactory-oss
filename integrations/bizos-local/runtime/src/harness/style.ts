@@ -114,6 +114,8 @@ export const TOOL_LABELS: Record<string, string> = {
   computer_act: "Using its computer",
   computer_download: "Downloading a file",
   send_to_chat: "Sending to the chat",
+  offer_quick_replies: "Offering quick replies",
+  propose_company_name: "Proposing a company name",
   upload_document: "Saving a document",
   // codex's own item types, which arrive under these titles.
   edit: "Editing a file",
@@ -157,6 +159,8 @@ export const APPROVAL_LABELS: Record<string, string> = {
   // build that somehow lost it — not the usual path.
   computer: "use its computer",
   send_to_chat: "send a file to this chat",
+  offer_quick_replies: "offer quick replies in this chat",
+  propose_company_name: "propose a company name",
   upload_document: "save a document",
   edit: "edit files on this Mac",
   shell: "run a command on this Mac",
