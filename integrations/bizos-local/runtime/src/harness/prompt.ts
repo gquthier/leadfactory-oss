@@ -8,7 +8,7 @@
 // then HOW IT WORKS (the BizOS doctrine: real state first, one operation one
 // objective, credits cost money, never announce what has not happened).
 import { renderMemory, type MemorySnapshot } from "./memory.js";
-import { CHAT_STYLE, GROUP_CHAT_STYLE, TEXTING_STYLE } from "./style.js";
+import { CHAT_STYLE, GROUP_CHAT_STYLE, TEXTING_STYLE, chatOutputsStyle } from "./style.js";
 import type { AccessMode, Bot, ThreadMessage } from "./types.js";
 import { taskRecord, type TaskCheckpoint } from "./task.js";
 import { groupLeadId } from "./mentions.js";
@@ -173,7 +173,11 @@ export function conversationSoFar(messages: ThreadMessage[], roster: Bot[]): str
               ? `${block.requestType === "permission" ? "Permission" : "Question"} ${block.status}${block.answered ? ` (${block.answered.kind})` : ""}: ${block.summary}`
             : block.kind === "meta"
               ? block.text
-              : "",
+              : block.kind === "image"
+                ? `[image: ${singleLine(block.alt || block.fileName || "image", 120)}]`
+                : block.kind === "file"
+                  ? `[file: ${singleLine(block.name, 120)}]`
+                  : "",
       )
       .filter(Boolean)
       .join("\n")
@@ -258,6 +262,13 @@ export function buildPersonaPrompt(input: PersonaInput): string {
     ? CHAT_STYLE.replace("- Finish on the next concrete step or on a question. Never on a summary of what you just said.",
       "- Finish with the verified outcome and useful artifact links, or a concrete blocker. Do not invent a next step or ask an unnecessary question after completing the request.")
     : CHAT_STYLE);
+  if (input.localArchitecture) {
+    const tools = input.localArchitecture.host?.tools ?? [];
+    sections.push(chatOutputsStyle({
+      sendTool: tools.includes("tool:send_to_chat") || tools.includes("mcp:local_team_actions"),
+      outputsRoot: singleLine(input.localArchitecture.sharedBrainPath ?? input.localArchitecture.workspaceDir, 1000),
+    }));
+  }
   sections.push(native ? [
     input.nativeOllama
       ? "How Local BizOS works: this is an independent workspace on this Mac. Ollama runs the selected installed model locally."
@@ -434,6 +445,10 @@ export function buildLocalBrief(input: LocalBriefInput): string {
   if (instructions) sections.push(instructions);
   sections.push("You have full latitude: decide, act, verify, then say it in one line. Make routine choices yourself and go to the end; don't stop at a plan or an offer to continue. Ask only what only the person can know, or before something that can't be undone.");
   sections.push(TEXTING_STYLE);
+  sections.push(chatOutputsStyle({
+    sendTool: input.teamTools,
+    outputsRoot: singleLine(manifest.sharedBrainPath ?? manifest.workspaceDir, 1000),
+  }));
 
   const peers = manifest.peers.slice(0, 12).map((peer) => singleLine(peer.name, 60)).filter(Boolean);
   const work = ["How you work:"];
