@@ -179,6 +179,7 @@ export class PlanRegistry {
     status?: PlanStatus;
     emailHint?: string;
     createdAt?: string;
+    settingsVisible?: boolean;
   }): ConnectedPlan {
     const id = newPlanId();
     const priority = this.cached.plans.length;
@@ -190,6 +191,7 @@ export class PlanRegistry {
       status: input.status ?? "connected",
       createdAt: input.createdAt ?? new Date().toISOString(),
       priority,
+      ...(input.settingsVisible === false ? { settingsVisible: false } : {}),
       ...(input.emailHint ? { emailHint: maskEmailHint(input.emailHint) ?? input.emailHint } : {}),
       [homeFieldFor(input.provider)]: input.homePath,
     };
@@ -236,6 +238,7 @@ export class PlanRegistry {
     }
     if (patch.lastUsedAt !== undefined) plan.lastUsedAt = patch.lastUsedAt;
     if (patch.priority !== undefined) plan.priority = patch.priority;
+    if (patch.settingsVisible !== undefined) plan.settingsVisible = patch.settingsVisible;
     // Paths are main-only; allow internal rewrites (e.g. tests) but never from IPC.
     if (patch.codexHome !== undefined) plan.codexHome = patch.codexHome;
     if (patch.configDir !== undefined) plan.configDir = patch.configDir;
@@ -305,6 +308,7 @@ export class PlanRegistry {
           status: "connected",
           ...(input.codexEmailHint ? { emailHint: input.codexEmailHint } : {}),
           createdAt: input.nowIso,
+          settingsVisible: false,
         }),
       );
     }
@@ -317,6 +321,7 @@ export class PlanRegistry {
           status: "connected",
           ...(input.claudeEmailHint ? { emailHint: input.claudeEmailHint } : {}),
           createdAt: input.nowIso,
+          settingsVisible: false,
         }),
       );
     }
@@ -329,6 +334,7 @@ export class PlanRegistry {
           status: "connected",
           ...(input.cursorEmailHint ? { emailHint: input.cursorEmailHint } : {}),
           createdAt: input.nowIso,
+          settingsVisible: false,
         }),
       );
     }

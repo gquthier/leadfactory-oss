@@ -8,6 +8,8 @@ export interface ConnectedPlan {
   label: string;
   authKind: PlanAuthKind;
   status: PlanStatus;
+  /** False for a machine-discovered account until added in Settings. Legacy rows remain visible. */
+  settingsVisible?: boolean;
   emailHint?: string;
   /** Codex only — absolute CODEX_HOME. Main-only; strip before IPC. */
   codexHome?: string;
