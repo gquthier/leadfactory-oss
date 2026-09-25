@@ -167,10 +167,10 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
       avatarGeneration: { status: "pending" },
     });
     const uploadedId = claimedAvatar.body.job.botId;
-    expect((await api("PUT", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: "data:image/png;base64,AAAA" })).status).toBe(400);
-    expect((await api("PUT", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG, extra: true })).status).toBe(400);
-    expect((await api("PUT", "/api/local/bots/missing-bot/avatar", { dataUrl: PNG })).status).toBe(404);
-    const uploaded = await api("PUT", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG });
+    expect((await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: "data:image/png;base64,AAAA" })).status).toBe(400);
+    expect((await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG, extra: true })).status).toBe(400);
+    expect((await api("POST", "/api/local/bots/missing-bot/avatar", { dataUrl: PNG })).status).toBe(404);
+    const uploaded = await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG });
     expect(uploaded.status).toBe(200);
     expect(uploaded.body.bot).toMatchObject({ id: uploadedId, avatarKind: "upload" });
     expect(uploaded.body.bot.avatarGeneration?.status).not.toBe("pending");

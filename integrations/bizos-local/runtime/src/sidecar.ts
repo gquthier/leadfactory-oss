@@ -2591,7 +2591,7 @@ async function serve(): Promise<void> {
         return sendJson(response, 200, await facade.generateAvatar(generateAvatarBotId, await bodyOf(request)));
       }
       const avatarBotId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)\/avatar$/);
-      if (avatarBotId && method === "PUT") return sendJson(response, 200, await facade.setBotAvatar(avatarBotId, await bodyOf(request)));
+      if (avatarBotId && method === "POST") return sendJson(response, 200, await facade.setBotAvatar(avatarBotId, await bodyOf(request)));
       const botId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)$/);
       if (botId && method === "PATCH") return sendJson(response, 200, await facade.updateBot(botId, await bodyOf(request)));
       if (method === "GET" && url.pathname === "/api/local/plans") return sendJson(response, 200, { plans: await facade.plans() });
