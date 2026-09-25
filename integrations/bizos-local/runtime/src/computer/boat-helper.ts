@@ -756,13 +756,20 @@ async function dispatchInput(cdp, event, state) {
   }
 }
 
-async function sendHistory(cdp, ws) {
+/** Where the seat is, sent when it changed. Asked on every navigation
+ * event and, as a backstop, about once a second while frames flow: a
+ * cross-site navigation can swap the page's process under the session. */
+async function sendHistory(cdp, ws, state) {
   try {
+    state.historyAt = Date.now();
     const history = await cdp.send("Page.getNavigationHistory", {}, 3000);
     const index = Number(history.currentIndex) || 0;
     const entries = Array.isArray(history.entries) ? history.entries : [];
     const current = entries[index] || {};
-    ws.sendText(JSON.stringify({ t: "page", url: String(current.url || ""), title: String(current.title || ""), back: index > 0, forward: index < entries.length - 1 }));
+    const message = JSON.stringify({ t: "page", url: String(current.url || ""), title: String(current.title || ""), back: index > 0, forward: index < entries.length - 1 });
+    if (message === state.lastPage) return;
+    state.lastPage = message;
+    ws.sendText(message);
   } catch {}
 }
 
@@ -775,7 +782,7 @@ async function controlSession(ws, query) {
   await ensureChrome(seat);
   const page = await mainPage(seat.port);
   const cdp = await new Cdp(page.webSocketDebuggerUrl).open();
-  const state = { pressed: false, clickCount: 1, lastDown: null };
+  const state = { pressed: false, clickCount: 1, lastDown: null, historyAt: 0, lastPage: "" };
   let queue = Promise.resolve();
   const enqueue = (work) => { queue = queue.then(work, work).catch(() => undefined); };
   let stopped = false;
@@ -817,11 +824,12 @@ async function controlSession(ws, query) {
     // Behind a slow route, a stale frame is worse than a skipped one.
     if (ws.backlog() > 512 * 1024) return;
     ws.sendBinary(Buffer.from(String(params.data || ""), "base64"));
+    if (Date.now() - state.historyAt > 1000) void sendHistory(cdp, ws, state);
   });
-  cdp.on("Page.frameNavigated", (params) => { if (params.frame && !params.frame.parentId) void sendHistory(cdp, ws); });
+  cdp.on("Page.frameNavigated", (params) => { if (params.frame && !params.frame.parentId) void sendHistory(cdp, ws, state); });
   await cdp.send("Page.enable", {});
   ws.sendText(JSON.stringify({ t: "ready", seat: ":" + seat.display }));
-  await sendHistory(cdp, ws);
+  await sendHistory(cdp, ws, state);
   await cdp.send("Page.startScreencast", { format: "jpeg", quality: CONTROL_QUALITY, maxWidth: W, maxHeight: H, everyNthFrame: 1 });
 }
 
