@@ -24,6 +24,7 @@ import { formatObservation } from "./observe.js";
 import type {
   ComputerAction,
   ComputerActionResult,
+  ComputerControlSession,
   ComputerDownloadResult,
   ComputerObservation,
   ComputerState,
@@ -255,6 +256,22 @@ export class ComputerManager {
   async takeControlAsync(botId: string): Promise<ComputerState> {
     await this.wake(botId);
     return this.takeControl(botId);
+  }
+
+  /**
+   * Take control the live way: wake the seat, then ask the backend for a
+   * session the desktop connects to. A backend without one (the native
+   * browser) is simply marked as user-driven; its input arrives through
+   * `forwardInput`.
+   */
+  async controlSession(botId: string): Promise<{ state: ComputerState; session: ComputerControlSession | null }> {
+    await this.wake(botId);
+    const backend = this.backend;
+    if (!backend) return { state: this.state(botId), session: null };
+    const session = backend.controlSession ? await backend.controlSession(botId) : null;
+    if (!session) backend.takeControl(botId);
+    this.publishStatus(botId);
+    return { state: this.state(botId), session };
   }
 
   giveBack(botId: string): ComputerState {

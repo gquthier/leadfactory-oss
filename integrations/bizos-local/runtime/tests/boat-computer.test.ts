@@ -9,7 +9,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { BoatComputerBackend, TAKE_CONTROL_UNAVAILABLE, type BoatMachine } from "../src/computer/boat.js";
+import { BoatComputerBackend, TAKE_CONTROL_UNAVAILABLE, USER_IN_CONTROL_MESSAGE, type BoatMachine } from "../src/computer/boat.js";
 import {
   computerHelperSource,
   helperPath,
@@ -62,6 +62,7 @@ class FakeSeats {
       this.pages.set(agent, page);
       const base = { display: this.displays.get(agent)!, port: 9300 + 10, profile: `/home/user/bizos/agents/${agent}/chrome` };
       if (request.op === "cookies") return { ok: true, ...base, cookieHosts: [...page.cookies] };
+      if (request.op === "control") return { ok: true, ...base, control: { port: 9399 }, width: 1280, height: 800, image: "AAAA", thumb: "AAAA" };
       if (request.op === "download") return { ok: true, ...base, download: { path: `/home/user/bizos/agents/${agent}/Downloads/file.pdf`, bytes: 12, name: "file.pdf" } };
       let completed = 0;
       let error: string | undefined;
@@ -122,6 +123,8 @@ class FakeMachine implements BoatMachine {
   async execAwake(_id: string, command: string) { return this.run(command); }
   setBeforeSleep(hook: ((sandboxId: string) => Promise<void>) | null) { this.beforeSleep = hook; }
   onSleep(listener: () => void) { this.sleepListeners.add(listener); return () => this.sleepListeners.delete(listener); }
+  hosted: number[] = [];
+  async hostPort(port: number) { this.hosted.push(port); return { url: `https://bx-fake-${port}.on.boat.example/`, sandboxId: "bx_fake" }; }
 }
 
 function backend(machine = new FakeMachine()) {
@@ -211,7 +214,51 @@ describe("BoatComputerBackend", () => {
     await expect(boat.act("bot_a", [{ kind: "clickSelector", selector: "#missing", button: "left" }], true))
       .rejects.toThrow("no element matches that selector");
     expect(boat.state("bot_a").screen).toBeDefined();
-    expect(() => boat.takeControl("bot_a")).toThrow(TAKE_CONTROL_UNAVAILABLE);
+    expect(() => boat.forwardInput("bot_a", { type: "mouseMove" })).toThrow(TAKE_CONTROL_UNAVAILABLE);
+  });
+
+  it("hands the person a live control session with a fresh secret, and pauses the agent until they give it back", async () => {
+    const { boat, machine, changed } = backend();
+    await boat.act("bot_a", [{ kind: "navigate", url: "https://example.com/" }], false);
+    const session = await boat.controlSession("bot_a");
+    // The daemon was told the secret, the port was hosted once, publicly on Boat's side.
+    const control = machine.seats.requests.find((request) => request.op === "control")!;
+    expect(control).toMatchObject({ op: "control", agent: "bot_a" });
+    expect((control as { secret: string }).secret).toMatch(/^[0-9a-f]{48}$/);
+    expect(machine.hosted).toEqual([9399]);
+    expect(session).toEqual({ url: `wss://bx-fake-9399.on.boat.example/control?k=${(control as { secret: string }).secret}&agent=bot_a`, width: 1280, height: 800 });
+    // The panel sees it, and the agent's tools wait it out.
+    expect(boat.state("bot_a")).toMatchObject({ status: "ready", userInControl: true });
+    expect(boat.userHasControl("bot_a")).toBe(true);
+    await expect(boat.act("bot_a", [{ kind: "wait", ms: 1 }], false)).rejects.toThrow(USER_IN_CONTROL_MESSAGE);
+    await expect(boat.observe("bot_a")).rejects.toThrow(USER_IN_CONTROL_MESSAGE);
+    await expect(boat.download("bot_a", "https://example.com/f.pdf")).rejects.toThrow(USER_IN_CONTROL_MESSAGE);
+    // Another agent's seat is untouched.
+    await boat.observe("bot_b");
+    expect(boat.state("bot_b").userInControl).toBeUndefined();
+    // Give back: the agent may act again; a second session gets a new secret.
+    boat.giveBack("bot_a");
+    expect(boat.state("bot_a").userInControl).toBeUndefined();
+    await boat.act("bot_a", [{ kind: "wait", ms: 1 }], false);
+    const second = await boat.controlSession("bot_a");
+    expect(second.url).not.toBe(session.url);
+    expect(changed).toContain("bot_a");
+  });
+
+  it("runs the person's session through the manager: wake first, then the session, then the state", async () => {
+    const machine = new FakeMachine();
+    const { boat } = backend(machine);
+    const published: string[] = [];
+    const manager = new ComputerManager({
+      approvals: approvals().value, workspaceFor: () => "/tmp", nowIso: () => "2026-09-24T10:00:00.000Z",
+      publish: (event) => published.push(`${event.kind}:${event.state.status}:${event.state.userInControl ? "user" : "agent"}`),
+      backend: boat,
+    });
+    const { state, session } = await manager.controlSession("bot_a");
+    expect(session?.url).toMatch(/^wss:\/\/.*\/control\?k=[0-9a-f]{48}&agent=bot_a$/);
+    expect(state).toMatchObject({ backend: "container", status: "ready", userInControl: true });
+    expect(published.at(-1)).toBe("computer.status:ready:user");
+    expect(manager.giveBack("bot_a").userInControl).toBeUndefined();
   });
 
   it("closes every agent's Chrome before the machine sleeps, then shows them sleeping", async () => {

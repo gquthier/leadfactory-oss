@@ -20,15 +20,22 @@
 //   * Boat's own auto-stop (`ttlSeconds`) is set on every create and resume
 //     as a backstop, so a crashed sidecar still cannot leave it on.
 //
-// The Boat API key comes from `BOAT_API_KEY` or from `cloud-computer.json`
-// (0600, in the runtime state directory). It is never returned by `status()`.
+// The Boat API key comes, in this order, from `cloud-computer.json` (0600, in
+// the runtime state directory: this company's own key), from `BOAT_API_KEY`,
+// or from the machine-level key file named by `BOAT_API_KEY_FILE` (0600,
+// written once from Settings "for all companies" and shared by every
+// company's sidecar on this Mac). It is never returned by `status()`.
 // The machine is created `noEnv`: none of the Boat account's own secrets are
 // exposed to code the agents run on it.
 import { randomUUID } from "node:crypto";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { Storage } from "../harness/storage.js";
 
 export const BOAT_API_BASE = "https://boat.dev/api/v1";
 export const BOAT_API_KEY_ENV = "BOAT_API_KEY";
+/** Path of the machine-level key file, set by the desktop for every sidecar. */
+export const BOAT_API_KEY_FILE_ENV = "BOAT_API_KEY_FILE";
 export const CLOUD_COMPUTER_FILE = "cloud-computer.json";
 export const AGENTS_ROOT = "/home/user/bizos/agents";
 
@@ -156,6 +163,16 @@ export class BoatClient {
   async desktop(id: string): Promise<{ desktopUrl?: string | null; provisioning?: boolean; mode?: string }> {
     return this.request("POST", `/sandboxes/${encodeURIComponent(id)}/desktop`, {});
   }
+
+  /** Expose a port of the sandbox on a stable `https://…on.boat.dev` route.
+   * `public` clears Boat's own `_token` gate: the service behind it must
+   * carry its own secret (the control daemon does). */
+  async host(id: string, port: number, options: { title?: string; public?: boolean } = {}): Promise<{ url: string; isProtected?: boolean }> {
+    const body = await this.request<{ url?: unknown; isProtected?: unknown }>("POST", `/sandboxes/${encodeURIComponent(id)}/host`,
+      { port, ...(options.title ? { title: options.title } : {}), ...(options.public ? { public: true } : {}) });
+    if (typeof body.url !== "string" || !/^https:\/\//.test(body.url)) throw new BoatError(502, "host_failed", "Boat did not return a hosted URL.");
+    return { url: body.url, ...(typeof body.isProtected === "boolean" ? { isProtected: body.isProtected } : {}) };
+  }
 }
 
 interface CloudComputerRecord {
@@ -170,9 +187,14 @@ interface CloudComputerRecord {
   apiKey?: string;
 }
 
+export type KeySource = "local" | "env" | "machine";
+
 export interface CloudComputerStatus {
   configured: boolean;
-  keySource: "env" | "local" | null;
+  keySource: KeySource | null;
+  /** A machine-level key file is configured for this sidecar (whether or
+   * not it holds a key yet): Settings may offer "for all companies". */
+  machineKeyFile: boolean;
   allowed: boolean;
   sandboxId: string | null;
   state: SandboxState | "none" | "unknown";
@@ -284,6 +306,30 @@ export function pageSummary(dom: string): { title: string; text: string } {
   return { title, text: decode(body).replace(/\s+/g, " ").trim().slice(0, MAX_PAGE_TEXT_CHARS) };
 }
 
+/** The machine-level key: one trimmed line, or nothing. Read on every use
+ * so a key saved from another company's Settings is picked up at once. */
+export function readMachineKey(path: string | null): string | null {
+  if (!path) return null;
+  try {
+    const key = readFileSync(path, "utf8").trim();
+    return key && key.length <= 500 && !/\s/.test(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Write the machine-level key, 0600 in a 0700 folder; an empty key
+ * removes the file. */
+export function writeMachineKey(path: string, key: string): void {
+  if (!key) {
+    rmSync(path, { force: true });
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${key}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
 function isMachineClass(value: unknown): value is MachineClass {
   return typeof value === "string" && (MACHINE_CLASSES as readonly string[]).includes(value);
 }
@@ -303,6 +349,8 @@ export class CloudComputer {
   /** Runs before every stop, while the machine is still up (best effort). */
   private beforeSleepHook: ((sandboxId: string) => Promise<void>) | null = null;
   private readonly sleepListeners = new Set<() => void>();
+  /** `sandboxId:port` → hosted URL (Boat returns the same one each time). */
+  private readonly hostedUrls = new Map<string, string>();
 
   constructor(private readonly options: CloudComputerOptions) {
     this.clock = options.clock ?? systemClock;
@@ -336,10 +384,19 @@ export class CloudComputer {
     this.options.storage.writeJson(CLOUD_COMPUTER_FILE, this.record);
   }
 
-  private apiKey(): { key: string; source: "env" | "local" } | null {
+  /** This company's own key first, then the environment, then the
+   * machine-level file every company on this Mac shares. */
+  private apiKey(): { key: string; source: KeySource } | null {
+    if (this.record.apiKey) return { key: this.record.apiKey, source: "local" };
     const fromEnv = this.environment()[BOAT_API_KEY_ENV]?.trim();
     if (fromEnv) return { key: fromEnv, source: "env" };
-    return this.record.apiKey ? { key: this.record.apiKey, source: "local" } : null;
+    const fromFile = readMachineKey(this.machineKeyFile());
+    return fromFile ? { key: fromFile, source: "machine" } : null;
+  }
+
+  private machineKeyFile(): string | null {
+    const path = this.environment()[BOAT_API_KEY_FILE_ENV]?.trim();
+    return path ? path : null;
   }
 
   private client(): BoatClient {
@@ -385,13 +442,26 @@ export class CloudComputer {
 
   // ── settings (owner only) ───────────────────────────────────────────
 
-  /** Store (or, with an empty string, clear) the local Boat API key. */
-  setApiKey(value: unknown): CloudComputerStatus {
+  /** Store (or, with an empty string, clear) the Boat API key: this
+   * company's own (`company`, the default) or the one every company on this
+   * Mac shares (`machine`, the 0600 file the desktop named). A machine-wide
+   * save also clears this company's own key so the shared one is the one
+   * in use. */
+  setApiKey(value: unknown, scope: unknown = "company"): CloudComputerStatus {
     if (typeof value !== "string") throw new CloudComputerError("invalid_payload", "apiKey must be a string.");
     const key = value.trim();
     if (key.length > 500 || /\s/.test(key)) throw new CloudComputerError("invalid_payload", "apiKey is not a valid key.");
-    if (key) this.record.apiKey = key;
-    else delete this.record.apiKey;
+    if (scope !== "company" && scope !== "machine") throw new CloudComputerError("invalid_payload", "scope must be company or machine.");
+    if (scope === "machine") {
+      const path = this.machineKeyFile();
+      if (!path) throw new CloudComputerError("no_machine_key_file", "This runtime has no machine-level key file; save the key for this company instead.");
+      writeMachineKey(path, key);
+      delete this.record.apiKey;
+    } else if (key) {
+      this.record.apiKey = key;
+    } else {
+      delete this.record.apiKey;
+    }
     this.persist();
     return this.localStatus();
   }
@@ -419,6 +489,7 @@ export class CloudComputer {
     return {
       configured: Boolean(key),
       keySource: key?.source ?? null,
+      machineKeyFile: Boolean(this.machineKeyFile()),
       allowed,
       sandboxId: this.record.sandboxId,
       state,
@@ -686,6 +757,20 @@ export class CloudComputer {
       await this.clock.delay(this.pollIntervalMs);
     }
     throw new CloudComputerError("desktop_unavailable", "The desktop stream is still being prepared; try again shortly.");
+  }
+
+  /** Expose a port of the (awake) machine on its own `on.boat.dev` route,
+   * for the control daemon. The URL names a public route: the daemon
+   * behind it checks its own per-session secret. Boat answers the same
+   * URL for the same port, so it is cached per machine. */
+  async hostPort(port: number, title: string): Promise<{ url: string; sandboxId: string }> {
+    const woke = await this.wake();
+    const cached = this.hostedUrls.get(`${woke.sandboxId}:${port}`);
+    if (cached) return { url: cached, sandboxId: woke.sandboxId };
+    const hosted = await this.client().host(woke.sandboxId, port, { title, public: true });
+    this.hostedUrls.set(`${woke.sandboxId}:${port}`, hosted.url);
+    this.touch();
+    return { url: hosted.url, sandboxId: woke.sandboxId };
   }
 
   /** The agent tools. A refusal (free tier, no key) is a one-line result,

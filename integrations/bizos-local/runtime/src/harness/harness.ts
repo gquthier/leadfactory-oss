@@ -3355,6 +3355,9 @@ export class LocalBizosHarness {
       this.computerManager.watch(botId, on);
     },
     takeControl: async (botId: string): Promise<ComputerState> => this.computerManager.takeControl(botId),
+    /** Take control, live: the session the desktop connects to (cloud), or
+     * none (native: input is forwarded). The agent is paused either way. */
+    control: async (botId: string) => this.computerManager.controlSession(botId),
     giveBack: async (botId: string): Promise<ComputerState> => this.computerManager.giveBack(botId),
     /** The latest full frame of this agent's screen (the cloud computer's is
      * the last one an action produced — no round trip). */

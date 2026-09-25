@@ -184,6 +184,20 @@ export interface ComputerBackend {
  * backend has all of it; the cloud one answers the user-side calls with a
  * sentence rather than pretending.
  */
+/**
+ * A live seat for the PERSON: where the desktop connects to see the screen
+ * as it moves and to drive it. The cloud backend hands one out (a
+ * WebSocket to the control daemon on the machine, through a Boat-hosted
+ * route, with a per-session secret in it); the native one has no need for
+ * it, its input goes straight to the offscreen window. The URL is a
+ * secret: it lives in the desktop's main process and nowhere else.
+ */
+export interface ComputerControlSession {
+  url: string;
+  width: number;
+  height: number;
+}
+
 export interface ManagedComputerBackend extends ComputerBackend {
   has(botId: string): boolean;
   currentUrl(botId: string): string;
@@ -195,6 +209,9 @@ export interface ManagedComputerBackend extends ComputerBackend {
   navigateForUser(botId: string, what: "back" | "forward" | "reload"): void;
   history(botId: string): { back: boolean; forward: boolean };
   forwardInput(botId: string, event: Record<string, unknown>): void;
+  /** Take control the live way (see `ComputerControlSession`). A backend
+   * without it is driven through `forwardInput` instead. */
+  controlSession?(botId: string): Promise<ComputerControlSession>;
 }
 
 /**

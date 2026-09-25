@@ -1932,6 +1932,18 @@ export class CollaborationFacade {
     return this.harness.computer.setUp(this.computerBotId(id));
   }
 
+  /** The owner takes control from the panel. The session URL is a secret
+   * (it opens the live seat): owner-bearer only, never logged, never in a
+   * thread. */
+  computerControl(id: string) {
+    return this.harness.computer.control(this.computerBotId(id));
+  }
+
+  /** The owner gives the seat back; the agent may act again. */
+  computerRelease(id: string) {
+    return this.harness.computer.giveBack(this.computerBotId(id));
+  }
+
   /** The panel names an agent by its public id (`local:<instance>:agent:…`);
    * a bare bot id is accepted too. */
   private computerBotId(id: string): string {
@@ -2452,6 +2464,16 @@ async function serve(): Promise<void> {
       }
       const computerSetUp = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/setup$/);
       if (computerSetUp && method === "POST") return sendJson(response, 200, await facade.computerSetUp(computerSetUp));
+      const computerControl = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/control$/);
+      if (computerControl && method === "POST") {
+        try {
+          return sendJson(response, 200, await facade.computerControl(computerControl));
+        } catch (error) {
+          throw cloudHttpError(error);
+        }
+      }
+      const computerRelease = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/release$/);
+      if (computerRelease && method === "POST") return sendJson(response, 200, await facade.computerRelease(computerRelease));
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
       // The web dashboard link (device-code flow + snapshot push). The device
       // token never crosses this boundary; only status does.
@@ -2606,8 +2628,8 @@ async function serve(): Promise<void> {
             return sendJson(response, 200, machine.setSettings(input));
           }
           if (method === "POST" && action === "/key") {
-            const input = objectBody(await bodyOf(request), ["apiKey"]);
-            return sendJson(response, 200, machine.setApiKey(input.apiKey));
+            const input = objectBody(await bodyOf(request), ["apiKey", "scope"]);
+            return sendJson(response, 200, machine.setApiKey(input.apiKey, input.scope ?? "company"));
           }
           if (method === "POST" && (action === "/wake" || action === "/sleep" || action === "/desktop")) {
             objectBody((await bodyOf(request)) ?? {}, []);

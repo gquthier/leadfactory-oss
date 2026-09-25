@@ -1,7 +1,7 @@
 // The cloud computer against a FAKE Boat v1 HTTP server on loopback: the
 // real client, real fetch, a temp state dir, and a manual clock for the
 // auto-sleep timer. No real Boat account, no real profile directory.
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -67,7 +67,7 @@ class FakeBoat {
       this.sandboxes.set(id, sandbox);
       return this.send(response, 202, { ok: true, type: "sandbox.created", status: "provisioning", ttlSeconds: body?.ttlSeconds, sandbox: { ...sandbox, desktopAvailable: false, snapshotAvailable: false } });
     }
-    const match = /^\/sandboxes\/([^/]+)(?:\/(stop|resume|commands|desktop))?$/.exec(path);
+    const match = /^\/sandboxes\/([^/]+)(?:\/(stop|resume|commands|desktop|host))?$/.exec(path);
     const sandbox = match ? this.sandboxes.get(match[1]!) : undefined;
     if (!match || !sandbox) return this.send(response, 404, { ok: false, code: "not_found", message: "Not found" });
     const action = match[2];
@@ -97,6 +97,7 @@ class FakeBoat {
       });
     }
     if (action === "desktop") return this.send(response, 200, { ok: true, type: "desktop.url", success: true, desktopUrl: "https://desktop.example/stream?token=secret", mode: "stream" });
+    if (action === "host") return this.send(response, 200, { ok: true, type: "port.hosted", success: true, port: body.port, url: `https://${sandbox.id}-${body.port}.on.boat.example`, isProtected: !body.public, access: body.public ? "public" : "private" });
     return this.send(response, 404, { ok: false, code: "not_found", message: "Not found" });
   }
 }
@@ -238,6 +239,52 @@ describe("cloud computer agent tools", () => {
     expect(JSON.stringify(await computer.status())).not.toContain("test-key");
     expect(statSync(join(root, "state", CLOUD_COMPUTER_FILE)).mode & 0o777).toBe(0o600);
     expect(await computer.tool("bot_a", "cloud_computer_wake", {})).toMatchObject({ state: "ready", created: true });
+  });
+
+  it("resolves the key company-first, then the environment, then the machine-level file", async () => {
+    const keyFile = join(root, "shared", "boat-api-key");
+    const env: NodeJS.ProcessEnv = { BOAT_API_KEY_FILE: keyFile };
+    const computer = machine({ env });
+    expect(await computer.status()).toMatchObject({ configured: false, keySource: null, machineKeyFile: true });
+    // The machine-level file: written 0600 in a 0700 folder, picked up at once.
+    expect(computer.setApiKey("test-key", "machine")).toMatchObject({ configured: true, keySource: "machine" });
+    expect(readFileSync(keyFile, "utf8")).toBe("test-key\n");
+    expect(statSync(keyFile).mode & 0o777).toBe(0o600);
+    expect(statSync(join(root, "shared")).mode & 0o777).toBe(0o700);
+    expect(await computer.tool("bot_a", "cloud_computer_wake", {})).toMatchObject({ state: "ready", created: true });
+    // Another company's sidecar on the same Mac sees the same file.
+    const other = new CloudComputer({ storage: new Storage(join(root, "other")), isAllowed: () => true, environment: () => env, baseUrl: boat.url, clock: manualClock(), pollIntervalMs: 0 });
+    expect(await other.status()).toMatchObject({ configured: true, keySource: "machine" });
+    // The environment outranks the file; the company's own key outranks both.
+    env.BOAT_API_KEY = "env-key";
+    expect(await computer.status()).toMatchObject({ keySource: "env" });
+    computer.setApiKey("company-key");
+    expect(await computer.status()).toMatchObject({ keySource: "local" });
+    // A machine-wide save clears the company's own key so the shared one is in use.
+    computer.setApiKey("test-key", "machine");
+    delete env.BOAT_API_KEY;
+    expect(await computer.status()).toMatchObject({ keySource: "machine" });
+    expect(JSON.stringify(computer.status())).not.toContain("test-key");
+    // Clearing the machine key removes the file; a whitespace-only or huge file is ignored.
+    computer.setApiKey("", "machine");
+    expect(existsSync(keyFile)).toBe(false);
+    expect(await computer.status()).toMatchObject({ configured: false });
+    writeFileSync(keyFile, "  \n");
+    expect(await computer.status()).toMatchObject({ configured: false });
+    // No file configured: a machine-wide save is refused in one sentence.
+    expect(() => machine({ env: {} }).setApiKey("x", "machine")).toThrow("no machine-level key file");
+    expect(() => computer.setApiKey("x", "everywhere")).toThrow("scope must be company or machine");
+  });
+
+  it("hosts the control port once per machine on a public route it caches", async () => {
+    const computer = machine();
+    const hosted = await computer.hostPort(9399, "BizOS control");
+    expect(hosted.url).toMatch(/^https:\/\/bx_fake\d+-9399\.on\.boat\.example$/);
+    const again = await computer.hostPort(9399, "BizOS control");
+    expect(again.url).toBe(hosted.url);
+    const calls = boat.calls.filter((call) => call.path.endsWith("/host"));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toEqual({ port: 9399, title: "BizOS control", public: true });
   });
 
   it("does not let one agent put the machine to sleep under another agent's running command", async () => {

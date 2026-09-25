@@ -12,6 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { hostOf, parseNavigable } from "./actions.js";
 import {
+  CONTROL_PORT,
   computerHelperSource,
   helperCommand,
   helperPath,
@@ -30,6 +31,7 @@ import {
   SCREEN_WIDTH,
   type ComputerAction,
   type ComputerActionResult,
+  type ComputerControlSession,
   type ComputerDownloadResult,
   type ComputerObservation,
   type ComputerState,
@@ -46,6 +48,8 @@ export interface BoatMachine {
   execAwake(sandboxId: string, command: string, timeoutSeconds: number): Promise<BoatCommandResult>;
   setBeforeSleep(hook: ((sandboxId: string) => Promise<void>) | null): void;
   onSleep(listener: () => void): () => void;
+  /** A public `https://…on.boat.dev` route to a port of the awake machine. */
+  hostPort(port: number, title: string): Promise<{ url: string; sandboxId: string }>;
 }
 
 export interface BoatBackendOptions {
@@ -66,15 +70,19 @@ interface Seat {
   display?: string;
   profile?: string;
   error?: string;
+  /** The person holds the seat; the agent's tool calls wait it out. */
+  userInControl: boolean;
   tail: Promise<unknown>;
 }
+
+export const USER_IN_CONTROL_MESSAGE = "the user has taken control of this computer; wait until they give it back";
 
 /** One helper call's budget: a wake, a first-ever Xvfb install and a Chrome
  * start, then a batch that may wait on a slow page. */
 const HELPER_TIMEOUT_SECONDS = 240;
 
 export const TAKE_CONTROL_UNAVAILABLE =
-  "Take control is not available on the cloud computer yet: its screen is shown in the panel, and your agent pauses if you ask it to.";
+  "The cloud computer is driven through its live control session, not through forwarded input.";
 
 export class BoatComputerBackend implements ManagedComputerBackend {
   readonly kind = "container" as const;
@@ -137,6 +145,7 @@ export class BoatComputerBackend implements ManagedComputerBackend {
         { id: "terminal", open: true, title: "Cloud shell" },
       ],
       ...(onAPage ? { openUrl: seat.url } : {}),
+      ...(seat.userInControl ? { userInControl: true } : {}),
     };
   }
 
@@ -163,12 +172,19 @@ export class BoatComputerBackend implements ManagedComputerBackend {
     return this.state(botId);
   }
 
+  /** The agent's tool calls stop at the door while the person drives. */
+  private requireAgentTurn(botId: string): void {
+    if (this.seats.get(botId)?.userInControl) throw new Error(USER_IN_CONTROL_MESSAGE);
+  }
+
   async observe(botId: string): Promise<ComputerObservation> {
+    this.requireAgentTurn(botId);
     const response = await this.serial(botId, () => this.call(botId, { op: "observe", agent: agentSlug(botId) }));
     return this.observation(response);
   }
 
   async act(botId: string, actions: ComputerAction[], observe: boolean, settleMs = 0): Promise<ComputerActionResult> {
+    this.requireAgentTurn(botId);
     for (const action of actions) {
       // The last line before the machine, as in the native backend.
       if (action.kind === "navigate" && !parseNavigable(action.url)) throw new Error("that address is not one a computer may open");
@@ -182,6 +198,7 @@ export class BoatComputerBackend implements ManagedComputerBackend {
   }
 
   async download(botId: string, url: string): Promise<ComputerDownloadResult> {
+    this.requireAgentTurn(botId);
     if (!parseNavigable(url)) throw new Error("a computer can only download from an http(s) address");
     const response = await this.serial(botId, () => this.call(botId, { op: "download", agent: agentSlug(botId), url }));
     const saved = response.download;
@@ -210,14 +227,45 @@ export class BoatComputerBackend implements ManagedComputerBackend {
     return this.seats.get(botId)?.frame ?? null;
   }
 
-  takeControl(_botId: string): void {
-    throw new Error(TAKE_CONTROL_UNAVAILABLE);
+  /** The person's hands on the seat. `controlSession` is the live way in;
+   * this alone (without a session) still pauses the agent. */
+  takeControl(botId: string): void {
+    const seat = this.seat(botId);
+    if (seat.userInControl) return;
+    seat.userInControl = true;
+    this.options.onStateChanged?.(botId);
   }
 
-  giveBack(_botId: string): void {}
+  giveBack(botId: string): void {
+    const seat = this.seats.get(botId);
+    if (!seat || !seat.userInControl) return;
+    seat.userInControl = false;
+    this.options.onStateChanged?.(botId);
+  }
 
-  userHasControl(_botId: string): boolean {
-    return false;
+  userHasControl(botId: string): boolean {
+    return this.seats.get(botId)?.userInControl === true;
+  }
+
+  /**
+   * Take control, live: make sure the control daemon runs on the machine
+   * with a fresh secret for this session, expose its port, and hand back
+   * the one URL that reaches this agent's seat. The agent is paused from
+   * here until `giveBack`. The secret is new on every call, so a URL from
+   * an earlier session opens nothing.
+   */
+  async controlSession(botId: string): Promise<ComputerControlSession> {
+    const secret = randomBytes(24).toString("hex");
+    const response = await this.serial(botId, () => this.call(botId, { op: "control", agent: agentSlug(botId), secret }));
+    const port = Number(response.control?.port) || CONTROL_PORT;
+    const hosted = await this.options.machine.hostPort(port, "BizOS control");
+    const base = hosted.url.replace(/^https:/, "wss:").replace(/\/+$/, "");
+    this.takeControl(botId);
+    return {
+      url: `${base}/control?k=${encodeURIComponent(secret)}&agent=${encodeURIComponent(agentSlug(botId))}`,
+      width: positive(response.width, SCREEN_WIDTH),
+      height: positive(response.height, SCREEN_HEIGHT),
+    };
   }
 
   navigateForUser(_botId: string, _what: "back" | "forward" | "reload"): void {
@@ -254,7 +302,7 @@ export class BoatComputerBackend implements ManagedComputerBackend {
   private seat(botId: string): Seat {
     let seat = this.seats.get(botId);
     if (!seat) {
-      seat = { status: "starting", url: "", title: "", frame: null, frameAt: null, cookieHosts: null, tail: Promise.resolve() };
+      seat = { status: "starting", url: "", title: "", frame: null, frameAt: null, cookieHosts: null, userInControl: false, tail: Promise.resolve() };
       this.seats.set(botId, seat);
     }
     return seat;
