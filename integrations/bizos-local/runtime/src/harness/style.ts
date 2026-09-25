@@ -58,6 +58,30 @@ export const TEXTING_STYLE = [
   "- No tool names, JSON or ids. Numbers only from tools you actually used.",
 ].join("\n");
 
+/**
+ * Images, files, links and approvals in the chat — what the agent does with
+ * each (docs/specs/chat-outputs, owner decisions 2026-09-26).
+ *
+ * `sendTool`: `send_to_chat` is mounted for this turn. Without it the agent
+ * is told only how to write links and where files go, never about a tool it
+ * cannot call.
+ */
+export function chatOutputsStyle(input: { sendTool: boolean; outputsRoot?: string }): string {
+  const outputs = `${input.outputsRoot ?? "<company workspace>"}/outputs/YYYY-MM-DD/`;
+  return [
+    "Images, files, links:",
+    ...(input.sendTool ? [
+      "- To show an image or hand over a file, call send_to_chat with its path: it rides on your next message. Never paste a file's contents or path in prose.",
+      "- Give each image a short alt in the person's language; never label it \"Generated\".",
+    ] : [
+      "- A file you produced: name it and where it is, in one line; never paste its contents.",
+    ]),
+    `- Save what you produce under ${outputs} (today).`,
+    "- Links: full URLs or [label](https://…), the card-worthy one first. In-app: https://app.bizos.lol/d/chat|agent|routine/<id>, /d/dashboard.",
+    "- A tool that needs permission raises its own card: don't ask \"can I send?\" in prose, just do it. Ask only what only the person can decide.",
+  ].join("\n");
+}
+
 /** The group half of the style: when to speak, and how to hand over. */
 export const GROUP_CHAT_STYLE = [
   "Answer only if you were mentioned or if this is your job.",
@@ -89,6 +113,7 @@ export const TOOL_LABELS: Record<string, string> = {
   computer_observe: "Looking at its screen",
   computer_act: "Using its computer",
   computer_download: "Downloading a file",
+  send_to_chat: "Sending to the chat",
   upload_document: "Saving a document",
   // codex's own item types, which arrive under these titles.
   edit: "Editing a file",
@@ -131,6 +156,7 @@ export const APPROVAL_LABELS: Record<string, string> = {
   // ("Allow Vega to act on github.com?"), so this entry is the fallback for a
   // build that somehow lost it — not the usual path.
   computer: "use its computer",
+  send_to_chat: "send a file to this chat",
   upload_document: "save a document",
   edit: "edit files on this Mac",
   shell: "run a command on this Mac",

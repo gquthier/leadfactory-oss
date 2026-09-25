@@ -336,6 +336,10 @@ export interface HarnessOptions {
   localTeamMcpScriptPath?: string;
   /** Optional local-only host tools. They never enter the cloud composition. */
   localTeamTools?(input: LocalTeamMountInput): CodexDynamicTool[];
+  /** Link previews for agent replies (`false` = never fetch). Absent ⇒ on. */
+  linkPreviews?: boolean;
+  /** Test seam for the preview fetch. */
+  fetchLinkPreview?: DispatchDependencies["fetchLinkPreview"];
   /** Called for completed, failed and cancelled local runs. */
   onLocalRunSettled?(runId: string): void;
   /** Called the moment a local run is asked to STOP, before the CLI settles. */
@@ -668,6 +672,8 @@ export class LocalBizosHarness {
       ...(options.onLocalRunSettled ? { onRunSettled: (runId: string) => options.onLocalRunSettled!(runId) } : {}),
       ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
       workspaceFor: (bot) => this.workspaceFor(bot),
+      ...(options.linkPreviews !== undefined ? { linkPreviews: options.linkPreviews } : {}),
+      ...(options.fetchLinkPreview ? { fetchLinkPreview: options.fetchLinkPreview } : {}),
       // Only a build with a machine tells its bots they have one.
       hasComputer: bot => !bot.id.startsWith("qchat_") && this.computerToolsAvailable(),
       sharedAccess: (bot) => ({
@@ -3332,6 +3338,12 @@ export class LocalBizosHarness {
 
   checkpointTask(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {
     return this.dispatcher.checkpointTask(scope, raw);
+  }
+
+  /** `send_to_chat`: files and images from the agent's workspace, on its
+   * current reply. See `Dispatcher.sendToChat`. */
+  sendToChat(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {
+    return this.dispatcher.sendToChat(scope, raw);
   }
 
   readonly runs = {

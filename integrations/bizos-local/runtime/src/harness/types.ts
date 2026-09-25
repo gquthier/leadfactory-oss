@@ -293,6 +293,38 @@ export interface StepItem {
 export interface AskChoice {
   value: string;
   label: string;
+  /** One line under the label, when the question came with one. */
+  description?: string;
+}
+
+/** How heavy a permission ask is — see `harness/ask-impact.ts`. */
+export type AskImpact = "low" | "medium" | "high";
+
+export interface AskDetails {
+  kind: "text" | "command" | "diff" | "recipients";
+  text?: string;
+  items?: string[];
+  added?: number;
+  removed?: number;
+}
+
+/** A link in a reply: the label the agent wrote (`[label](url)`) or the URL. */
+export interface ReplyLink {
+  label: string;
+  url: string;
+}
+
+/** The card for the first external link of a reply, fetched by the runtime
+ * (the sender). The image, when there is one, is a file the runtime keeps
+ * and serves like an attachment. */
+export interface LinkPreview {
+  url: string;
+  title?: string;
+  description?: string;
+  domain?: string;
+  /** ISO instant the page declares. */
+  date?: string;
+  image?: { id: string; path: string; contentType: string; size: number; width?: number; height?: number };
 }
 
 export type MessageBlock =
@@ -311,6 +343,18 @@ export type MessageBlock =
        * files — for the card's collapsed "Details". */
       detailText?: string;
       choices?: AskChoice[];
+      /** Verb first, for the card's title: "Send 12 emails", "Run `ls`".
+       * `summary` stays the fallback. */
+      action?: string;
+      /** What it acts on: the command, the file, the recipients. */
+      target?: string;
+      impact?: AskImpact;
+      /** Absent: the runtime cannot tell. */
+      reversible?: boolean;
+      /** Whether "Always allow" may be offered. Never for a high-impact or
+       * irreversible action (owner decision, 2026-09-26). */
+      allowAlways?: boolean;
+      details?: AskDetails;
       /** `expired` is NOT `answered`: nobody denied this, the window closed.
        * Rendering the two the same way told the user they had refused
        * something they never saw. */
@@ -321,8 +365,11 @@ export type MessageBlock =
   | { kind: "progress"; phase: string; detail?: string }
   | { kind: "steps"; items: StepItem[] }
   | { kind: "subagent"; name: string; summary?: string; state: "running" | "done" | "failed" }
-  | { kind: "image"; url: string; alt?: string }
-  | { kind: "file"; name: string; url?: string; mimeType?: string }
+  /** `url` is what the old renderer draws (a data URL for a person's
+   * upload). An agent's image adds `path` — the file, in the workspace, that
+   * the sidecar serves under `id` — and what it knows about it. */
+  | { kind: "image"; url: string; alt?: string; id?: string; path?: string; fileName?: string; mimeType?: string; size?: number; width?: number; height?: number }
+  | { kind: "file"; name: string; url?: string; mimeType?: string; id?: string; path?: string; size?: number }
   | { kind: "handoff"; fromBotId: string; toBotId: string; reason?: string }
   | { kind: "bot_message_sent"; toBotId: string; preview?: string }
   | { kind: "bot_message_received"; fromBotId: string; preview?: string };
@@ -347,6 +394,11 @@ export interface ThreadMessage {
   replyToMessageId?: string;
   runId?: string;
   thumbsUp?: boolean;
+  /** Links found in this reply's text, in reading order. */
+  links?: ReplyLink[];
+  /** The card for its first external link, once fetched (a later update to
+   * the same message — the reply itself never waits for it). */
+  preview?: LinkPreview;
   createdAt: string;
 }
 

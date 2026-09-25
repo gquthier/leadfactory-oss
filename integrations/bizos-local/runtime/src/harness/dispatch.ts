@@ -25,9 +25,10 @@
 import { STATIC_CLAUDE_MODELS } from "./claude-models.js";
 import { STATIC_CODEX_MODELS } from "./codex-models.js";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 import { homedir } from "node:os";
+import { pathToFileURL } from "node:url";
 import {
   MAX_RESTART_RESUMES,
   MAX_TASK_CONTINUATIONS,
@@ -80,6 +81,18 @@ import { singleLine } from "./prompt.js";
 import { redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
 import { approvalTitle, labelForTool } from "./style.js";
+import { assessAsk } from "./ask-impact.js";
+import {
+  extensionForImageType,
+  extractLinks,
+  fetchLinkPreview as defaultFetchLinkPreview,
+  formatBytes,
+  outputsDirFor,
+  parseSendToChat,
+  resolveAttachment,
+  type FetchedPreview,
+  type ResolvedAttachment,
+} from "./chat-outputs.js";
 import { classifyRoutineReply } from "./routine-run.js";
 import type { RunStore } from "./runs.js";
 import { safeFileName, type Storage } from "./storage.js";
@@ -276,6 +289,11 @@ export interface DispatchDependencies {
   startOpenAiTurn?: (input: OpenAiTurnInput) => CodexTurnHandle;
   environment?: Record<string, string | undefined>;
   retryScale?: number;
+  /** Link previews for the first external https link of a reply. `false`
+   * turns the fetch off (no egress for previews); absent ⇒ on. */
+  linkPreviews?: boolean;
+  /** Test seam for the preview fetch. */
+  fetchLinkPreview?: (url: string) => Promise<FetchedPreview | null>;
 }
 
 /** The Access grants that apply to one bot, resolved for one turn. */
@@ -352,6 +370,11 @@ interface ActiveTurn extends QueuedTurn {
    * `askId`; what is local is only WHO is waiting for the answer.
    */
   localAsks: Map<string, { approvalKey: string; settle(allowed: boolean): void }>;
+  /** Files and images `send_to_chat` staged for the NEXT reply message of
+   * this turn (`image` / `file` blocks), and the caption to use when no
+   * text comes with them. Drained when a reply lands; flushed at the end. */
+  pendingOutputs: MessageBlock[];
+  pendingCaption?: string;
   cancelled: boolean;
   /** The thread was cleared under this turn: its message no longer exists,
    * and nothing it produces from here may be written back. */
@@ -480,6 +503,24 @@ const TOOL_SCOPED_APPROVALS = new Set(["computer_observe", "computer_act", "comp
 
 export function approvalDetailFor(tool: string, detail: string): string {
   return TOOL_SCOPED_APPROVALS.has(tool) ? `mcp:${tool}` : detail;
+}
+
+/** The weight fields of an `ask` block (`ask-impact.ts`), never a throw:
+ * a card with no impact line beats no card at all. */
+function askWeight(input: { tool: string; summary?: string; detailText?: string }): Partial<Extract<MessageBlock, { kind: "ask" }>> {
+  try {
+    const weight = assessAsk(input);
+    return {
+      action: weight.action,
+      ...(weight.target ? { target: weight.target } : {}),
+      impact: weight.impact,
+      ...(weight.reversible !== undefined ? { reversible: weight.reversible } : {}),
+      allowAlways: weight.allowAlways,
+      ...(weight.details ? { details: weight.details } : {}),
+    };
+  } catch {
+    return {};
+  }
 }
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
@@ -931,6 +972,10 @@ export class Dispatcher {
       (candidate) => candidate.botId === input.botId && !candidate.cancelled && !candidate.discarded,
     );
     if (!turn) return Promise.resolve(false);
+    // `skip-all` is ONE global switch for every permission, whichever process
+    // asks: the CLIs never raise a card under it, and neither does this one.
+    // (A question to the person is not a permission and still goes through.)
+    if (this.deps.settings().local.permissions === "skip-all") return Promise.resolve(true);
     const askId = newAskId();
     return new Promise<boolean>((resolve) => {
       let settled = false;
@@ -949,6 +994,7 @@ export class Dispatcher {
         tool: "computer",
         summary: input.summary,
         ...(input.detailText ? { detailText: input.detailText } : {}),
+        ...askWeight({ tool: "computer", summary: input.summary, ...(input.detailText ? { detailText: input.detailText } : {}) }),
         status: "pending",
       });
       this.persist(turn);
@@ -1002,6 +1048,152 @@ export class Dispatcher {
     const task = parseTaskCheckpoint(raw);
     this.deps.runs.update(turn.runId, { task });
     return task;
+  }
+
+  /**
+   * `send_to_chat`: stage files and images from the agent's workspace on its
+   * current reply. They land as `image` / `file` blocks on the NEXT message
+   * this turn publishes (with its text, in order) — or on a message of their
+   * own at the end of the turn if no text follows.
+   *
+   * Nothing is copied: a file stays where the agent wrote it, and only a file
+   * inside the agent's folder or the company vault can be sent at all.
+   */
+  sendToChat(scope: { botId: string; threadId: string; runId: string }, raw: unknown): {
+    attached: Array<Pick<ResolvedAttachment, "id" | "kind" | "fileName" | "contentType" | "size" | "width" | "height" | "path">>;
+    note: string;
+  } {
+    const turn = this.active.get(scope.threadId);
+    if (!turn || turn.runId !== scope.runId || turn.botId !== scope.botId || turn.cancelled || turn.discarded) {
+      throw new Error("Sending to the chat requires the matching active run");
+    }
+    const bot = this.deps.bots.get(scope.botId);
+    if (!bot) throw new Error("Sending to the chat requires the matching active run");
+    const input = parseSendToChat(raw);
+    const roots = this.outputRootsFor(bot, scope.threadId);
+    const resolved = input.files.map((file) => resolveAttachment(file.path, roots, file.alt ? { alt: file.alt } : {}));
+    const blocks: MessageBlock[] = resolved.map((file) => file.kind === "image"
+      ? {
+          kind: "image", url: pathToFileURL(file.path).href, id: file.id, path: file.path, fileName: file.fileName,
+          mimeType: file.contentType, size: file.size,
+          ...(file.width !== undefined && file.height !== undefined ? { width: file.width, height: file.height } : {}),
+          ...(file.alt ? { alt: file.alt } : {}),
+        }
+      : { kind: "file", name: file.fileName, id: file.id, path: file.path, mimeType: file.contentType, size: file.size });
+    turn.pendingOutputs.push(...blocks);
+    if (input.caption) turn.pendingCaption = input.caption;
+    const outputs = outputsDirFor(roots[roots.length - 1]!, this.deps.clock.now());
+    const outside = resolved.filter((file) => !file.path.startsWith(`${outputs}${sep}`));
+    return {
+      attached: resolved.map(({ id, kind, fileName, contentType, size, width, height, path }) => ({
+        id, kind, fileName, contentType, size, path,
+        ...(width !== undefined && height !== undefined ? { width, height } : {}),
+      })),
+      note: [
+        `${resolved.length === 1 ? `${resolved[0]!.fileName} (${formatBytes(resolved[0]!.size)})` : `${resolved.length} files`} will be attached to your next message in this chat — write that message now; no need to repeat the path.`,
+        ...(outside.length ? [`Files you produce belong under ${outputs}; these were sent from where they are.`] : []),
+      ].join(" "),
+    };
+  }
+
+  /** Where an agent may send files from: its own folder, then the company
+   * vault when this turn has one. The LAST root is the company workspace,
+   * where `outputs/YYYY-MM-DD/` lives. */
+  private outputRootsFor(bot: Bot, threadId: string): string[] {
+    const canonical = (path: string): string => { try { return realpathSync(path); } catch { return path; } };
+    const own = canonical(this.deps.workspaceFor(bot));
+    const rawVault = this.deps.localArchitecture?.({ bot, threadId })?.sharedBrainPath;
+    const vault = rawVault ? canonical(rawVault) : null;
+    return vault && vault !== own ? [own, vault] : [own];
+  }
+
+  private drainOutputs(turn: ActiveTurn): MessageBlock[] {
+    const blocks = turn.pendingOutputs.splice(0);
+    delete turn.pendingCaption;
+    return blocks;
+  }
+
+  /**
+   * Outputs staged after the last reply of a turn — or in a turn that ended
+   * with none — still reach the chat, on a message of their own, captioned
+   * with what the tool call said. A silent routine publishes nothing, and
+   * neither does a cancelled or discarded turn.
+   */
+  private flushOutputs(
+    turn: ActiveTurn,
+    bot: Bot,
+    state: { text: string },
+    quiet: { outcome: RoutineRunOutcome; published: string } | null,
+  ): void {
+    if (!turn.pendingOutputs.length) return;
+    if (turn.cancelled || turn.discarded || quiet?.outcome === "silent" || quiet?.outcome === "cancelled") { this.drainOutputs(turn); return; }
+    const caption = turn.pendingCaption;
+    const blocks = this.drainOutputs(turn);
+    if (turn.publicMessagesEnabled) {
+      const found = caption ? extractLinks(caption) : { links: [], previewUrl: null };
+      const message = this.deps.threads.append(turn.threadId, {
+        role: "bot", deliveryState: "complete",
+        blocks: [...(caption ? [{ kind: "text" as const, text: caption }] : []), ...blocks],
+        botId: bot.id, runId: turn.runId,
+        ...(found.links.length ? { links: found.links } : {}),
+      });
+      this.deps.runs.update(turn.runId, { messageId: message.id });
+      this.deps.events.publish({ type: "thread.message.created", threadId: turn.threadId, message });
+      this.previewLater(turn, message, found.previewUrl);
+      return;
+    }
+    if (caption && !state.text.trim()) {
+      state.text = caption;
+      turn.message.blocks.push({ kind: "text", text: caption });
+    }
+    turn.message.blocks.push(...blocks);
+    this.persist(turn);
+  }
+
+  /**
+   * The card for a reply's first external link, fetched AFTER the reply is
+   * in the chat: the words never wait for a web page. When it arrives, the
+   * message is rewritten in place and `thread.message.updated` says so; when
+   * it does not, nothing happens at all.
+   */
+  private previewLater(turn: ActiveTurn, message: ThreadMessage, url: string | null): void {
+    if (!url || this.deps.linkPreviews === false) return;
+    const fetchPreview = this.deps.fetchLinkPreview ?? ((target: string) => defaultFetchLinkPreview(target));
+    void fetchPreview(url).then((preview) => {
+      if (!preview || turn.discarded) return;
+      // The thread may have been cleared meanwhile: never resurrect a message.
+      const current = this.deps.threads.get(message.threadId, message.id);
+      if (!current) return;
+      const image = preview.image ? this.storePreviewImage(preview.image) : null;
+      current.preview = {
+        url: preview.url,
+        domain: preview.domain,
+        ...(preview.title ? { title: preview.title } : {}),
+        ...(preview.description ? { description: preview.description } : {}),
+        ...(preview.date ? { date: preview.date } : {}),
+        ...(image ? { image } : {}),
+      };
+      this.deps.threads.replace(current);
+      this.deps.events.publish({ type: "thread.message.updated", threadId: current.threadId, message: current });
+    }).catch(() => undefined);
+  }
+
+  /** A preview image is kept in the runtime's own state (never in the
+   * transcript, never in the workspace) and served like an attachment. */
+  private storePreviewImage(image: NonNullable<FetchedPreview["image"]>): NonNullable<ThreadMessage["preview"]>["image"] | null {
+    try {
+      const directory = join(this.deps.storage.layout.root, "previews");
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const id = `prv_${createHash("sha256").update(image.bytes).digest("hex").slice(0, 24)}`;
+      const path = join(directory, `${id}${extensionForImageType(image.contentType)}`);
+      writeFileSync(path, image.bytes, { mode: 0o600 });
+      return {
+        id, path, contentType: image.contentType, size: image.bytes.length,
+        ...(image.width !== undefined && image.height !== undefined ? { width: image.width, height: image.height } : {}),
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -1505,6 +1697,7 @@ export class Dispatcher {
       ...(queued.routineId || queued.heartbeat ? { quietTexts: [...(queued.quietTexts ?? [])] } : {}),
       finalText: "",
       localAsks: new Map(),
+      pendingOutputs: [],
       cancelled: false,
       discarded: false,
       ...(plan ? { planId: plan.id, planProvider: plan.provider } : {}),
@@ -2022,7 +2215,13 @@ export class Dispatcher {
 
       case "item.completed": {
         if (event.itemType === "assistant_text") {
-          if (!turn.publicMessagesEnabled) { state.text = event.text; upsertLegacyText(); this.persist(turn); break; }
+          if (!turn.publicMessagesEnabled) {
+            state.text = event.text;
+            upsertLegacyText();
+            turn.message.blocks.push(...this.drainOutputs(turn));
+            this.persist(turn);
+            break;
+          }
           if (turn.cancelled) break;
           if (!event.text.trim()) {
             if (event.phase === "final_answer") { turn.finalText = ""; state.text = ""; }
@@ -2040,13 +2239,19 @@ export class Dispatcher {
             turn.quietTexts.push(event.text);
             break;
           }
+          const found = extractLinks(event.text);
           const message = this.deps.threads.append(turn.threadId, {
-            role: "bot", deliveryState: "complete", blocks: [{ kind: "text", text: event.text }],
+            role: "bot", deliveryState: "complete",
+            // The words first, then what `send_to_chat` staged: one message,
+            // text and attachments together, in the order they were given.
+            blocks: [{ kind: "text", text: event.text }, ...this.drainOutputs(turn)],
             botId: bot.id, runId: turn.runId,
             ...(turn.message.replyToMessageId ? { replyToMessageId: turn.message.replyToMessageId } : {}),
+            ...(found.links.length ? { links: found.links } : {}),
           });
           this.deps.runs.update(turn.runId, { messageId: message.id });
           this.deps.events.publish({ type: "thread.message.created", threadId: turn.threadId, message });
+          this.previewLater(turn, message, found.previewUrl);
         } else {
           const step = state.steps.find((candidate) => candidate.id === event.itemId);
           if (step) step.state = event.ok ? "done" : "failed";
@@ -2091,6 +2296,9 @@ export class Dispatcher {
             fallback: event.summary,
           }),
           ...(event.detailText ? { detailText: event.detailText } : {}),
+          ...(event.requestType === "permission"
+            ? askWeight({ tool: event.tool, summary: event.summary, ...(event.detailText ? { detailText: event.detailText } : {}) })
+            : {}),
           status: "pending",
           ...(event.choices?.length
             ? { choices: event.choices.map((label) => ({ value: label, label })) }
@@ -2291,6 +2499,7 @@ export class Dispatcher {
     turn.localAsks.clear();
     this.persist(turn);
     const quiet = this.deliverQuiet(turn, bot, state, ok);
+    this.flushOutputs(turn, bot, state, quiet);
 
     // One preview, for the roster row and for the system notification alike:
     // the message is whole, so there is no longer a "first paragraph" that says
@@ -2380,14 +2589,19 @@ export class Dispatcher {
     }
     let lastMessageId: string | undefined;
     if (turn.publicMessagesEnabled) {
-      for (const text of texts) {
+      texts.forEach((text, index) => {
+        const found = extractLinks(text);
         const message = this.deps.threads.append(turn.threadId, {
-          role: "bot", deliveryState: "complete", blocks: [{ kind: "text", text }],
+          role: "bot", deliveryState: "complete",
+          // What the routine attached rides on its last message.
+          blocks: [{ kind: "text", text }, ...(index === texts.length - 1 ? this.drainOutputs(turn) : [])],
           botId: bot.id, runId: turn.runId,
+          ...(found.links.length ? { links: found.links } : {}),
         });
         lastMessageId = message.id;
         this.deps.events.publish({ type: "thread.message.created", threadId: turn.threadId, message });
-      }
+        this.previewLater(turn, message, found.previewUrl);
+      });
     } else if (!turn.discarded) {
       // The legacy transcript streamed into the turn's own message: a silent
       // verdict is taken back out of it, a [DONE] marker is stripped.
@@ -2395,6 +2609,7 @@ export class Dispatcher {
       if (index >= 0) {
         if (texts.length) turn.message.blocks[index] = { kind: "text", text: texts.join("\n\n") };
         else turn.message.blocks.splice(index, 1);
+        if (texts.length) turn.message.blocks.push(...this.drainOutputs(turn));
         this.persist(turn);
       }
     }

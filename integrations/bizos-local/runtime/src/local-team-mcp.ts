@@ -105,6 +105,31 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
     additionalProperties: false,
   },
 }, {
+  name: "send_to_chat",
+  description: "Put files or images from your workspace into this chat, attached to your next message (same message as your text, in order). Use it to show a screenshot or an image you made, or to hand over a report, sheet, PDF or any file — never paste a file's contents or its path in prose instead. Files must be inside your workspace; they stay where they are (save what you produce under outputs/YYYY-MM-DD/ of the company workspace). Up to 10 per call. Give each image a short alt text in the person's language; never label an image \"Generated\".",
+  inputSchema: {
+    type: "object",
+    properties: {
+      files: {
+        type: "array",
+        minItems: 1,
+        maxItems: 10,
+        items: {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Absolute path, or relative to your workspace folder." },
+            alt: { type: "string", maxLength: 200, description: "For an image: what it shows, one short sentence in the person's language." },
+          },
+          required: ["path"],
+          additionalProperties: false,
+        },
+      },
+      caption: { type: "string", maxLength: 2000, description: "Optional: the text to send with the files if you write nothing else afterwards." },
+    },
+    required: ["files"],
+    additionalProperties: false,
+  },
+}, {
   name: "cloud_computer_wake",
   description: `${CLOUD_NOTE} Wake it (created the first time); the other cloud tools also wake it by themselves.`,
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -193,6 +218,7 @@ const callRecruit: TeamCall = (input) => callEndpoint("/api/internal/local-team/
 const callManage: TeamCall = (input) => callEndpoint("/api/internal/local-team/manage", input);
 const callSchedule: TeamCall = (input) => callEndpoint("/api/internal/local-team/routine", input);
 const callCheckpoint: TeamCall = (input) => callEndpoint("/api/internal/local-team/checkpoint", input);
+const callSend: TeamCall = (input) => callEndpoint("/api/internal/local-team/send", input);
 /** One endpoint for every pack tool: `{ tool, arguments }`. */
 const callPack: TeamCall = (input) => callEndpoint("/api/internal/local-team/pack", input);
 /** One endpoint for the cloud computer tools: `{ tool, arguments }`. A wake
@@ -232,6 +258,8 @@ export interface LocalTeamMcpOptions {
   cloud?: TeamCall;
   /** The agent's own computer (`--toolset=…,computer`; defaults to the sidecar route). */
   computer?: TeamCall;
+  /** `send_to_chat` (defaults to the sidecar route). */
+  send?: TeamCall;
 }
 
 const READ_ONLY_TOOL = /^(agency|commerce)_(context|schema|list_|read_)/;
@@ -247,6 +275,7 @@ export async function handleLocalTeamMessage(
   const invokePack = options.pack ?? null;
   const invokeCloud = options.cloud ?? callCloud;
   const invokeComputer = options.computer ?? callComputer;
+  const invokeSend = options.send ?? callSend;
   const toolsets = options.toolsets ?? new Set(invokePack ? ["team", "agency", "commerce"] : ["team"]);
   const id = message.id;
   const method = message.method;
@@ -289,6 +318,7 @@ export async function handleLocalTeamMessage(
       if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
+      if (params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
       if (isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
       if (toolsets.has("computer") && isComputerToolName(params.name)) {
         return reply(computerResult(await invokeComputer({ tool: params.name, arguments: params.arguments ?? {} })));

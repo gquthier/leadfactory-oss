@@ -131,6 +131,7 @@ export class ThreadStore {
        * so a crash right after the append leaves a message it can find and
        * never a second copy. */
       id?: string;
+      links?: ThreadMessage["links"];
     },
   ): ThreadMessage {
     const message: ThreadMessage = {
@@ -143,6 +144,7 @@ export class ThreadStore {
       ...(input.botId ? { botId: input.botId } : {}),
       ...(input.runId ? { runId: input.runId } : {}),
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+      ...(input.links?.length ? { links: input.links } : {}),
       createdAt: this.clock.nowIso(),
     };
     this.storage.appendNdjson(this.storage.threadPath(threadId), message);
