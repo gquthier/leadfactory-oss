@@ -1481,6 +1481,21 @@ export class CollaborationFacade {
     const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));
     return { bot, agent, thread };
   }
+  /** The owner's own photo for an agent: stops any generation, replaces the picture. */
+  async setBotAvatar(id: string, raw: unknown) {
+    const input = objectBody(raw, ["dataUrl"]);
+    if (!(await this.bots()).some((bot) => bot.id === id)) throw new HttpError(404, "not_found", "Bot not found.");
+    let avatar: { dataUrl: string } | null = null;
+    if (input.dataUrl !== null) {
+      try { avatar = { dataUrl: parseAvatarDataUrl(input.dataUrl).dataUrl }; }
+      catch (error) { throw new HttpError(400, "invalid_avatar", error instanceof Error ? error.message : String(error)); }
+    }
+    const bot = await this.invoke<Bot>("lbz:bots:setAvatar", [id, avatar]);
+    const bootstrap = await this.bootstrap();
+    const agent = this.agent(bot);
+    const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));
+    return { bot, agent, thread };
+  }
   claimAvatarWorker(raw: unknown) {
     const input = objectBody(raw, ["workerId", "configured"]);
     const workerId = requiredString(input.workerId, "workerId", 128);
@@ -2575,6 +2590,8 @@ async function serve(): Promise<void> {
       if (generateAvatarBotId && method === "POST") {
         return sendJson(response, 200, await facade.generateAvatar(generateAvatarBotId, await bodyOf(request)));
       }
+      const avatarBotId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)\/avatar$/);
+      if (avatarBotId && method === "PUT") return sendJson(response, 200, await facade.setBotAvatar(avatarBotId, await bodyOf(request)));
       const botId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)$/);
       if (botId && method === "PATCH") return sendJson(response, 200, await facade.updateBot(botId, await bodyOf(request)));
       if (method === "GET" && url.pathname === "/api/local/plans") return sendJson(response, 200, { plans: await facade.plans() });
