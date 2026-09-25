@@ -2455,7 +2455,7 @@ async function serve(): Promise<void> {
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
       // The web dashboard link (device-code flow + snapshot push). The device
       // token never crosses this boundary; only status does.
-      if (url.pathname === "/api/local/cloud-link" || url.pathname === "/api/local/cloud-link/start") {
+      if (url.pathname === "/api/local/cloud-link" || url.pathname === "/api/local/cloud-link/start" || url.pathname === "/api/local/cloud-link/cancel") {
         if (!cloudLink) throw new HttpError(503, "starting", "The web dashboard link is starting.");
         try {
           if (method === "GET" && url.pathname === "/api/local/cloud-link") return sendJson(response, 200, cloudLink.status());
@@ -2469,6 +2469,9 @@ async function serve(): Promise<void> {
             const workspaceName = optionalString(input.workspaceName, "workspaceName", 120);
             if (workspaceName) cloudLink.setWorkspaceName(workspaceName);
             return sendJson(response, 200, await cloudLink.start());
+          }
+          if (method === "POST" && url.pathname === "/api/local/cloud-link/cancel") {
+            return sendJson(response, 200, { cancelled: cloudLink.cancelPending() });
           }
           if (method === "DELETE" && url.pathname === "/api/local/cloud-link") {
             await cloudLink.unlink();

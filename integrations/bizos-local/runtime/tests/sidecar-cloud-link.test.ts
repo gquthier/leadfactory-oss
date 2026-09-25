@@ -118,6 +118,11 @@ describe.skipIf(!built)("Cloud link HTTP boundary", () => {
     expect(linked).toMatchObject({ linked: true, orgName: "Acme", dashboardUrl: `${webOrigin}/desktop`, workspaceName: "Acme Studio" });
     expect(JSON.stringify(linked)).not.toContain(TOKEN);
 
+    const lateCancel = await api("POST", "/api/local/cloud-link/cancel");
+    expect(lateCancel).toEqual({ status: 200, body: { cancelled: false } });
+    expect((await api("GET", "/api/local/cloud-link")).body.linked).toBe(true);
+    expect(deletes).toHaveLength(0);
+
     const summary = (await api("GET", "/api/local/dashboard-summary")).body;
     const pushed = snapshots[0];
     expect(pushed).toMatchObject({ workspaceId, workspaceName: "Acme Studio" });
