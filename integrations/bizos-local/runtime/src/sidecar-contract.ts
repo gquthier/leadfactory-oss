@@ -16,6 +16,8 @@ export const LOCAL_BACKEND_CAPABILITIES = {
   computer: false,
   devices: false,
   sharedWorkspaceContext: false,
+  /** `/api/local/cloud-link`: mirror the dashboard summary to the web. */
+  webDashboard: true,
 } as const;
 
 export const LOCAL_PROVIDERS = ["codex", "claude", "cursor", "ollama"] as const;

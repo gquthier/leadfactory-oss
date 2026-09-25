@@ -78,6 +78,7 @@ import { pairingAdminRoute } from "./mobile/admin-routes.js";
 import { createMobileBackend } from "./mobile/backend.js";
 import { RelayConnector } from "./mobile/connector.js";
 import { readLocalDashboardSummary, type DashboardPlan, type DashboardProvider } from "./dashboard-summary.js";
+import { CloudLink, CloudLinkError, DEFAULT_WEB_ORIGIN, webOrigin } from "./cloud-link.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_ROOT_VARIABLE = "LOCALBIZOS_SIDECAR_STATE";
@@ -2381,6 +2382,7 @@ async function serve(): Promise<void> {
   let connector: RelayConnector | null = null;
   let packs: Packs | null = null;
   let cloud: CloudComputer | null = null;
+  let cloudLink: CloudLink | null = null;
   const packOf = (botId: string): PackService | null =>
     packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
   let origin = "";
@@ -2451,6 +2453,33 @@ async function serve(): Promise<void> {
       const computerSetUp = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/setup$/);
       if (computerSetUp && method === "POST") return sendJson(response, 200, await facade.computerSetUp(computerSetUp));
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
+      // The web dashboard link (device-code flow + snapshot push). The device
+      // token never crosses this boundary; only status does.
+      if (url.pathname === "/api/local/cloud-link" || url.pathname === "/api/local/cloud-link/start") {
+        if (!cloudLink) throw new HttpError(503, "starting", "The web dashboard link is starting.");
+        try {
+          if (method === "GET" && url.pathname === "/api/local/cloud-link") return sendJson(response, 200, cloudLink.status());
+          if (method === "PATCH" && url.pathname === "/api/local/cloud-link") {
+            const input = objectBody(await bodyOf(request), ["workspaceName"]);
+            cloudLink.setWorkspaceName(requiredString(input.workspaceName, "workspaceName", 120));
+            return sendJson(response, 200, cloudLink.status());
+          }
+          if (method === "POST" && url.pathname === "/api/local/cloud-link/start") {
+            const input = objectBody(await bodyOf(request), ["workspaceName"]);
+            const workspaceName = optionalString(input.workspaceName, "workspaceName", 120);
+            if (workspaceName) cloudLink.setWorkspaceName(workspaceName);
+            return sendJson(response, 200, await cloudLink.start());
+          }
+          if (method === "DELETE" && url.pathname === "/api/local/cloud-link") {
+            await cloudLink.unlink();
+            return sendJson(response, 200, cloudLink.status());
+          }
+        } catch (error) {
+          if (error instanceof CloudLinkError) throw new HttpError(error.status, error.code, error.message);
+          throw error;
+        }
+        throw new HttpError(405, "method_not_allowed", "Method not allowed.");
+      }
       if (url.pathname === "/api/local/quick-chats" && method === "GET") return sendJson(response, 200, await facade.quickChats("list"));
       if (url.pathname === "/api/local/quick-chats" && method === "POST") return sendJson(response, 201, await facade.createQuickChat(await bodyOf(request)));
       const quickChat = /^\/api\/local\/quick-chats\/(qchat_[a-f0-9]{32})(?:\/(messages|stop|answer))?$/.exec(url.pathname);
@@ -2849,6 +2878,23 @@ async function serve(): Promise<void> {
     allowInsecureLoopbackRelay: process.env.LOCALBIZOS_ALLOW_INSECURE_LOOPBACK_RELAY === "1",
   });
   connector.start();
+  let webOriginValue = DEFAULT_WEB_ORIGIN;
+  try {
+    webOriginValue = webOrigin(process.env.BIZOS_WEB_ORIGIN);
+  } catch (error) {
+    log(`web dashboard: ${error instanceof Error ? error.message : String(error)}; using ${DEFAULT_WEB_ORIGIN}`);
+  }
+  // One company per sidecar: the id the desktop bootstrap and the summary
+  // already report. Its display name comes from the desktop (PATCH / start).
+  cloudLink = new CloudLink({
+    root: harnessRoot,
+    origin: webOriginValue,
+    workspaceId: localFacade.workspaceId,
+    summary: () => localFacade.localDashboardSummary(),
+    subscribe: (listener) => harness.events.subscribe(() => listener()),
+    log,
+  });
+  cloudLink.begin();
   const descriptor: Descriptor = { version: 1, origin, token, instanceId: id, pid: process.pid };
   privateWrite(descriptorPath, `${JSON.stringify(descriptor)}\n`);
 
@@ -2861,6 +2907,7 @@ async function serve(): Promise<void> {
       try { unlinkSync(descriptorPath); } catch {}
     }
     connector?.stop();
+    cloudLink?.stop();
     harness.stop();
     // Stop accepting calls immediately, but keep the process and state lock
     // until the CLI/MCP groups have exited (including SIGKILL escalation).
