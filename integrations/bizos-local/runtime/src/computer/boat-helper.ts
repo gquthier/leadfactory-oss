@@ -796,6 +796,7 @@ async function controlSession(ws, query) {
     if (event.t === "nav") {
       enqueue(async () => {
         if (event.what === "reload") { await cdp.send("Page.reload", {}, 5000); return; }
+        if (event.what === "url") { if (/^https?:\/\//i.test(String(event.url || ""))) await cdp.send("Page.navigate", { url: String(event.url) }, 10000); return; }
         const history = await cdp.send("Page.getNavigationHistory", {}, 3000);
         const index = Number(history.currentIndex) || 0;
         const target = (Array.isArray(history.entries) ? history.entries : [])[event.what === "back" ? index - 1 : index + 1];
