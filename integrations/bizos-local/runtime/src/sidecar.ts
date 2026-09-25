@@ -12,6 +12,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -25,6 +26,11 @@ import {
   targetForThreadId,
   threadIdForTarget,
   type AskAnswer,
+  type AskAnsweredKind,
+  type AskChoice,
+  type AskDetails,
+  type AskImpact,
+  type AskStatus,
   type Bot,
   type Group,
   type MessageBlock,
@@ -35,6 +41,7 @@ import {
   type ThreadTarget,
 } from "./harness/types.js";
 import { buildHandlers, runHandler } from "./ipc.js";
+import { mimeTypeFor } from "./harness/chat-outputs.js";
 import type { RuntimeSettings, Routine } from "./harness/types.js";
 import type { PublicPlan } from "./harness/plan-types.js";
 import {
@@ -104,11 +111,60 @@ interface Descriptor {
   pid: number;
 }
 
+/** One file or image an agent sent (docs/specs/chat-outputs/01, 02). The
+ * bytes are at `path` in the workspace; `url` serves the same bytes from
+ * this sidecar under the owner bearer (`GET /api/local/attachments/<id>`),
+ * for a client that would rather not read the disk itself. */
+export interface CollaborationAttachment {
+  id: string;
+  kind: "image" | "file";
+  fileName: string;
+  contentType: string;
+  size?: number;
+  width?: number;
+  height?: number;
+  alt?: string;
+  path?: string;
+  url: string;
+  status: "ready";
+}
+
+/** The card for a reply's first external link (03-links.md §6). */
+export interface CollaborationPreview {
+  url: string;
+  title?: string;
+  description?: string;
+  domain?: string;
+  date?: string;
+  image?: { id: string; url: string; contentType: string; size: number; width?: number; height?: number };
+}
+
+/** A permission or question card, with the weight fields of 04-approvals.md. */
+export interface CollaborationAsk {
+  askId: string;
+  runId: string;
+  requestType: "permission" | "question";
+  tool: string;
+  summary: string;
+  detailText?: string;
+  choices?: AskChoice[];
+  action?: string;
+  target?: string;
+  impact?: AskImpact;
+  reversible?: boolean;
+  allowAlways?: boolean;
+  details?: AskDetails;
+  status: AskStatus;
+  answered?: { kind: AskAnsweredKind; at: string };
+}
+
 interface CollaborationMessage {
   deliveryState?: "complete";
   id: string;
   threadId: string;
   role: "user" | "assistant";
+  /** The words, exactly as before attachments existed: an older desktop
+   * sees the same text it always did. */
   content: string;
   createdAt: string;
   senderType: "human" | "agent" | "assistant";
@@ -118,6 +174,12 @@ interface CollaborationMessage {
   clientMessageId: string | null;
   runId: string | null;
   replyToMessageId: string | null;
+  /** Additive (2026-09-26): absent when there is nothing of the kind. */
+  attachments?: CollaborationAttachment[];
+  links?: Array<{ label: string; url: string }>;
+  preview?: CollaborationPreview;
+  /** The latest ask card on this message, when it carries one. */
+  ask?: CollaborationAsk;
 }
 
 class HttpError extends Error {
@@ -456,6 +518,102 @@ function textOf(blocks: readonly MessageBlock[]): string {
   }).filter(Boolean).join("\n\n").slice(0, 20_000);
 }
 
+/** `/api/local/attachments/<id>`, relative to this sidecar's origin. */
+function attachmentUrl(id: string): string {
+  return `/api/local/attachments/${encodeURIComponent(id)}`;
+}
+
+/** The `image` / `file` blocks of a message as the desktop contract. Only
+ * an agent's attachment (one with an `id` and a `path`) is listed: a
+ * person's own upload already reached the desktop as a data URL. */
+function attachmentsOf(blocks: readonly MessageBlock[]): CollaborationAttachment[] {
+  const out: CollaborationAttachment[] = [];
+  for (const block of blocks) {
+    if (block.kind === "image" && block.id && block.path) {
+      out.push({
+        id: block.id, kind: "image", fileName: block.fileName ?? basename(block.path),
+        contentType: block.mimeType ?? "application/octet-stream",
+        ...(block.size !== undefined ? { size: block.size } : {}),
+        ...(block.width !== undefined && block.height !== undefined ? { width: block.width, height: block.height } : {}),
+        ...(block.alt ? { alt: block.alt } : {}),
+        path: block.path, url: attachmentUrl(block.id), status: "ready",
+      });
+    } else if (block.kind === "file" && block.id && block.path) {
+      out.push({
+        id: block.id, kind: "file", fileName: block.name, contentType: block.mimeType ?? "application/octet-stream",
+        ...(block.size !== undefined ? { size: block.size } : {}),
+        path: block.path, url: attachmentUrl(block.id), status: "ready",
+      });
+    }
+  }
+  return out;
+}
+
+function askOf(block: Extract<MessageBlock, { kind: "ask" }>, status: AskStatus = block.status): CollaborationAsk {
+  return {
+    askId: block.askId,
+    runId: block.runId,
+    requestType: block.requestType,
+    tool: block.tool,
+    summary: block.summary,
+    ...(block.detailText ? { detailText: block.detailText } : {}),
+    ...(block.choices ? { choices: block.choices } : {}),
+    ...(block.action ? { action: block.action } : {}),
+    ...(block.target ? { target: block.target } : {}),
+    ...(block.impact ? { impact: block.impact } : {}),
+    ...(block.reversible !== undefined ? { reversible: block.reversible } : {}),
+    ...(block.allowAlways !== undefined ? { allowAlways: block.allowAlways } : {}),
+    ...(block.details ? { details: block.details } : {}),
+    status,
+    ...(block.answered ? { answered: block.answered } : {}),
+  };
+}
+
+function previewOfMessage(message: ThreadMessage): CollaborationPreview | undefined {
+  const preview = message.preview;
+  if (!preview) return undefined;
+  return {
+    url: preview.url,
+    ...(preview.title ? { title: preview.title } : {}),
+    ...(preview.description ? { description: preview.description } : {}),
+    ...(preview.domain ? { domain: preview.domain } : {}),
+    ...(preview.date ? { date: preview.date } : {}),
+    ...(preview.image ? { image: {
+      id: preview.image.id, url: attachmentUrl(preview.image.id), contentType: preview.image.contentType, size: preview.image.size,
+      ...(preview.image.width !== undefined && preview.image.height !== undefined ? { width: preview.image.width, height: preview.image.height } : {}),
+    } } : {}),
+  };
+}
+
+/**
+ * The files this sidecar may serve, by attachment id.
+ *
+ * Filled from the messages it serialises — the transcript is the record of
+ * what an agent sent — never from a request. Serving checks the file is still
+ * the same regular file (no symlink swapped in since) before a byte leaves.
+ */
+class AttachmentRegistry {
+  private readonly paths = new Map<string, string>();
+
+  remember(id: string, path: string): void {
+    if (/^(?:att|prv)_[A-Za-z0-9]+$/.test(id) && path) this.paths.set(id, path);
+  }
+
+  /** The path, or null when unknown or no longer a plain file at that path. */
+  resolve(id: string): string | null {
+    const path = this.paths.get(id);
+    if (!path) return null;
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isFile()) return null;
+      if (realpathSync(path) !== path) return null;
+      return path;
+    } catch {
+      return null;
+    }
+  }
+}
+
 interface TeamCapability {
   botId: string;
   threadId: string;
@@ -555,6 +713,9 @@ export class CollaborationFacade {
 
   /** Open `GET /api/local/events` streams. */
   readonly streams = new LocalEventHub();
+
+  /** Files agents sent, for `GET /api/local/attachments/<id>`. */
+  readonly attachments = new AttachmentRegistry();
 
   private onHarnessEvent(event: ProductEvent): void {
     try {
@@ -794,6 +955,11 @@ export class CollaborationFacade {
     const publicThreadId = this.publicThreadId(target);
     const botId = message.botId ?? ("botId" in target ? target.botId : undefined);
     const bot = botId ? bots.find((candidate) => candidate.id === botId) : undefined;
+    const attachments = message.role === "bot" ? attachmentsOf(publicBlocks) : [];
+    for (const attachment of attachments) if (attachment.path) this.attachments.remember(attachment.id, attachment.path);
+    const preview = message.role === "bot" ? previewOfMessage(message) : undefined;
+    if (message.preview?.image) this.attachments.remember(message.preview.image.id, message.preview.image.path);
+    const askBlock = [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "ask" }> => block.kind === "ask");
     return {
       id: this.messageId(message.id),
       threadId: publicThreadId,
@@ -808,7 +974,20 @@ export class CollaborationFacade {
       clientMessageId: this.clientIdForMessage(message.id),
       runId: message.runId ? this.runId(message.runId) : null,
       replyToMessageId: message.replyToMessageId ? this.messageId(message.replyToMessageId) : null,
+      ...(attachments.length ? { attachments } : {}),
+      ...(message.links?.length ? { links: message.links } : {}),
+      ...(preview ? { preview } : {}),
+      ...(askBlock ? { ask: askOf(askBlock) } : {}),
     };
+  }
+
+  /** `GET /api/local/attachments/<id>`: the bytes of a file an agent sent,
+   * or of a link-preview image, from the transcript's own record. */
+  attachment(id: string): { path: string; contentType: string; size: number } | null {
+    const path = this.attachments.resolve(id);
+    if (!path) return null;
+    const contentType = mimeTypeFor(basename(path));
+    return { path, contentType, size: statSync(path).size };
   }
 
   private async thread(target: ThreadTarget, bots: readonly Bot[], groups: readonly Group[]) {
@@ -1322,16 +1501,7 @@ export class CollaborationFacade {
     const snapshot = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
     const approvals = snapshot.messages.flatMap((message) => message.blocks.flatMap((block) => {
       if (block.kind !== "ask" || block.runId !== runId) return [];
-      return [{
-        askId: block.askId,
-        requestType: block.requestType,
-        tool: block.tool,
-        summary: block.summary,
-        ...(block.detailText ? { detailText: block.detailText } : {}),
-        ...(block.choices ? { choices: block.choices } : {}),
-        status: terminal && block.status === "pending" ? "expired" : block.status,
-        ...(block.answered ? { answered: block.answered } : {}),
-      }];
+      return [askOf(block, terminal && block.status === "pending" ? "expired" : block.status)];
     }));
     return { runId: publicRunId, approvals };
   }
@@ -1686,6 +1856,17 @@ export class CollaborationFacade {
   /** An agent schedules a routine for itself or a teammate: the team tool. */
   checkpointTask(capability: TeamCapability, raw: unknown) {
     return this.harness.checkpointTask(capability, raw);
+  }
+
+  /** `send_to_chat`, under the calling run's capability: the files land on
+   * that run's next reply, in that run's thread, and nowhere else. */
+  sendToChat(capability: TeamCapability, raw: unknown) {
+    try {
+      return this.harness.sendToChat(capability, raw);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(422, "invalid_attachment", error instanceof Error ? error.message : String(error));
+    }
   }
 
   async scheduleRoutine(authorize: () => TeamCapability, raw: unknown): Promise<{ routine: PublicRoutine; nextRunAt: string | null; endsAt: string | null; note: string }> {
@@ -2429,6 +2610,9 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/internal/local-team/checkpoint") {
         return sendJson(response, 200, facade.checkpointTask(teamBroker.authorize(bearer), await bodyOf(request)));
       }
+      if (method === "POST" && url.pathname === "/api/internal/local-team/send") {
+        return sendJson(response, 200, facade.sendToChat(teamBroker.authorize(bearer), await bodyOf(request)));
+      }
       if (method === "POST" && (url.pathname === "/api/internal/local-team/agency" || url.pathname === "/api/internal/local-team/pack")) {
         return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
       }
@@ -2456,6 +2640,23 @@ async function serve(): Promise<void> {
         }
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      // A file an agent sent to the chat, or a link preview's image: the
+      // bytes, from the path the transcript recorded, owner-bearer only.
+      const attachmentId = routeId(url.pathname, /^\/api\/local\/attachments\/([^/]+)$/);
+      if (attachmentId && method === "GET") {
+        const found = facade.attachment(decodeURIComponent(attachmentId));
+        if (!found) throw new HttpError(404, "not_found", "Attachment not found.");
+        response.writeHead(200, {
+          "content-type": found.contentType,
+          "content-length": found.size,
+          "cache-control": "private, no-store",
+          "x-content-type-options": "nosniff",
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(basename(found.path))}`,
+          "referrer-policy": "no-referrer",
+        });
+        createReadStream(found.path).on("error", () => response.destroy()).pipe(response);
+        return;
+      }
       // An agent's computer as the desktop panel draws it: status, page and
       // its latest screen (the agent's own seat — never anybody else's).
       const computerBot = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)$/);
@@ -2796,6 +2997,7 @@ async function serve(): Promise<void> {
           const capability = teamBroker.authorize(session);
           if (tool.name === "recruit_agent") return facade.recruit(capability, argumentsValue);
           if (tool.name === "checkpoint_task") return facade.checkpointTask(capability, argumentsValue);
+          if (tool.name === "send_to_chat") return facade.sendToChat(capability, argumentsValue);
           return facade.manageAgent(capability, argumentsValue);
         },
       }));
