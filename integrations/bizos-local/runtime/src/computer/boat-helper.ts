@@ -49,7 +49,7 @@ export const PORT_BASE = 9300;
 /** The control daemon's port on the sandbox (bound 0.0.0.0 for Boat's route). */
 export const CONTROL_PORT = 9399;
 /** Screencast frames go through Boat's HTTPS route: keep them small. */
-export const CONTROL_JPEG_QUALITY = 60;
+export const CONTROL_JPEG_QUALITY = 50;
 
 /** An action as the helper runs it: page scripts are already built. */
 export type HelperAction =
