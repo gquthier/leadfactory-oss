@@ -336,7 +336,7 @@ export interface FetchedPreview {
   image?: { contentType: string; bytes: Uint8Array; width?: number; height?: number };
 }
 
-type FetchLike = (url: string, init?: { signal?: AbortSignal; headers?: Record<string, string>; redirect?: "follow" }) => Promise<{
+type FetchLike = (url: string, init?: { signal?: AbortSignal; headers?: Record<string, string>; redirect?: "manual" }) => Promise<{
   ok: boolean;
   status: number;
   headers: { get(name: string): string | null };
@@ -346,6 +346,9 @@ type FetchLike = (url: string, init?: { signal?: AbortSignal; headers?: Record<s
 
 export interface PreviewFetchOptions {
   fetch?: FetchLike;
+  /** Addresses a host name resolves to. Defaults to the system resolver when
+   * `fetch` is the real one; an injected `fetch` skips it unless given. */
+  lookup?: (hostname: string) => Promise<string[]>;
   timeoutMs?: number;
   maxHtmlBytes?: number;
   maxImageBytes?: number;
@@ -431,6 +434,63 @@ export function parsePreviewHtml(html: string, pageUrl: string): { title?: strin
 
 const PREVIEW_HEADERS = { accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5", "user-agent": "Mozilla/5.0 (compatible; BizOS link preview)" };
 
+const MAX_PREVIEW_REDIRECTS = 3;
+
+/** True for an IP literal on this Mac, its network or a private range. */
+export function isPrivateAddress(address: string): boolean {
+  const ip = address.replace(/^\[|\]$/g, "").toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
+  if (mapped) return isPrivateAddress(mapped[1]!);
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+  }
+  if (ip.includes(":")) {
+    return ip === "::" || ip === "::1" || /^f[cd]/.test(ip) || /^fe[89ab]/.test(ip);
+  }
+  return false;
+}
+
+/** Only a public https host: never this Mac, its network, or a private name. */
+export function isPublicPreviewHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  if (!host || host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".lan") || host.endsWith(".home.arpa")) return false;
+  if (/^[\d.]+$/.test(host) || host.includes(":") || host.startsWith("[")) return !isPrivateAddress(host);
+  return host.includes(".");
+}
+
+async function systemLookup(hostname: string): Promise<string[]> {
+  const { lookup } = await import("node:dns/promises");
+  return (await lookup(hostname, { all: true })).map((entry) => entry.address);
+}
+
+/**
+ * GET with redirects followed by hand, each hop re-checked: https only and a
+ * public host (and, with a resolver, public addresses), so a link or a
+ * redirect can never make the runtime read something on the person's network.
+ */
+async function fetchPublic(fetchImpl: FetchLike, start: URL, init: { signal: AbortSignal; headers: Record<string, string> }, lookup?: (hostname: string) => Promise<string[]>) {
+  let target = start;
+  for (let hop = 0; hop <= MAX_PREVIEW_REDIRECTS; hop += 1) {
+    if (target.protocol !== "https:" || !isPublicPreviewHost(target.hostname)) return null;
+    if (lookup) {
+      const addresses = await lookup(target.hostname);
+      if (!addresses.length || addresses.some(isPrivateAddress)) return null;
+    }
+    const response = await fetchImpl(target.href, { ...init, redirect: "manual" });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) return null;
+      target = new URL(location, target);
+      continue;
+    }
+    return response;
+  }
+  return null;
+}
+
 /**
  * A preview for one external https link, or `null` — never a throw.
  *
@@ -442,13 +502,14 @@ export async function fetchLinkPreview(url: string, options: PreviewFetchOptions
   if (!target || target.protocol !== "https:" || isBizosInternalLink(target.href)) return null;
   const fetchImpl = options.fetch ?? (globalThis.fetch as unknown as FetchLike | undefined);
   if (!fetchImpl) return null;
+  const lookup = options.lookup ?? (options.fetch ? undefined : systemLookup);
   const timeoutMs = options.timeoutMs ?? PREVIEW_TIMEOUT_MS;
   const maxHtml = options.maxHtmlBytes ?? PREVIEW_MAX_HTML_BYTES;
   const maxImage = options.maxImageBytes ?? PREVIEW_MAX_IMAGE_BYTES;
   const domain = target.hostname.toLowerCase();
   try {
-    const response = await fetchImpl(target.href, { signal: AbortSignal.timeout(timeoutMs), headers: PREVIEW_HEADERS, redirect: "follow" });
-    if (!response.ok) return null;
+    const response = await fetchPublic(fetchImpl, target, { signal: AbortSignal.timeout(timeoutMs), headers: PREVIEW_HEADERS }, lookup);
+    if (!response || !response.ok) return null;
     const contentType = (response.headers.get("content-type") ?? "").toLowerCase();
     if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) return null;
     const bytes = await readCapped(response, maxHtml);
@@ -464,9 +525,9 @@ export async function fetchLinkPreview(url: string, options: PreviewFetchOptions
     };
     if (parsed.imageUrl) {
       try {
-        const image = await fetchImpl(parsed.imageUrl, { signal: AbortSignal.timeout(timeoutMs), headers: { accept: "image/*" }, redirect: "follow" });
-        const imageType = (image.headers.get("content-type") ?? "").toLowerCase().split(";")[0]!.trim();
-        if (image.ok && isInlineImageType(imageType)) {
+        const image = await fetchPublic(fetchImpl, new URL(parsed.imageUrl), { signal: AbortSignal.timeout(timeoutMs), headers: { accept: "image/*" } }, lookup);
+        const imageType = (image?.headers.get("content-type") ?? "").toLowerCase().split(";")[0]!.trim();
+        if (image && image.ok && isInlineImageType(imageType)) {
           const imageBytes = await readCapped(image, maxImage);
           if (imageBytes && imageBytes.length) {
             const dimensions = imageDimensions(imageBytes);

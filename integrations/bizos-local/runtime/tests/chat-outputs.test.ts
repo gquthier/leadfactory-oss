@@ -176,6 +176,27 @@ describe("links", () => {
     const bigImage = vi.fn(async (url: string) => url.endsWith("c.png") ? response(new Uint8Array(2000), "image/png") : response(html, "text/html"));
     expect((await fetchLinkPreview("https://example.com/report", { fetch: bigImage as never, maxImageBytes: 1000 }))?.image).toBeUndefined();
   });
+
+  it("never reads this Mac or its network, even through a redirect or a name", async () => {
+    const html = `<title>Private</title>`;
+    const ok = { ok: true, status: 200, headers: { get: (name: string) => name === "content-type" ? "text/html" : null }, body: null, arrayBuffer: async () => new TextEncoder().encode(html).buffer as ArrayBuffer };
+    const never = vi.fn(async () => ok);
+    for (const url of ["https://localhost/x", "https://127.0.0.1/", "https://192.168.1.10/admin", "https://10.0.0.2/", "https://[::1]/", "https://printer.local/", "https://169.254.169.254/latest"]) {
+      expect(await fetchLinkPreview(url, { fetch: never as never })).toBeNull();
+    }
+    expect(never).not.toHaveBeenCalled();
+
+    const redirect = { ok: false, status: 302, headers: { get: (name: string) => name === "location" ? "https://192.168.1.1/" : null }, body: null, arrayBuffer: async () => new ArrayBuffer(0) };
+    const hop = vi.fn(async () => redirect);
+    expect(await fetchLinkPreview("https://example.com/r", { fetch: hop as never })).toBeNull();
+    expect(hop).toHaveBeenCalledTimes(1);
+
+    // A public name that resolves to a private address is refused too.
+    const resolved = vi.fn(async () => ok);
+    expect(await fetchLinkPreview("https://rebind.example.com/", { fetch: resolved as never, lookup: async () => ["10.1.2.3"] })).toBeNull();
+    expect(resolved).not.toHaveBeenCalled();
+    expect(await fetchLinkPreview("https://example.com/", { fetch: resolved as never, lookup: async () => ["93.184.215.14"] })).toMatchObject({ title: "Private" });
+  });
 });
 
 describe("the weight of a permission ask", () => {
