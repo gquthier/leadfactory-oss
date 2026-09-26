@@ -10,6 +10,7 @@ import { isAbsolute } from "node:path";
 import { cleanChildEnvironment } from "./child-env.js";
 import { augmentedPath, devOverridesAllowed, findCliCandidates } from "./env-path.js";
 import { execCli } from "./procs.js";
+import { installedManagedBinary, managedBinaryPath } from "./managed-cli.js";
 import type { CodexCandidate, CodexStatus } from "./types.js";
 
 export const PROBE_TIMEOUT_MS = 8_000;
@@ -25,6 +26,7 @@ export const CODEX_VERSION_LINE = /^codex-cli\b/;
 export interface CodexPathOptions {
   /** A packaged build ignores `LBZ_CODEX_PATH` (see `devOverridesAllowed`). */
   packaged?: boolean;
+  managedRoot?: string;
 }
 
 /** A refusal the bridge can name (`ipc.runHandler` uses `name` as the code). */
@@ -44,7 +46,7 @@ export function resolveCodexPath(
   if (override && devOverridesAllowed(options.packaged === true, environment)) return override;
   const explicit = configured?.trim();
   if (explicit) return explicit;
-  return findCliCandidates("codex", environment)[0] ?? "codex";
+  return codexCandidatePaths(environment, options.managedRoot)[0] ?? "codex";
 }
 
 /**
@@ -74,7 +76,7 @@ export function requireCodexPath(
   const override = environment.LBZ_CODEX_PATH?.trim();
   if (override && devOverridesAllowed(options.packaged === true, environment)) return override;
   const explicit = configured?.trim();
-  const candidates = codexCandidatePaths(environment);
+  const candidates = codexCandidatePaths(environment, options.managedRoot);
   if (!explicit) {
     const found = candidates[0];
     if (!found) throw new CodexPathError("`codex` isn't installed, or isn't on this app's PATH");
@@ -99,25 +101,28 @@ export function codexCandidateId(canonicalPath: string): string {
 }
 
 /** The vetted installations, as the bridge contract's `CodexCandidate[]`. */
-export function codexCandidates(environment: NodeJS.ProcessEnv = process.env): CodexCandidate[] {
-  return codexCandidatePaths(environment).map((path) => ({ id: codexCandidateId(path), path }));
+export function codexCandidates(environment: NodeJS.ProcessEnv = process.env, managedRoot?: string): CodexCandidate[] {
+  return codexCandidatePaths(environment, managedRoot).map((path) => ({ id: codexCandidateId(path), path }));
 }
 
 /** The canonical path an opaque candidate id stands for, or `null`. */
-export function codexPathForId(id: string, environment: NodeJS.ProcessEnv = process.env): string | null {
-  return codexCandidatePaths(environment).find((path) => codexCandidateId(path) === id) ?? null;
+export function codexPathForId(id: string, environment: NodeJS.ProcessEnv = process.env, managedRoot?: string): string | null {
+  return codexCandidatePaths(environment, managedRoot).find((path) => codexCandidateId(path) === id) ?? null;
 }
 
 /** Canonical, de-duplicated absolute paths of every `codex` this Mac has on
  * the augmented PATH (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`,
  * nvm shims…). This list is the ONLY thing the renderer may choose from:
  * a compromised page must not be able to name an arbitrary executable. */
-export function codexCandidatePaths(environment: NodeJS.ProcessEnv = process.env): string[] {
+export function codexCandidatePaths(environment: NodeJS.ProcessEnv = process.env, managedRoot?: string): string[] {
   const seen = new Set<string>();
+  const managedPath = managedRoot ? managedBinaryPath(managedRoot, "codex") : null;
   for (const candidate of findCliCandidates("codex", environment)) {
     const canonical = canonicalExecutable(candidate);
-    if (canonical) seen.add(canonical);
+    if (canonical && canonical !== managedPath) seen.add(canonical);
   }
+  const managed = installedManagedBinary(managedRoot, "codex");
+  if (managed) seen.add(managed);
   return [...seen];
 }
 

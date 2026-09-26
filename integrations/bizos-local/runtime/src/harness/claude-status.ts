@@ -11,6 +11,7 @@ import { claudeConfigEnvironment, cleanChildEnvironment } from "./child-env.js";
 import { augmentedPath, devOverridesAllowed, findCliCandidates } from "./env-path.js";
 import { execCli } from "./procs.js";
 import { maskEmailHint } from "./plan-registry.js";
+import { installedManagedBinary, managedBinaryPath } from "./managed-cli.js";
 
 export const PROBE_TIMEOUT_MS = 8_000;
 
@@ -20,6 +21,7 @@ export const CLAUDE_VERSION_LINE = /^claude\b|\bclaude code\b/i;
 
 export interface ClaudePathOptions {
   packaged?: boolean;
+  managedRoot?: string;
 }
 
 export interface ClaudeCandidate {
@@ -54,7 +56,7 @@ export function resolveClaudePath(
   if (override && devOverridesAllowed(options.packaged === true, environment)) return override;
   const explicit = configured?.trim();
   if (explicit) return explicit;
-  return findCliCandidates("claude", environment)[0] ?? "claude";
+  return claudeCandidatePaths(environment, options.managedRoot)[0] ?? "claude";
 }
 
 export function requireClaudePath(
@@ -65,7 +67,7 @@ export function requireClaudePath(
   const override = environment.LBZ_CLAUDE_PATH?.trim();
   if (override && devOverridesAllowed(options.packaged === true, environment)) return override;
   const explicit = configured?.trim();
-  const candidates = claudeCandidatePaths(environment);
+  const candidates = claudeCandidatePaths(environment, options.managedRoot);
   if (!explicit) {
     const found = candidates[0];
     if (!found) throw new ClaudePathError("`claude` isn't installed, or isn't on this app's PATH");
@@ -84,16 +86,19 @@ export function claudeCandidateId(canonicalPath: string): string {
   return createHash("sha256").update(canonicalPath).digest("hex").slice(0, 16);
 }
 
-export function claudeCandidates(environment: NodeJS.ProcessEnv = process.env): ClaudeCandidate[] {
-  return claudeCandidatePaths(environment).map((path) => ({ id: claudeCandidateId(path), path }));
+export function claudeCandidates(environment: NodeJS.ProcessEnv = process.env, managedRoot?: string): ClaudeCandidate[] {
+  return claudeCandidatePaths(environment, managedRoot).map((path) => ({ id: claudeCandidateId(path), path }));
 }
 
-export function claudeCandidatePaths(environment: NodeJS.ProcessEnv = process.env): string[] {
+export function claudeCandidatePaths(environment: NodeJS.ProcessEnv = process.env, managedRoot?: string): string[] {
   const seen = new Set<string>();
+  const managedPath = managedRoot ? managedBinaryPath(managedRoot, "claude") : null;
   for (const candidate of findCliCandidates("claude", environment)) {
     const canonical = canonicalExecutable(candidate);
-    if (canonical) seen.add(canonical);
+    if (canonical && canonical !== managedPath) seen.add(canonical);
   }
+  const managed = installedManagedBinary(managedRoot, "claude");
+  if (managed) seen.add(managed);
   return [...seen];
 }
 

@@ -1,45 +1,51 @@
-// Open a system Terminal window so the user can complete an OAuth login
-// for an isolated plan home. The renderer never sees the command — only
-// that login was started.
-import { spawn } from "node:child_process";
+// Open a system Terminal window for the user's OAuth login and wait until
+// Terminal actually accepts the command. Login completion is probed later.
+import { spawn, type ChildProcess } from "node:child_process";
 import { platform } from "node:os";
 
 export interface OpenCliLoginInput {
-  /** Full shell command, already including env prefixes the CLI needs. */
   shellCommand: string;
 }
 
-/**
- * On macOS, ask Terminal.app to run the command in a new window (so the
- * browser OAuth dance has a TTY). Elsewhere, spawn a detached shell.
- */
-export function openCliLogin(input: OpenCliLoginInput): { started: boolean } {
+export interface LoginLaunchResult {
+  started: boolean;
+  reason?: "invalid_command" | "unsupported" | "launch_error" | "denied" | "timeout";
+}
+
+export async function openCliLogin(
+  input: OpenCliLoginInput,
+  options: { platform?: string; timeoutMs?: number; spawnProcess?: typeof spawn } = {},
+): Promise<LoginLaunchResult> {
   const command = input.shellCommand.trim();
-  if (!command) return { started: false };
-
-  if (platform() === "darwin") {
-    const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const script = `tell application "Terminal" to do script "${escaped}"`;
-    const child = spawn("osascript", ["-e", script], {
-      detached: true,
-      stdio: "ignore",
+  if (!command || /[\r\n\0]/.test(command)) return { started: false, reason: "invalid_command" };
+  const system = options.platform ?? platform();
+  if (system === "win32") return { started: false, reason: "unsupported" };
+  const escaped = command.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const script = `tell application "Terminal" to do script "${escaped}"`;
+  const file = system === "darwin" ? "/usr/bin/osascript" : "/bin/sh";
+  const args = system === "darwin" ? ["-e", script] : ["-lc", command];
+  let child: ChildProcess;
+  try {
+    child = (options.spawnProcess ?? spawn)(file, args, {
+      stdio: ["ignore", "ignore", "pipe"],
+      env: { PATH: "/usr/bin:/bin", LANG: "C" },
     });
-    child.unref();
-    return { started: true };
-  }
-
-  if (platform() === 'win32') {
-    // Callers currently provide POSIX environment assignments and quoting.
-    // Do not pass them to cmd.exe; users may sign in from their own terminal.
-    return { started: false };
-  }
-
-  const shell = process.env.SHELL || "/bin/sh";
-  const child = spawn(shell, ["-lc", command], {
-    detached: true,
-    stdio: "ignore",
-    env: process.env,
+  } catch { return { started: false, reason: "launch_error" }; }
+  return new Promise(resolve => {
+    let done = false;
+    let stderr = "";
+    const finish = (result: LoginLaunchResult) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    child.stderr?.on("data", chunk => { stderr = (stderr + String(chunk)).slice(-1024); });
+    child.once("error", () => finish({ started: false, reason: "launch_error" }));
+    child.once("exit", code => finish(code === 0 ? { started: true } : { started: false, reason: /not authorized|not permitted|denied|(-1743)/i.test(stderr) ? "denied" : "launch_error" }));
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ started: false, reason: "timeout" });
+    }, options.timeoutMs ?? 15_000);
   });
-  child.unref();
-  return { started: true };
 }

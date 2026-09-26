@@ -57,6 +57,8 @@ import {
 import { EventBus, runFinishNotification, type NotificationSink } from "./events.js";
 import { GroupStore } from "./groups.js";
 import { openCliLogin } from "./login-launcher.js";
+import { installManagedCli, type ManagedCliDependencies, type ManagedProvider } from "./managed-cli.js";
+import { augmentedPath } from "./env-path.js";
 import {
   buildMcpServers,
   resolveMcpLauncher,
@@ -257,6 +259,9 @@ export interface HarnessOptions {
   /** Absolute path to the compiled `bizos-mcp.mjs`. */
   mcpScriptPath: string;
   environment?: NodeJS.ProcessEnv;
+  /** Native CLI verification/download seam for tests. */
+  managedCliDependencies?: ManagedCliDependencies;
+  launchCliLogin?: typeof openCliLogin;
   clock?: Clock;
   notifications?: NotificationSink;
   /** The home folder Access is anchored on. Injected so a test can point it
@@ -614,9 +619,9 @@ export class LocalBizosHarness {
       // with the sentence in the thread.
       codexPath: () =>
         requireCodexPath(this.settingsStore.get().local.codexPath, this.environment(), {
-          packaged: options.packaged,
+          packaged: options.packaged, managedRoot: this.managedCliRoot(),
         }),
-      claudePath: () => requireClaudePath(undefined, this.environment(), { packaged: options.packaged }),
+      claudePath: () => requireClaudePath(undefined, this.environment(), { packaged: options.packaged, managedRoot: this.managedCliRoot() }),
       cursorPath: () => requireCursorPath(undefined, this.environment(), { packaged: options.packaged }),
       resolvePlan: ({ cursorKey, preferredProvider, botPlanId, exactPlanId }) => {
         if (exactPlanId) {
@@ -897,7 +902,18 @@ export class LocalBizosHarness {
   }
 
   private environment(): NodeJS.ProcessEnv {
-    return this.options.environment ?? process.env;
+    // Only a selected plan may choose its auth home. The desktop process may
+    // have inherited a provider home for unrelated work.
+    const { CODEX_HOME: _codex, CLAUDE_CONFIG_DIR: _claude, ...environment } = this.options.environment ?? process.env;
+    return environment;
+  }
+
+  private managedCliRoot(): string { return join(this.storage.layout.root, "managed-cli"); }
+
+  private selectedCli(provider: ManagedProvider): string {
+    return provider === "codex"
+      ? requireCodexPath(this.settingsStore.get().local.codexPath, this.environment(), { packaged: this.options.packaged, managedRoot: this.managedCliRoot() })
+      : requireClaudePath(undefined, this.environment(), { packaged: this.options.packaged, managedRoot: this.managedCliRoot() });
   }
 
   /** The bot's codex cwd. Created here: spawning into a directory that does
@@ -1015,8 +1031,8 @@ export class LocalBizosHarness {
     this.quickChatStore.start();
     this.continuity.start((threadId,messages)=>{for(const message of messages)this.events.publish({type:"thread.message.created",threadId,message});},()=>{
       const runtimes:Array<"claude"|"codex">=[];
-      try { requireClaudePath(undefined,this.environment(),{packaged:this.options.packaged});runtimes.push("claude"); } catch {}
-      try { requireCodexPath(this.settingsStore.get().local.codexPath,this.environment(),{packaged:this.options.packaged});runtimes.push("codex"); } catch {}
+      try { this.selectedCli("claude");runtimes.push("claude"); } catch {}
+      try { this.selectedCli("codex");runtimes.push("codex"); } catch {}
       return {runtimes,supervised:runtimes.length===1&&runtimes[0]==="claude"};
     });
     // Before anything else: the window is about to be created, and it should be
@@ -1049,10 +1065,10 @@ export class LocalBizosHarness {
       }
     };
     const [codex, claude] = await Promise.all([
-      settle(probeCodexStatus(undefined, env, undefined, { packaged: this.options.packaged })),
+      settle(probeCodexStatus(undefined, env, undefined, { packaged: this.options.packaged, managedRoot: this.managedCliRoot() })),
       settle(
         probeClaudeStatus(undefined, env, undefined, {
-          packaged: this.options.packaged,
+          packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
           configDir: join(home, ".claude"),
         }),
       ),
@@ -1337,7 +1353,7 @@ export class LocalBizosHarness {
         const chosen =
           codexId === null || codexId === undefined || codexId === ""
             ? undefined
-            : (codexPathForId(String(codexId), this.environment()) ?? undefined);
+            : (codexPathForId(String(codexId), this.environment(), this.managedCliRoot()) ?? undefined);
         if (codexId && !chosen) {
           throw new SettingsError("that is not one of the codex installations this Mac has");
         }
@@ -1345,7 +1361,7 @@ export class LocalBizosHarness {
           // The IDENTITY check, here because it costs a spawn: whatever is
           // about to become `codexPath` must answer `codex-cli` to `--version`.
           const status = await probeCodexStatus(chosen, this.environment(), undefined, {
-            packaged: this.options.packaged,
+            packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
           });
           if (!status.found) throw new SettingsError(status.error ?? `${chosen} is not the codex CLI`);
         }
@@ -1364,8 +1380,9 @@ export class LocalBizosHarness {
      * when a binary moved or a link was repointed under it. */
     codexStatus: async (): Promise<CodexStatus> => {
       const configured = this.settingsStore.get().local.codexPath;
+      let cli: string;
       try {
-        requireCodexPath(configured, this.environment(), { packaged: this.options.packaged });
+        cli = this.selectedCli("codex");
       } catch (error) {
         return {
           found: false,
@@ -1373,8 +1390,8 @@ export class LocalBizosHarness {
           error: error instanceof Error ? error.message : "codex could not be resolved",
         };
       }
-      return probeCodexStatus(configured, this.environment(), undefined, {
-        packaged: this.options.packaged,
+      return probeCodexStatus(cli, this.environment(), undefined, {
+        packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
       });
     },
     /** The codex installations this Mac has. The renderer picks FROM this
@@ -1387,7 +1404,7 @@ export class LocalBizosHarness {
      * but "Auto", on a Mac that had codex installed (F9 proof, 2026-09-02).
      * WHICH binary is in use is `codexStatus().path`, on the same card, so it
      * is not repeated here. */
-    codexCandidates: async (): Promise<CodexCandidate[]> => codexCandidates(this.environment()),
+    codexCandidates: async (): Promise<CodexCandidate[]> => codexCandidates(this.environment(), this.managedCliRoot()),
     /** Asked ON DEMAND, with a 10-minute cache. It used to be probed inside
      * every `codexStatus()` call, which spawned a second `codex app-server`
      * each time the Runtime card was opened. */
@@ -1407,7 +1424,6 @@ export class LocalBizosHarness {
   };
 
   private async modelsFor(provider: PlanProvider): Promise<ModelsResponse> {
-    const settings = this.settingsStore.get();
     {
       if (provider === "claude") {
         const now = this.clock.now().getTime();
@@ -1457,12 +1473,10 @@ export class LocalBizosHarness {
       }
       const now = this.clock.now().getTime();
       if (!this.catalog || now - this.catalog.at > MODEL_CACHE_MS) {
-        const status = await probeCodexStatus(
-          settings.local.codexPath,
-          this.environment(),
-          undefined,
-          { packaged: this.options.packaged },
-        );
+        let cli: string | null = null;
+        try { cli = this.selectedCli("codex"); } catch { /* static catalog when no vetted CLI exists */ }
+        const status = cli ? await probeCodexStatus(cli, this.environment(), undefined,
+          { packaged: this.options.packaged, managedRoot: this.managedCliRoot() }) : { found: false };
         const value =
           status.found && status.path
             ? await resolveModelCatalog(status.path, this.environment())
@@ -1558,8 +1572,9 @@ export class LocalBizosHarness {
       }
       const home = (provider === "codex" ? plan?.codexHome : plan?.configDir)
         ?? join(this.homeDir, provider === "codex" ? ".codex" : ".claude");
-      const { started } = openCliLogin({
-        shellCommand: loginCommandFor({ provider, home, serverName: app.serverName, url: app.url }),
+      const cli = this.selectedCli(provider);
+      const { started } = await (this.options.launchCliLogin ?? openCliLogin)({
+        shellCommand: loginCommandFor({ provider, home, homeDir: this.homeDir, pathValue: augmentedPath(this.environment()), serverName: app.serverName, url: app.url, cli }),
       });
       const updated = started ? this.appsStore.markCliManaged(id) : app;
       return { started, provider, serverName: app.serverName, app: publicApp(updated) };
@@ -2491,6 +2506,7 @@ export class LocalBizosHarness {
   };
 
   private usageRefreshes = new Map<string, Promise<void>>();
+  private planConnects = new Map<string, Promise<{ planId: string; loginStarted: boolean; loginError?: string }>>();
 
   /** The same refresh, off the caller's path: a list must never wait on a CLI. */
   private refreshCodexUsageInBackground(planId: string): void {
@@ -2507,7 +2523,7 @@ export class LocalBizosHarness {
     if (!plan || plan.provider !== "codex") return;
     let cli: string;
     try {
-      cli = requireCodexPath(this.settingsStore.get().local.codexPath, this.environment(), { packaged: this.options.packaged });
+      cli = this.selectedCli("codex");
     } catch {
       return;
     }
@@ -2587,7 +2603,7 @@ export class LocalBizosHarness {
     // The browser dance needs a TTY: the same Terminal window the other two
     // families get. Nothing here waits on it — `plans.test` is what confirms
     // the sign-in afterwards.
-    const started = openCliLogin({ shellCommand: `${shellSingleQuote(cli)} login` });
+    const started = await (this.options.launchCliLogin ?? openCliLogin)({ shellCommand: `${shellSingleQuote(cli)} login` });
     return { planId: plan.id, loginStarted: started.started };
   }
 
@@ -2619,13 +2635,17 @@ export class LocalBizosHarness {
         // network call of its own to invent one. `usage.windows` stays empty.
       }
     },
-    connect: async (input: {
+    connect: (input: {
       provider: PlanProvider;
       label?: string;
       importDefault?: boolean;
-    }): Promise<{ planId: string; loginStarted: boolean }> => {
+    }): Promise<{ planId: string; loginStarted: boolean; loginError?: string }> => {
       const provider = input.provider;
       if (provider === "cursor") return this.connectCursorPlan(input.label);
+      const key = `${provider}:${input.importDefault === true}:${input.label?.slice(0, MAX_PLAN_LABEL) ?? ""}`;
+      const inFlight = this.planConnects.get(key);
+      if (inFlight) return inFlight;
+      const work = (async () => {
       if (input.importDefault) {
         const home = join(this.homeDir, provider === "codex" ? ".codex" : ".claude");
         const env = this.environment();
@@ -2640,15 +2660,15 @@ export class LocalBizosHarness {
           return { planId: existing.id, loginStarted: false };
         }
         if (provider === "codex") {
-          const status = await probeCodexStatus(undefined, { ...env, CODEX_HOME: home }, undefined, {
-            packaged: this.options.packaged,
+          const status = await probeCodexStatus(this.selectedCli("codex"), { ...env, CODEX_HOME: home }, undefined, {
+            packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
           });
           if (!status.found || !status.authenticated) {
             throw new SettingsError("the default ChatGPT plan on this Mac is not signed in");
           }
         } else {
-          const status = await probeClaudeStatus(undefined, env, undefined, {
-            packaged: this.options.packaged,
+          const status = await probeClaudeStatus(this.selectedCli("claude"), env, undefined, {
+            packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
             configDir: home,
           });
           if (!status.found || !status.authenticated) {
@@ -2674,19 +2694,51 @@ export class LocalBizosHarness {
         return { planId: plan.id, loginStarted: false };
       }
 
-      const plan = this.planRegistry.create({
-        provider,
-        ...(input.label ? { label: input.label.slice(0, MAX_PLAN_LABEL) } : {}),
-        status: "disconnected",
-      });
-      const envPrefix =
-        provider === "codex"
-          ? `CODEX_HOME=${shellSingleQuote(plan.codexHome!)}`
-          : `CLAUDE_CONFIG_DIR=${shellSingleQuote(plan.configDir!)}`;
-      const loginCmd =
-        provider === "codex" ? "codex login" : "claude auth login --claudeai";
-      const started = openCliLogin({ shellCommand: `${envPrefix} ${loginCmd}` });
-      return { planId: plan.id, loginStarted: started.started };
+      // A denied Terminal launch or unfinished OAuth leaves the same isolated
+      // plan for Connect/Resume. A failed download leaves no plan to poll.
+      const pendingPlans = this.planRegistry.list().filter(candidate =>
+        candidate.provider === provider && candidate.status !== "connected" &&
+        ((candidate.codexHome ?? candidate.configDir) ?? "").startsWith(join(this.storage.layout.root, "plans") + "/"));
+      const existing = input.label ? pendingPlans.find(candidate => candidate.label === input.label!.slice(0, MAX_PLAN_LABEL)) : pendingPlans[0];
+      let cli: string;
+      try { cli = this.selectedCli(provider); }
+      catch (error) {
+        if (provider === "codex" && this.settingsStore.get().local.codexPath) throw error;
+        cli = await installManagedCli(this.managedCliRoot(), provider, this.options.managedCliDependencies);
+      }
+      if (!existing && !this.planRegistry.list().some(candidate => candidate.provider === provider)) {
+        const defaultHome = join(this.homeDir, provider === "codex" ? ".codex" : ".claude");
+        try {
+          const status = provider === "codex"
+            ? await probeCodexStatus(cli, { ...this.environment(), CODEX_HOME: defaultHome }, undefined, { packaged: this.options.packaged, managedRoot: this.managedCliRoot() })
+            : await probeClaudeStatus(cli, this.environment(), undefined, { packaged: this.options.packaged, managedRoot: this.managedCliRoot(), configDir: defaultHome });
+          if (status.found && status.authenticated) {
+            const imported = this.planRegistry.list().find(candidate => candidate.provider === provider && (candidate.codexHome ?? candidate.configDir) === defaultHome)
+              ?? this.planRegistry.createReferencing({ provider, label: input.label ?? (provider === "codex" ? "ChatGPT" : "Claude Code"), homePath: defaultHome, status: "connected" });
+            this.planRegistry.update(imported.id, { status: "connected", settingsVisible: true });
+            return { planId: imported.id, loginStarted: false };
+          }
+        } catch { /* no existing auth: continue with an isolated plan */ }
+      }
+      // Recheck after the asynchronous install and auth probe so simultaneous
+      // Connect calls cannot create two plans for the same provider.
+      const currentPending = this.planRegistry.list().filter(candidate => candidate.provider === provider && candidate.status !== "connected" &&
+        ((candidate.codexHome ?? candidate.configDir) ?? "").startsWith(join(this.storage.layout.root, "plans") + "/"));
+      const plan = (input.label ? currentPending.find(candidate => candidate.label === input.label!.slice(0, MAX_PLAN_LABEL)) : currentPending[0])
+        ?? this.planRegistry.create({
+          provider,
+          ...(input.label ? { label: input.label.slice(0, MAX_PLAN_LABEL) } : {}),
+          status: "disconnected",
+        });
+      const command = provider === "codex" ? "login" : "auth login --claudeai";
+      const planHome = provider === "codex" ? `CODEX_HOME=${shellSingleQuote(plan.codexHome!)}` : `CLAUDE_CONFIG_DIR=${shellSingleQuote(plan.configDir!)} DISABLE_AUTOUPDATER=1`;
+      const shellCommand = `/usr/bin/env -i PATH=${shellSingleQuote(augmentedPath(this.environment()))} HOME=${shellSingleQuote(this.homeDir)} LANG='C' ${planHome} ${shellSingleQuote(cli)} ${command}`;
+      const started = await (this.options.launchCliLogin ?? openCliLogin)({ shellCommand });
+      return { planId: plan.id, loginStarted: started.started, ...(started.reason ? { loginError: started.reason } : {}) };
+      })();
+      this.planConnects.set(key, work);
+      void work.finally(() => { if (this.planConnects.get(key) === work) this.planConnects.delete(key); }).catch(() => undefined);
+      return work;
     },
     disconnect: async (planId: string): Promise<{ removed: boolean }> => {
       const removed = this.planRegistry.remove(planId);
@@ -2700,11 +2752,14 @@ export class LocalBizosHarness {
       if (!plan) return { ok: false, reason: "unknown plan" };
       const env = this.environment();
       if (plan.provider === "codex") {
+        let cli: string;
+        try { cli = this.selectedCli("codex"); }
+        catch (error) { this.planRegistry.update(planId, { status: "disconnected" }); return { ok: false, reason: error instanceof Error ? error.message : "Codex CLI unavailable" }; }
         const status = await probeCodexStatus(
-          undefined,
+          cli,
           { ...env, ...(plan.codexHome ? { CODEX_HOME: plan.codexHome } : {}) },
           undefined,
-          { packaged: this.options.packaged },
+          { packaged: this.options.packaged, managedRoot: this.managedCliRoot() },
         );
         const ok = status.found === true && status.authenticated === true;
         if (ok) {
@@ -2739,8 +2794,11 @@ export class LocalBizosHarness {
         if (signedIn) this.cursorCatalog = null;
         return { ok: signedIn, ...(signedIn ? {} : { reason: cursor.error ?? "not signed in" }) };
       }
-      const status = await probeClaudeStatus(undefined, env, undefined, {
-        packaged: this.options.packaged,
+      let cli: string;
+      try { cli = this.selectedCli("claude"); }
+      catch (error) { this.planRegistry.update(planId, { status: "disconnected" }); return { ok: false, reason: error instanceof Error ? error.message : "Claude CLI unavailable" }; }
+      const status = await probeClaudeStatus(cli, env, undefined, {
+        packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
         ...(plan.configDir ? { configDir: plan.configDir } : {}),
       });
       const ok = status.found === true && status.authenticated === true;
@@ -2912,9 +2970,13 @@ export class LocalBizosHarness {
     const settings = this.settingsStore.get();
     const now = this.clock.now().getTime();
     if (!this.deviceCapabilityCache || now - this.deviceCapabilityCache.at > DEVICE_CAPABILITY_CACHE_MS) {
-      const status = await probeCodexStatus(settings.local.codexPath, this.environment(), undefined, {
-        packaged: this.options.packaged,
-      }).catch(() => ({ found: false }) as CodexStatus);
+      const status = await (async () => {
+        try {
+          return await probeCodexStatus(this.selectedCli("codex"), this.environment(), undefined, {
+            packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
+          });
+        } catch { return { found: false } as CodexStatus; }
+      })();
       this.deviceCapabilityCache = {
         at: now,
         value: { codex: { found: status.found, version: status.version ?? null } },

@@ -1425,16 +1425,21 @@ function shellSingleQuote(value: string): string {
  */
 export function loginCommandFor(input: {
   provider: "codex" | "claude";
+  cli: string;
+  homeDir: string;
+  pathValue: string;
   home: string;
   serverName: string;
   url: string;
 }): string {
   const url = shellSingleQuote(input.url);
   const name = shellSingleQuote(input.serverName);
+  const cli = shellSingleQuote(input.cli);
+  const pathValue = shellSingleQuote(input.pathValue);
   if (input.provider === "codex") {
-    const prefix = `CODEX_HOME=${shellSingleQuote(input.home)}`;
-    return `${prefix} codex mcp add ${name} --url ${url} && ${prefix} codex mcp login ${name}`;
+    const prefix = `/usr/bin/env -i PATH=${pathValue} LANG='C' HOME=${shellSingleQuote(input.homeDir)} CODEX_HOME=${shellSingleQuote(input.home)}`;
+    return `${prefix} ${cli} mcp add ${name} --url ${url} && ${prefix} ${cli} mcp login ${name}`;
   }
-  const prefix = `CLAUDE_CONFIG_DIR=${shellSingleQuote(input.home)}`;
-  return `${prefix} claude mcp add --transport http --scope user ${name} ${url} && echo && echo 'Type /mcp in Claude Code to sign in to ${input.serverName}, then close this window.' && ${prefix} claude`;
+  const prefix = `/usr/bin/env -i PATH=${pathValue} LANG='C' HOME=${shellSingleQuote(input.homeDir)} CLAUDE_CONFIG_DIR=${shellSingleQuote(input.home)} DISABLE_AUTOUPDATER=1`;
+  return `${prefix} ${cli} mcp add --transport http --scope user ${name} ${url} && echo && echo 'Type /mcp in Claude Code to sign in, then close this window.' && ${prefix} ${cli}`;
 }

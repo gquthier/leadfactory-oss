@@ -40,11 +40,14 @@ export function cleanChildEnvironment(
   base: Record<string, string | undefined>,
   pathValue: string,
 ): Record<string, string | undefined> {
-  const environment: Record<string, string | undefined> = {
-    ...base,
-    PATH: pathValue,
-    NPM_CONFIG_LOGLEVEL: "error",
-  };
-  for (const name of FORBIDDEN_CHILD_VARS) delete environment[name];
+  // An allowlist avoids provider endpoint overrides, credential aliases,
+  // NODE_OPTIONS and DYLD/LD injection inherited from the desktop process.
+  const environment: Record<string, string | undefined> = { PATH: pathValue, NPM_CONFIG_LOGLEVEL: "error", DISABLE_AUTOUPDATER: "1" };
+  for (const name of ["HOME", "USER", "LOGNAME", "TMPDIR", "SHELL", "LANG", "TERM", "COLORTERM", "NO_COLOR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "__CF_USER_TEXT_ENCODING"]) {
+    if (base[name] !== undefined) environment[name] = base[name];
+  }
+  for (const [name, value] of Object.entries(base)) {
+    if (/^LC_[A-Z_]+$/.test(name) && value !== undefined) environment[name] = value;
+  }
   return environment;
 }

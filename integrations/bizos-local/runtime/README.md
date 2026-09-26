@@ -26,6 +26,44 @@ copied files and uses `SOURCE_DATE_EPOCH` (default `0`) for a repeatable
 folder alone is not a complete kit distribution. Tests use temporary profiles
 and scripted drivers, not paid providers or real credentials.
 
+## Managed Codex and Claude CLI bootstrap
+
+The existing Plans → Connect action first uses an available CLI already on the
+machine. When Codex or Claude is absent, the runtime downloads the pinned
+official native macOS arm64 binary on demand into
+`<baseUserData>/managed-cli/<provider>/<version>/` and then opens Terminal for
+the person's OAuth sign-in. The action can be repeated after a failed download,
+denied Terminal launch, or unfinished sign-in. A failed download creates no
+plan; later launch and sign-in retries reuse the same isolated plan.
+`plans.test` checks that plan's auth home. An authenticated default `~/.codex`
+or `~/.claude` is imported first without copying credentials; a later Connect
+creates a separate isolated profile for another account. Explicit default
+import remains idempotent.
+
+The pins are in `src/harness/managed-cli.ts`: Codex 0.155.1 from OpenAI's
+`rust-v0.155.1` release (Apache-2.0), and Claude Code 2.1.283 from Anthropic's
+native release endpoint (Anthropic proprietary terms). Claude is downloaded
+directly from its publisher on the person's action; it is not bundled. The
+installer checks exact archive byte count and SHA-256, a single regular tar
+member for Codex, and the extracted executable's pinned size (228803200 bytes)
+and SHA-256 (`8eaf1ad12fe6bf89b1710330f58900014322c7c5af677e43be116d8ac5fc0a9e`).
+Claude's executable has the same size and hash as its direct download. It also
+checks strict macOS code signature and pinned Team ID/bundle identifier,
+arm64 architecture, and exact CLI version before publishing a private version
+directory by rename. It rejects symlinked managed paths. Existing CLI choices
+keep their existing PATH and canonical-path checks. Managed versions are not
+overwritten or automatically updated during runs; Claude's CLI auto-updater is
+disabled in its clean child environment.
+
+The selected absolute binary is used for status, login, model discovery, and
+turns. Terminal
+launch waits for `osascript` success or reports denial, exit failure, or timeout;
+that only means a login window opened. The person must finish OAuth in Terminal;
+`plans.test` confirms it afterward. Runtime tests
+inject downloads and commands; they do not exercise real OAuth or a clean Mac
+desktop package. A real artifact and end-to-end provider probe remain separate
+release checks.
+
 ## Process and HTTP boundary
 
 The sidecar listens on `127.0.0.1` with an OS-assigned ephemeral port. Its
