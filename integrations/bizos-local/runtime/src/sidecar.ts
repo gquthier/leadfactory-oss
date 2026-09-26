@@ -1070,7 +1070,7 @@ export class CollaborationFacade {
         supported: LOCAL_PROVIDERS,
         configured: [...new Set([...plans.filter((plan) => plan.status !== "disconnected").map((plan) => plan.provider), ...(inference.providers.some(provider => provider.kind === "ollama") ? ["ollama"] : [])])],
         selected: selectedExternal?.kind === "ollama" ? "ollama" : settings.local.provider ?? null,
-        recruitment: { codex: true, claude: true, ollama: true },
+        recruitment: { codex: true, claude: true, cursor: true, ollama: true },
       },
       humans: [{ userId: this.userId, displayName: "Local owner", email: null, isSelf: true }],
       agents: visibleBots.map((bot) => this.agent(bot, true)),
@@ -1551,10 +1551,9 @@ export class CollaborationFacade {
       mode: "local-harness", backendMode: "local", settings, plans, models, tools,
       providers: {
         supported: LOCAL_PROVIDERS,
-        recruitment: { codex: true, claude: true, ollama: true },
+        recruitment: { codex: true, claude: true, cursor: true, ollama: true },
         toolSurface: {
-          computer: { codex: true, claude: true, api: true, ollama: true, cursor: false },
-          cursorReason: "Cursor print mode is not mounted to the run-scoped Local BizOS tool bridge.",
+          computer: { codex: true, claude: true, api: true, ollama: true, cursor: true },
         },
       },
       inference: {

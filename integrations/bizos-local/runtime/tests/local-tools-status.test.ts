@@ -60,7 +60,7 @@ describe("local team-tool status", () => {
       transports: {
         codex: { available: true, code: "ready", reason: null },
         claude: { available: true, code: "ready", reason: null },
-        cursor: { available: false, code: "unsupported" },
+        cursor: { available: true, code: "ready", reason: null },
       },
       contexts: {
         agents: { available: true, code: "ready" },
@@ -69,9 +69,9 @@ describe("local team-tool status", () => {
     });
     const runtime = await new CollaborationFacade(harness, "status-fixture", new LocalTeamBroker()).localRuntime() as any;
     expect(runtime.tools).toEqual(status);
+    expect(runtime.providers.recruitment.cursor).toBe(true);
     expect(runtime.providers.toolSurface).toEqual({
-      computer: { codex: true, claude: true, api: true, ollama: true, cursor: false },
-      cursorReason: expect.stringMatching(/not mounted/i),
+      computer: { codex: true, claude: true, api: true, ollama: true, cursor: true },
     });
     expect(await fixture({ codex: true }).plans.list()).toEqual([]);
   });
@@ -93,7 +93,7 @@ describe("local team-tool status", () => {
       transports: {
         codex: { available: false, code: "not_registered" },
         claude: { available: false, code: "not_registered" },
-        cursor: { available: false, code: "unsupported" },
+        cursor: { available: false, code: "not_registered" },
       },
     });
     expect(status.reason).toMatch(/team-tool transport/i);

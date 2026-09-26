@@ -292,6 +292,7 @@ export interface HarnessOptions {
   startTurn?: DispatchDependencies["startTurn"];
   startOllamaTurn?: DispatchDependencies["startOllamaTurn"];
   startClaudeTurn?: DispatchDependencies["startClaudeTurn"];
+  startCursorTurn?: DispatchDependencies["startCursorTurn"];
   retryScale?: number;
   /** The build's version, as this machine reports it to the device registry. */
   appVersion?: string;
@@ -420,15 +421,15 @@ export function describeLocalToolsStatus(options: Pick<
     : !options.localTeamMcpScriptPath || !existsSync(options.localTeamMcpScriptPath)
       ? { available: false, code: "bridge_missing", reason: "Claude's local team MCP bridge is missing from this runtime." }
       : { available: true, code: "ready", reason: null };
-  const cursor: LocalToolAvailability = {
-    available: false,
-    code: "unsupported",
-    reason: "Cursor does not support Local BizOS team tools.",
-  };
+  const cursor: LocalToolAvailability = !options.localTeamMcp
+    ? { available: false, code: "not_registered", reason: "Cursor's local team MCP transport is not registered in this local harness." }
+    : !options.localTeamMcpScriptPath || !existsSync(options.localTeamMcpScriptPath)
+      ? { available: false, code: "bridge_missing", reason: "Cursor's local team MCP bridge is missing from this runtime." }
+      : { available: true, code: "ready", reason: null };
   const ollama: LocalToolAvailability = options.localTeamTools
     ? { available: true, code: "ready", reason: null }
     : { available: false, code: "not_registered", reason: "Ollama host team tools are not registered in this local harness." };
-  const available = codex.available || claude.available || ollama.available;
+  const available = codex.available || claude.available || cursor.available || ollama.available;
   const agents: LocalToolAvailability = available
     ? { available: true, code: "ready", reason: null }
     : { available: false, code: "no_local_team_transport", reason: "No Local BizOS agent team-tool transport is registered and usable." };
@@ -734,6 +735,7 @@ export class LocalBizosHarness {
       },
       ...(options.startTurn ? { startTurn: options.startTurn } : {}),
       ...(options.startClaudeTurn ? { startClaudeTurn: options.startClaudeTurn } : {}),
+      ...(options.startCursorTurn ? { startCursorTurn: options.startCursorTurn } : {}),
       ...(options.startOllamaTurn ? { startOllamaTurn: options.startOllamaTurn } : {}),
       ...(options.environment ? { environment: options.environment } : {}),
       ...(options.retryScale ? { retryScale: options.retryScale } : {}),

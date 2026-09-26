@@ -47,6 +47,7 @@ import {
   type ClaudeTurnInput,
 } from "./claude-driver.js";
 import {
+  cursorPreapprovedServers,
   cursorPermissionNote,
   startCursorTurn as defaultStartCursorTurn,
   type CursorTurnInput,
@@ -1739,12 +1740,14 @@ export class Dispatcher {
     // that appeared since the thread began (a new team tool, an app the
     // person added) must start a fresh thread, or a resumed one never sees it.
     const runContext: TurnContext = { threadId, runId: queued.runId, ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}) };
-    // Cursor's CLI has no `--mcp-config` and no host tool channel: it loads
-    // MCP servers from the person's own Cursor configuration and nothing
-    // else. Mounting none is honest — and the persona below is built from
-    // this same empty surface, so a Cursor turn is never told it has team
-    // tools it cannot call.
-    const mountedServers = provider === "cursor" || native ? {} : this.deps.mcpServers(bot, runContext);
+    const availableServers = native ? {} : this.deps.mcpServers(bot, runContext);
+    // Cursor print mode has no BizOS approval channel. Its disposable plugin
+    // therefore mounts only servers whose host policy already allows calls;
+    // anything that needs a permission card remains absent and is not named
+    // in the persona. The driver adds exact per-server MCP permissions.
+    const mountedServers = provider === "cursor"
+      ? cursorPreapprovedServers(availableServers)
+      : availableServers;
     const dynamicTools = provider === "cursor" ? undefined : this.deps.dynamicTools?.(bot, runContext);
     const toolSurface = [
       ...Object.keys(mountedServers).map((name) => `mcp:${name}`),
@@ -1767,7 +1770,7 @@ export class Dispatcher {
       ...(external?.kind === "ollama" ? { baseUrl: external.baseUrl } : {}),
       tools: toolSurface,
     });
-    const resumeCursor = native ? null :
+    const resumeCursor = native || (provider === "cursor" && Object.keys(mountedServers).length > 0) ? null :
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
     // Local Codex / Claude / Cursor agents get the slim brief once per
     // provider session and only what is new on every turn after it; the
@@ -1851,9 +1854,8 @@ export class Dispatcher {
     } else if (provider === "cursor") {
       const start = this.deps.startCursorTurn ?? defaultStartCursorTurn;
       // Built by hand rather than spread from `common`: cursor-agent takes
-      // no reasoning effort, no MCP config and no approval callback, and a
-      // field it does not know is a flag this app would not be able to
-      // explain. There is no `isAlwaysAllowed` either — see the driver.
+      // no reasoning effort or approval callback. Its MCP plugin contains
+      // only host-preapproved servers and is removed with the turn.
       handle = start({
         cli,
         cwd: this.deps.workspaceFor(bot),
@@ -1863,6 +1865,7 @@ export class Dispatcher {
         sandbox: settings.local.sandbox,
         skipPermissions,
         resumeCursor,
+        mcpServers: mountedServers,
         ...(Object.keys(environment).length ? { environment } : {}),
         onEvent: (event: RuntimeEvent) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
         tee: (entry) => this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry),
@@ -2091,7 +2094,7 @@ export class Dispatcher {
       } } : {}),
       ...(shared.folders.length ? { grantedFolders: shared.folders } : {}),
       ...(shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(runtime.provider !== "cursor" && this.deps.hasComputer?.(bot)
+      ...(this.deps.hasComputer?.(bot)
         && runtime.tools.some((tool) => tool === "mcp:bizos_computer" || tool === "mcp:local_team_actions" || tool === "tool:computer_observe")
         ? { hasComputer: true } : {}),
       teamTools: runtime.tools.some((tool) => tool === "mcp:local_team_actions" || tool === "tool:checkpoint_task"),

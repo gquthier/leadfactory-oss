@@ -8,24 +8,31 @@
 // Two things are structurally different from the other two families, and both
 // are deliberate:
 //
-//   * There is NO approval channel. `-p` runs every tool the agent asks for;
-//     the CLI answers its own `interaction_query` requests (verified in the
-//     shipped bundle 2026.09.02). So no permission card can ever be raised
-//     for a Cursor turn — `dispatch` writes that into the turn's `meta` note.
-//     What the harness CAN still choose is how much the CLI is allowed to do:
-//     `--force`/`--sandbox` under `skip-all`, Cursor's own sandbox under
-//     `ask`, and `--mode plan` when the runtime sandbox is read-only.
-//   * There is NO `--mcp-config`. The CLI loads MCP servers from the user's
-//     own Cursor configuration only, so this driver mounts none and writes
-//     nothing into the workspace's `.cursor/`. The team tools are absent from
-//     a Cursor turn, and `dispatch` keeps them out of the persona too.
+//   * There is NO approval channel. Cursor print mode cannot raise a BizOS
+//     permission card, so dispatch mounts only servers the host already marks
+//     `preApproved`. The CLI stays sandboxed even under Local BizOS's global
+//     skip setting; this driver never passes `--force`, `--yolo` or the global
+//     `--approve-mcps` switch.
+//   * There is NO `--mcp-config`, but Cursor CLI 2026.09.18 supports a local
+//     plugin per invocation. The driver writes that plugin and its scoped
+//     `Mcp(server:*)` permissions into a private disposable profile, passes it
+//     with `--plugin-dir`, then removes it at the terminal outcome. The bot's
+//     workspace and the person's project/global Cursor files are untouched.
 //
 // The prompt is a positional argument (Cursor has no system slot), so the
 // persona is prefixed to the text exactly as the Codex driver does.
 import { randomBytes } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { augmentedPath } from "./env-path.js";
 import { cursorChildEnvironment } from "./cursor-status.js";
-import type { CodexTurnHandle, RuntimeEvent } from "./codex-driver.js";
+import {
+  isHttpMcpServer,
+  type CodexTurnHandle,
+  type McpServerSpec,
+  type RuntimeEvent,
+} from "./codex-driver.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
 import { redactSecrets, redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
@@ -48,6 +55,8 @@ export interface CursorTurnInput {
   pathOverride?: string;
   /** Settings → Plans & usage said "never ask anyone": see `buildCursorArgs`. */
   skipPermissions?: boolean;
+  /** Run-scoped, host-preapproved MCP servers. Never sourced from user config. */
+  mcpServers?: Record<string, McpServerSpec>;
 }
 
 /**
@@ -58,13 +67,9 @@ export interface CursorTurnInput {
  * hangs. `--workspace` is passed as well as the child's `cwd` so the CLI's
  * own idea of the root is the one the harness picked.
  *
- * permissions × sandbox, in full:
- *   * `skip-all`            → `--force --sandbox disabled` (the global
- *     "never ask anyone" switch; Cursor runs everything, unsandboxed).
- *   * `ask`                 → no `--force`, `--sandbox enabled`. Cursor's own
- *     sandbox keeps commands inside the workspace. It is NOT an approval
- *     card — this family cannot raise one — it is the boundary that stands in
- *     for the card.
+ * Cursor's own sandbox remains enabled for every print turn. It is not an
+ * approval card, but it keeps the no-TTY family within the chosen workspace.
+ * Run-scoped MCP permissions are carried by the disposable CLI profile.
  *   * sandbox `read-only`   → `--mode plan` on top of either of the two
  *     above, so the agent analyses and proposes instead of editing.
  */
@@ -76,6 +81,7 @@ export function buildCursorArgs(input: {
   sandbox: SandboxMode;
   resumeCursor?: string | null;
   skipPermissions?: boolean;
+  pluginDir?: string;
 }): string[] {
   const args = [
     "-p",
@@ -86,8 +92,8 @@ export function buildCursorArgs(input: {
     "--workspace",
     input.cwd,
   ];
-  if (input.skipPermissions) args.push("--force", "--sandbox", "disabled");
-  else args.push("--sandbox", "enabled");
+  args.push("--sandbox", "enabled");
+  if (input.pluginDir) args.push("--plugin-dir", input.pluginDir);
   if (input.sandbox === "read-only") args.push("--mode", "plan");
   if (input.model) args.push("--model", input.model);
   if (input.resumeCursor) args.push("--resume", input.resumeCursor);
@@ -100,8 +106,111 @@ export function buildCursorArgs(input: {
  * cards at all, whatever the global permission policy is. */
 export function cursorPermissionNote(permissions: PermissionPolicy | undefined): string {
   return permissions === "skip-all"
-    ? "Cursor never asks in print mode — this turn ran with the sandbox off."
-    : "Cursor never asks in print mode — this turn ran inside Cursor's own sandbox, with no approval cards.";
+    ? "Cursor print mode has no approval cards — this turn kept Cursor's workspace sandbox and auto-allowed only the run-scoped BizOS MCP tools mounted by the host."
+    : "Cursor print mode has no approval cards — this turn ran inside Cursor's workspace sandbox; only host-preapproved BizOS tools were mounted.";
+}
+
+export const CURSOR_PLUGIN_MIN_VERSION = "2026.09.18";
+const CURSOR_PLUGIN_DIR_NAME = "bizos-runtime";
+const CURSOR_PLUGIN_PREFIX = `plugin-${CURSOR_PLUGIN_DIR_NAME}-`;
+
+type CursorMcpProfile = Readonly<{
+  root: string;
+  pluginDir: string;
+  configDir: string;
+  launcher: string;
+  forwarded: Record<string, string>;
+}>;
+
+function privateJson(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value)}\n`, { encoding: "utf8", mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+/** Cursor plugin config without secret values. Forwarded secrets live only in
+ * this turn's child environment and are referenced by name. */
+export function cursorMcpConfig(servers: Record<string, McpServerSpec>): Record<string, unknown> {
+  const mcpServers: Record<string, unknown> = {};
+  for (const [name, server] of Object.entries(servers)) {
+    if (!/^[a-z][a-z0-9_-]*$/i.test(name)) throw new Error(`Cursor cannot mount MCP server ${name}`);
+    if (isHttpMcpServer(server)) {
+      mcpServers[name] = {
+        url: server.url,
+        headers: {
+          ...server.headers,
+          ...(server.bearerTokenEnv
+            ? { Authorization: `Bearer \${env:${server.bearerTokenEnv}}` }
+            : {}),
+        },
+      };
+    } else {
+      mcpServers[name] = {
+        command: server.command,
+        args: server.args,
+        env: {
+          ...server.env,
+          ...Object.fromEntries(Object.keys(server.forwarded).map((key) => [key, `\${env:${key}}`])),
+        },
+      };
+    }
+  }
+  return { mcpServers };
+}
+
+export function cursorMcpPermissions(servers: Record<string, McpServerSpec>): string[] {
+  return Object.keys(servers).sort().map((name) => `Mcp(${CURSOR_PLUGIN_PREFIX}${name}:*)`);
+}
+
+/** Cursor print mode cannot forward a permission request to BizOS. Servers
+ * that require one stay absent instead of being advertised but unusable. */
+export function cursorPreapprovedServers(
+  servers: Record<string, McpServerSpec>,
+): Record<string, McpServerSpec> {
+  return Object.fromEntries(Object.entries(servers).filter(([, server]) => server.preApproved));
+}
+
+function cursorMcpProfile(servers: Record<string, McpServerSpec>): CursorMcpProfile | null {
+  if (!Object.keys(servers).length) return null;
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "bizos-cursor-"));
+  try {
+    chmodSync(root, 0o700);
+    const pluginDir = join(root, CURSOR_PLUGIN_DIR_NAME);
+    const manifestDir = join(pluginDir, ".cursor-plugin");
+    const configDir = join(root, "profile");
+    mkdirSync(manifestDir, { recursive: true, mode: 0o700 });
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    privateJson(join(manifestDir, "plugin.json"), {
+      name: "bizos-runtime",
+      version: "1.0.0",
+      description: "Disposable run-scoped Local BizOS tools",
+    });
+    privateJson(join(pluginDir, "mcp.json"), cursorMcpConfig(servers));
+    privateJson(join(configDir, "cli-config.json"), {
+      permissions: { allow: cursorMcpPermissions(servers), deny: [] },
+    });
+    const launcher = join(root, "cursor-private");
+    writeFileSync(launcher, "#!/bin/sh\numask 077\nexec \"$@\"\n", { encoding: "utf8", mode: 0o700 });
+    chmodSync(launcher, 0o700);
+    const forwarded: Record<string, string> = {};
+    for (const server of Object.values(servers)) {
+      for (const [key, value] of Object.entries(server.forwarded)) {
+        if (key in forwarded && forwarded[key] !== value) {
+          throw new Error(`Cursor MCP environment variable ${key} is ambiguous`);
+        }
+        forwarded[key] = value;
+      }
+    }
+    return {
+      root: realpathSync(root),
+      pluginDir: realpathSync(pluginDir),
+      configDir: realpathSync(configDir),
+      launcher: realpathSync(launcher),
+      forwarded,
+    };
+  } catch (error) {
+    rmSync(root, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** The tool a `tool_call` frame names, across both encodings the CLI has
@@ -170,6 +279,7 @@ export function startCursorTurn(input: CursorTurnInput): CodexTurnHandle {
     child: null as PipedChild | null,
     resultError: null as string | null,
     resultSeen: false,
+    profile: null as CursorMcpProfile | null,
   };
 
   const emit = (event: RuntimeEvent): void => {
@@ -190,6 +300,10 @@ export function startCursorTurn(input: CursorTurnInput): CodexTurnHandle {
       killCliTree(state.child);
       state.child = null;
     }
+    if (state.profile) {
+      rmSync(state.profile.root, { recursive: true, force: true });
+      state.profile = null;
+    }
     emit({ type: "turn.completed", ok, stopReason });
   };
 
@@ -202,21 +316,30 @@ export function startCursorTurn(input: CursorTurnInput): CodexTurnHandle {
 
   let child: PipedChild;
   try {
-    const environment = cursorChildEnvironment(
+    const workspace = realpathSync(input.cwd);
+    state.profile = cursorMcpProfile(input.mcpServers ?? {});
+    const environment: Record<string, string | undefined> = cursorChildEnvironment(
       input.environment ?? process.env,
       input.pathOverride ?? augmentedPath(input.environment as NodeJS.ProcessEnv | undefined),
     );
+    if (state.profile) {
+      Object.assign(environment, state.profile.forwarded, {
+        CURSOR_CONFIG_DIR: state.profile.configDir,
+        CURSOR_DATA_DIR: state.profile.configDir,
+      });
+    }
     const args = buildCursorArgs({
       text: input.text,
-      cwd: input.cwd,
+      cwd: workspace,
       sandbox: input.sandbox,
       ...(input.system ? { system: input.system } : {}),
       ...(input.model ? { model: input.model } : {}),
-      ...(input.resumeCursor ? { resumeCursor: input.resumeCursor } : {}),
+      ...(!state.profile && input.resumeCursor ? { resumeCursor: input.resumeCursor } : {}),
       ...(input.skipPermissions ? { skipPermissions: true } : {}),
+      ...(state.profile ? { pluginDir: state.profile.pluginDir } : {}),
     });
-    child = spawnCli(input.cli, args, {
-      cwd: input.cwd,
+    child = spawnCli(state.profile?.launcher ?? input.cli, state.profile ? [input.cli, ...args] : args, {
+      cwd: workspace,
       env: environment as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -284,6 +407,8 @@ export function startCursorTurn(input: CursorTurnInput): CodexTurnHandle {
       emit({ type: "runtime.error", message: redactSecretsInText(chatter).slice(0, 400) });
     } else if (/authentication required|not logged in/i.test(chatter)) {
       state.resultError ??= redactSecretsInText(chatter).slice(0, 400);
+    } else if (/unknown option.*plugin-dir|unknown argument.*plugin-dir/i.test(chatter)) {
+      state.resultError ??= `Cursor ${CURSOR_PLUGIN_MIN_VERSION} or newer is required for Local BizOS tools.`;
     }
   });
   child.on("error", (error) => {
