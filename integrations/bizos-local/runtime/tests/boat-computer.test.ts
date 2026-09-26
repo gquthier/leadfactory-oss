@@ -159,6 +159,10 @@ describe("the helper", () => {
     writeFileSync(file, source);
     execFileSync(process.execPath, ["--check", file]);
     expect(source).toContain(JSON.stringify(pageProbeScript()));
+    expect(source).toContain('session.restore_on_startup');
+    expect(source).toContain('restore_on_startup: 1');
+    expect(source).toContain('"--restore-last-session"');
+    expect(source).not.toMatch(/Max-Age|expires.*cookie|cookie.*expires/i);
     expect(helperPath()).toMatch(/^\/home\/user\/bizos\/computer-helper-[0-9a-f]{16}\.mjs$/);
   });
 

@@ -173,7 +173,7 @@ export function parseHelperOutput(stdout: string): HelperResponse | null {
 const HELPER_HEADER = `// Local BizOS — one agent's seat on the shared cloud computer. Generated; do not edit.
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, createWriteStream, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync, createWriteStream, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { basename } from "node:path";`;
 
@@ -279,6 +279,34 @@ function clearProfileLocks(profile) {
   for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) rmSync(profile + "/" + name, { force: true });
 }
 
+/**
+ * Chrome normally discards session cookies when a cleanly closed profile is
+ * next opened on a blank page. "Continue where you left off" is the browser's
+ * own durable-session contract: Chromium names this preference
+ * session.restore_on_startup, with value 1 for restore-last-session.
+ *
+ * Set only that preference, inside this agent's Default profile. We never
+ * rewrite cookies or turn them into persistent cookies, and a malformed
+ * Preferences file is left untouched rather than replaced.
+ */
+function keepBrowserSession(profile) {
+  const dir = profile + "/Default";
+  const file = dir + "/Preferences";
+  mkdirSync(dir, { recursive: true });
+  let preferences = {};
+  if (existsSync(file)) {
+    preferences = JSON.parse(readFileSync(file, "utf8"));
+    if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) throw new Error("Chrome Preferences is not an object");
+  }
+  const current = preferences.session;
+  const session = current && typeof current === "object" && !Array.isArray(current) ? current : {};
+  if (session.restore_on_startup === 1) return;
+  preferences.session = { ...session, restore_on_startup: 1 };
+  const temporary = file + ".bizos-" + process.pid;
+  writeFileSync(temporary, JSON.stringify(preferences), { mode: 0o600 });
+  renameSync(temporary, file);
+}
+
 async function ensureChrome(seat) {
   if (await devtools(seat.port)) return { display: seat.displayName };
   mkdirSync(seat.profile, { recursive: true });
@@ -287,8 +315,10 @@ async function ensureChrome(seat) {
   for (const pid of pgrep("--user-data-dir=" + seat.profile)) { try { process.kill(pid, "SIGKILL"); } catch {} }
   await sleep(200);
   clearProfileLocks(seat.profile);
+  keepBrowserSession(seat.profile);
   const args = [
     "--user-data-dir=" + seat.profile,
+    "--restore-last-session",
     "--remote-debugging-port=" + seat.port,
     "--remote-debugging-address=127.0.0.1",
     "--no-first-run", "--no-default-browser-check", "--disable-default-apps",
