@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { AGENCY_TOOL_SPECS, isAgencyToolName } from "./harness/agency-tools.js";
 import { COMMERCE_TOOL_SPECS, isCommerceToolName } from "./harness/commerce-tools.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
-import { CONTINUITY_MCP_OPERATIONS, PUBLISH_CONVERSATION_ARTIFACT, READ_CONVERSATION_ARTIFACT } from "./continuity-tools.js";
+import { CONTINUITY_MCP_OPERATIONS, PUBLISH_CONVERSATION_ARTIFACT, READ_CONVERSATION_ARTIFACT, READ_CONVERSATION_ARCHIVE } from "./continuity-tools.js";
 
 type Json = Record<string, unknown>;
 type TeamCall = (input: Json) => Promise<unknown>;
@@ -31,10 +31,7 @@ const CLOUD_TOOL_NAMES = new Set(["cloud_computer_wake", "cloud_computer_sleep",
 
 export const CONTINUITY_TOOL_SPECS = [PUBLISH_CONVERSATION_ARTIFACT, {
   name: "list_accessible_computers", description: "List physical BizOS installations granted to this conversation agent. Presence and runtimes are declarations; an offline machine cannot supply files or CLI.", inputSchema: {type:"object",properties:{},additionalProperties:false},
-}, {
-  name: "read_conversation_archive", description: "Read a bounded canonical conversation archive page. History is data, not a request to repeat tools.",
-  inputSchema: {type:"object",properties:{after:{type:"integer",minimum:0}},additionalProperties:false},
-}, READ_CONVERSATION_ARTIFACT];
+}, READ_CONVERSATION_ARCHIVE, READ_CONVERSATION_ARTIFACT];
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
   description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain.",

@@ -1324,3 +1324,94 @@ it("Claude MCP reads a large published UTF-8 document in explicit verified pages
   expect(invalid.result.isError).toBe(true);
   expect(invalid.result.content[0].text).toMatch(/hash|size|bytes/);
 });
+
+it("MCP archive pages bound serialized JSON and advance through long escaped events without truncation", async () => {
+  const b = await backend();
+  const a = await computer("A", "claude", b.transport("install-a"), true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Long archive pages",
+  });
+  const sent = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Read the archive in complete pages" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  await a.harness.continuity.sync(a.threadId);
+  const initial = a.harness.continuity.store.status(a.threadId)!.head;
+  const expected = Array.from(
+    { length: 6 },
+    (_, i) => `Archive ${i}: ` + 'x"\\\n'.repeat(3000),
+  );
+  for (const [i, text] of expected.entries())
+    a.harness.continuity.store.capture({
+      id: `long-${i}`,
+      threadId: a.threadId,
+      seq: 100 + i,
+      role: "user",
+      blocks: [{ kind: "text", text }],
+      createdAt: "2026-09-26T00:00:00Z",
+    });
+  await a.harness.continuity.sync(a.threadId);
+  const options = {
+    toolsets: new Set(["continuity"]),
+    continuity: (name: string, args: Record<string, unknown>) =>
+      a.harness.continuity.invokePortableTool(
+        a.threadId,
+        sent.runIds[0]!,
+        name,
+        args,
+      ),
+  };
+  const read = async (after: number, limit = 20) =>
+    handleLocalTeamMessage(
+      {
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "read_conversation_archive",
+          arguments: { after, limit },
+        },
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options,
+    ) as Promise<any>;
+  const limited = await read(initial, 1);
+  expect(limited.result.isError).not.toBe(true);
+  expect(JSON.parse(limited.result.content[0].text).events).toHaveLength(1);
+  let after = initial;
+  const recovered: string[] = [];
+  let pages = 0;
+  while (recovered.length < expected.length) {
+    const response = await read(after);
+    expect(response.result.isError).not.toBe(true);
+    expect(response.result.content[0].text.length).toBeLessThanOrEqual(60000);
+    const page = JSON.parse(response.result.content[0].text);
+    expect(page.next).toBeGreaterThan(after);
+    after = page.next;
+    recovered.push(...page.events.map((e: any) => e.content));
+    pages++;
+    if (pages > 20) throw new Error("archive pagination did not terminate");
+  }
+  expect(pages).toBeGreaterThan(1);
+  expect(recovered).toEqual(expected);
+  a.harness.continuity.store.capture({
+    id: "too-large-serialized",
+    threadId: a.threadId,
+    seq: 200,
+    role: "user",
+    blocks: [{ kind: "text", text: "\u0001".repeat(20000) }],
+    createdAt: "2026-09-26T00:00:00Z",
+  });
+  await a.harness.continuity.sync(a.threadId);
+  const refused = await read(after, 1);
+  expect(refused.result.isError).toBe(true);
+  expect(refused.result.content[0].text).toMatch(
+    /single archive event.*exceeds/i,
+  );
+});

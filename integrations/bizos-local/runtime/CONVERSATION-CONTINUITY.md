@@ -37,7 +37,10 @@ There is a **256 KiB context limit**: above it execution waits and the full arch
 is retained. A checkpoint is an artifact/transfer manifest; this version does not
 claim its summary can replace arbitrary older instructions. Historical tool
 results are data, never automatically replayed commands. `read_conversation_archive`
-is a bounded archive reader. `read_conversation_artifact` verifies local versioned
+is a bounded archive reader: `limit` accepts 1–20 events, the complete JSON page
+is capped at 60,000 characters, and `next` advances after complete events. One
+event that cannot fit returns an explicit error instead of an empty continuation
+page. `read_conversation_artifact` verifies local versioned
 bytes before every page and returns at most 6,000 Unicode characters with
 `offset`, `next` and `total`; it does not duplicate the document as base64 for the
 model. MCP conversation results exceeding the output bound return a visible
@@ -174,14 +177,17 @@ publication, disk errors and occurrence recovery. Full backend SQL/RLS, signed
 cross-repository integration and desktop UI proofs are separate parent-agent work.
 
 Validation on 26 September 2026: `npm run build` passed (TypeScript compilation
-and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **469 tests
+and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **470 tests
 in 51 files**, with no skipped tests. `git diff --check` passed. Test providers,
 network services and writable workspaces are fixtures; this is not a claim of
 real-provider execution or installed desktop validation.
 
 The subsequent local-only projection regression was reproduced and corrected;
 the targeted continuity, dispatch and bot-harness suites passed **42 tests**.
-The full 469-test gate also includes actual dispatcher publication of document
+The full 470-test gate also includes actual dispatcher publication of document
 versions, MCP publication interrupted by STOP, rejected invalid inputs, concurrent
 document manifests and conflicting updates, and complete paginated reconstruction
-of a 120 KiB UTF-8 document with emoji and escaped characters.
+of a 120,000-byte UTF-8 document with emoji and escaped characters.
+Archive pagination is tested with long escaped events, complete reconstruction
+through `next`, an explicit event count limit, and rejection of a single event
+that cannot fit without truncation.
