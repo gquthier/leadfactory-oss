@@ -1857,7 +1857,7 @@ export class Dispatcher {
       : availableServers;
     const hostTools = provider === "cursor" ? undefined : [
       ...(this.deps.dynamicTools?.(bot, runContext) ?? []),
-      ...(linked ? continuity!.portableTools(threadId) : []),
+      ...(linked ? continuity!.portableTools(threadId, queued.runId) : []),
     ];
     const dynamicTools = hostTools && linked ? continuity!.tools(threadId, queued.runId, hostTools) : hostTools;
     const toolSurface = [

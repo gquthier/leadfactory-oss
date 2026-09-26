@@ -1,4 +1,5 @@
 import { desktopContinuityTransport } from "./continuity-bridge.js";
+import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
@@ -338,13 +339,13 @@ function uuid(value: unknown, field: string): string {
   return text;
 }
 
-async function bodyOf(request: IncomingMessage): Promise<unknown> {
+async function bodyOf(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, "payload_too_large", "Request body is too large.");
+    if (size > maxBytes) throw new HttpError(413, "payload_too_large", "Request body is too large.");
     chunks.push(bytes);
   }
   if (size === 0) return {};
@@ -2675,8 +2676,14 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname.startsWith("/api/internal/local-team/")) {
         const operation = url.pathname.slice("/api/internal/local-team/".length);
         const capability = teamBroker.authorize(bearer, {allowDuringVoice: operation === "cloud"});
-        const input = await bodyOf(request);
+        // A 128 KiB text payload can expand sixfold when JSON escapes control
+        // characters. Only this explicit document route has the larger bound.
+        const input = await bodyOf(request, operation === "publish-artifact" ? 1024 * 1024 : MAX_BODY_BYTES);
         const parsed = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string,unknown> : {};
+        const continuityTool = Object.hasOwn(CONTINUITY_MCP_OPERATIONS, operation) ? CONTINUITY_MCP_OPERATIONS[operation] : undefined;
+        if (continuityTool) return sendJson(response, 200, await harness.continuity.invokePortableTool(
+          capability.threadId, capability.runId, continuityTool, input, () => { teamBroker.authorize(bearer); },
+        ));
         const toolName = typeof parsed.tool === "string" ? parsed.tool : operation;
         const result = await harness.continuity.execute(capability.threadId,capability.runId,toolName,input,async () => {
           // Recheck immediately before dispatch after the network admission.
@@ -2689,10 +2696,6 @@ async function serve(): Promise<void> {
           if (operation === "quick-replies") return facade!.offerQuickReplies(capability,input);
           if (operation === "propose-name") return facade!.proposeCompanyName(capability,input);
           if (operation === "agency" || operation === "pack") return facade!.packTool(capability,input);
-          if (operation === "archive" || operation === "artifact" || operation === "computers") {
-            const tool=harness.continuity.portableTools(capability.threadId).find(t=>t.name===(operation === "computers" ? "list_accessible_computers" : operation === "archive" ? "read_conversation_archive" : "read_conversation_artifact"))!;
-            return tool.call(input,{callId:"mcp",threadId:capability.threadId,turnId:capability.runId});
-          }
           if (operation === "cloud") {
             if (!cloud || !isCloudToolName(parsed.tool)) throw new HttpError(404,"not_found","Unknown cloud computer tool.");
             const args=parsed.arguments&&typeof parsed.arguments === "object"&&!Array.isArray(parsed.arguments)?parsed.arguments as Record<string,unknown>:{};

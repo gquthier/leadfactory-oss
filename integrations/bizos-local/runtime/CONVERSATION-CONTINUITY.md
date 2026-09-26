@@ -38,7 +38,10 @@ is retained. A checkpoint is an artifact/transfer manifest; this version does no
 claim its summary can replace arbitrary older instructions. Historical tool
 results are data, never automatically replayed commands. `read_conversation_archive`
 is a bounded archive reader. `read_conversation_artifact` verifies local versioned
-bytes. `list_accessible_computers` queries only the cloud agent bound to this
+bytes before every page and returns at most 6,000 Unicode characters with
+`offset`, `next` and `total`; it does not duplicate the document as base64 for the
+model. MCP conversation results exceeding the output bound return a visible
+error instead of truncated JSON. `list_accessible_computers` queries only the cloud agent bound to this
 conversation, not the human's full device inventory.
 
 Bindings distinguish installation, provider account, runtime contract, policy,
@@ -52,6 +55,23 @@ Messages are limited to **20,000 characters**. Artifacts are explicit immutable
 versions, SHA256-verified, at most **128 KiB**. There is no automatic folder upload.
 The latest authorized checkpoint pulls required artifact versions before a turn;
 missing/conflicting bytes block it. Checkpoints and blobs are conversation scoped.
+
+`publish_conversation_artifact` is available through both Claude's mounted MCP
+and Codex's actual dynamic tools. It accepts explicit text, a document name, a
+supported text MIME type, version and previous SHA256 (null for version 1), plus
+the artifact UUID for updates. No disk path or folder is accepted. The host run
+ID is captured by the dispatcher or capability broker; a native CLI turn ID
+cannot select authority. Admission, current grants and the live lease authorize
+the operation; STOP is checked again after waiting and before the checkpoint.
+
+The publication writes immutable verified bytes and a checkpoint containing the
+latest versions, preserving previous checkpoint instructions. Publications on
+one conversation are serialized through their entire sync/write/checkpoint
+sequence, so parallel documents cannot replace a complete manifest with an older
+partial one. A stale version conflicts rather than silently rebasing. A lost
+response or STOP after upload leaves an unknown effect for reconciliation; the
+runtime does not claim to roll back already accepted bytes. Validation rejected
+before document mutation is recorded as failed, allowing correction of the input.
 
 ## Authority and actual tool surface
 
@@ -154,10 +174,14 @@ publication, disk errors and occurrence recovery. Full backend SQL/RLS, signed
 cross-repository integration and desktop UI proofs are separate parent-agent work.
 
 Validation on 26 September 2026: `npm run build` passed (TypeScript compilation
-and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **462 tests
+and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **469 tests
 in 51 files**, with no skipped tests. `git diff --check` passed. Test providers,
 network services and writable workspaces are fixtures; this is not a claim of
 real-provider execution or installed desktop validation.
 
 The subsequent local-only projection regression was reproduced and corrected;
 the targeted continuity, dispatch and bot-harness suites passed **42 tests**.
+The full 469-test gate also includes actual dispatcher publication of document
+versions, MCP publication interrupted by STOP, rejected invalid inputs, concurrent
+document manifests and conflicting updates, and complete paginated reconstruction
+of a 120 KiB UTF-8 document with emoji and escaped characters.

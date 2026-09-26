@@ -15,6 +15,10 @@ import type {
 import type { ThreadMessage } from "./types.js";
 import { waitForCliShutdown } from "./procs.js";
 import type { CodexDynamicTool } from "./codex-driver.js";
+import {
+  PUBLISH_CONVERSATION_ARTIFACT,
+  READ_CONVERSATION_ARTIFACT,
+} from "../continuity-tools.js";
 interface CanonicalEvent {
   eventId: string;
   schemaVersion: 1;
@@ -50,6 +54,7 @@ interface LinkedRun {
 const RUNS = "continuity-runs.json";
 const STOPS = "continuity-stops.json";
 const MAX_REQUEST_BYTES = 256 * 1024;
+class DocumentValidationError extends Error {}
 export function wireEvent(
   event: Pick<
     NeutralEvent,
@@ -100,6 +105,7 @@ export class ConversationContinuity {
   readonly store: ContinuityStore;
   readonly guard: LeaseGuard;
   private readonly syncing = new Map<string, Promise<void>>();
+  private readonly publishing = new Map<string, Promise<void>>();
   private runs: Record<string, LinkedRun>;
   private readonly renewals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly stopped: Set<string>;
@@ -1133,12 +1139,17 @@ export class ConversationContinuity {
       });
       return result;
     } catch (error) {
-      this.guard.update(threadId, operationId, "unknown");
+      const status =
+        error instanceof DocumentValidationError ? "failed" : "unknown";
+      this.guard.update(threadId, operationId, status);
       void this.call("runs/receipt", {
         ...this.credentials(run),
         operationId,
-        status: "unknown",
-        receipt: "Result unavailable; external effect may have happened.",
+        status,
+        receipt:
+          status === "failed"
+            ? "Document was not written; validation failed."
+            : "Result unavailable; external effect may have happened.",
       }).catch(() => undefined);
       throw error;
     }
@@ -1185,6 +1196,13 @@ export class ConversationContinuity {
       artifactId,
       sha256: hash,
     });
+    if (
+      result.artifactId !== artifactId ||
+      result.version !== input.version ||
+      result.sha256 !== hash ||
+      result.sizeBytes !== bytes.length
+    )
+      throw new Error("Artifact receipt does not match the published bytes.");
     this.persistArtifact(
       threadId,
       result.artifactId,
@@ -1195,6 +1213,189 @@ export class ConversationContinuity {
       bytes,
     );
     return result;
+  }
+  private publishArtifact(
+    threadId: string,
+    localRunId: string | undefined,
+    raw: unknown,
+  ): Promise<unknown> {
+    const predecessor = this.publishing.get(threadId) ?? Promise.resolve();
+    // Serialize the complete read/version/write/checkpoint sequence. The next
+    // publication validates its original CAS after waiting; it never rebases.
+    const work = predecessor.then(() =>
+      this.publishArtifactNow(threadId, localRunId, raw),
+    );
+    const settled = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.publishing.set(threadId, settled);
+    return work.finally(() => {
+      if (this.publishing.get(threadId) === settled)
+        this.publishing.delete(threadId);
+    });
+  }
+  private async publishArtifactNow(
+    threadId: string,
+    localRunId: string | undefined,
+    raw: unknown,
+  ): Promise<unknown> {
+    if (!localRunId || !this.runs[localRunId])
+      throw new Error("Document publication requires the active linked run.");
+    const run = this.runs[localRunId]!;
+    const authorize = () => {
+      this.assertNotStopped(threadId, localRunId);
+      const lease = this.guard.assert(
+        threadId,
+        PUBLISH_CONVERSATION_ARTIFACT.name,
+      );
+      if (lease.runId !== run.runId || lease.generation !== run.epoch)
+        throw new Error("Document publication belongs to a stale run.");
+    };
+    authorize();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+      throw new DocumentValidationError(
+        "Document publication requires explicit text fields.",
+      );
+    const input = raw as Record<string, unknown>;
+    if (
+      Object.keys(input).some(
+        (key) =>
+          ![
+            "artifactId",
+            "name",
+            "mimeType",
+            "text",
+            "version",
+            "previousHash",
+          ].includes(key),
+      )
+    )
+      throw new DocumentValidationError(
+        "Unknown publication field; disk paths and scope overrides are not accepted.",
+      );
+    if (
+      typeof input.text !== "string" ||
+      Buffer.byteLength(input.text, "utf8") > 128 * 1024
+    )
+      throw new DocumentValidationError("Document text exceeds 128 KiB UTF-8.");
+    if (
+      typeof input.name !== "string" ||
+      !input.name.trim() ||
+      input.name.length > 200 ||
+      /[\\/\r\n\0]/.test(input.name)
+    )
+      throw new DocumentValidationError(
+        "Document name must be a bounded file name, not a path.",
+      );
+    if (
+      typeof input.mimeType !== "string" ||
+      !["text/plain", "text/markdown", "text/csv", "application/json"].includes(
+        input.mimeType,
+      )
+    )
+      throw new DocumentValidationError(
+        "Only a supported text document type may be published.",
+      );
+    if (
+      !Number.isSafeInteger(input.version) ||
+      Number(input.version) < 1 ||
+      (input.previousHash !== null &&
+        (typeof input.previousHash !== "string" ||
+          !/^[a-f0-9]{64}$/.test(input.previousHash)))
+    )
+      throw new DocumentValidationError(
+        "A document version and its previous SHA256 are required.",
+      );
+    if (
+      input.artifactId !== undefined &&
+      (typeof input.artifactId !== "string" ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+          input.artifactId,
+        ))
+    )
+      throw new DocumentValidationError("Artifact ID must be a UUID.");
+    await this.sync(threadId);
+    authorize();
+    const latest = this.store
+      .artifacts(threadId)
+      .filter((a) => a.artifactId === input.artifactId)
+      .sort((a, b) => b.version - a.version)[0];
+    if (
+      latest
+        ? input.version !== latest.version + 1 ||
+          input.previousHash !== latest.hash
+        : input.version !== 1 || input.previousHash !== null
+    )
+      throw new DocumentValidationError(
+        "Document version conflict; read the latest authorized version before updating.",
+      );
+    const result = (await this.putArtifact(threadId, {
+      ...(typeof input.artifactId === "string"
+        ? { artifactId: input.artifactId }
+        : {}),
+      name: input.name,
+      mimeType: input.mimeType,
+      version: Number(input.version),
+      previousHash: input.previousHash as string | null,
+      contentBase64: Buffer.from(input.text, "utf8").toString("base64"),
+    })) as {
+      artifactId: string;
+      version: number;
+      sha256: string;
+      sizeBytes: number;
+    };
+    authorize();
+    const artifacts = new Map<
+      string,
+      ReturnType<ContinuityStore["artifacts"]>[number]
+    >();
+    for (const artifact of this.store.artifacts(threadId))
+      if ((artifacts.get(artifact.artifactId)?.version ?? 0) < artifact.version)
+        artifacts.set(artifact.artifactId, artifact);
+    if (
+      artifacts.size > 100 ||
+      [...artifacts.values()].some((a) => !a.available)
+    )
+      throw new Error(
+        "Checkpoint dependencies are unavailable or exceed 100 documents; publication awaits reconciliation.",
+      );
+    const previous = this.storage.readJsonStrict<{
+      summary?: string;
+      instructions?: string[];
+      openTasks?: string[];
+    }>(`continuity-checkpoint-${payloadHash(threadId)}.json`, {});
+    const checkpointId = randomUUID();
+    const checkpoint = {
+      ...this.scope(threadId),
+      checkpointId,
+      through: String(this.store.status(threadId)!.head),
+      summary:
+        previous.summary ??
+        "Continue from the full canonical archive and these explicitly shared documents.",
+      instructions: previous.instructions ?? [],
+      openTasks: previous.openTasks ?? [],
+      unknownOperations: this.store
+        .effects(threadId)
+        .filter((e) => e.state === "unknown")
+        .map((e) => e.id),
+      artifacts: [...artifacts.values()].map((a) => ({
+        artifactId: a.artifactId,
+        version: a.version,
+        sha256: a.hash,
+      })),
+      supervised: run.supervised === true,
+    };
+    authorize();
+    const committed = await this.call<{ manifestHash: string }>(
+      "checkpoints/put",
+      checkpoint,
+    );
+    this.storage.writeJson(
+      `continuity-checkpoint-${payloadHash(threadId)}.json`,
+      { ...checkpoint, ...committed },
+    );
+    return { ...result, checkpointId, manifestHash: committed.manifestHash };
   }
   private persistArtifact(
     threadId: string,
@@ -1299,8 +1500,28 @@ export class ConversationContinuity {
     );
     return checkpoint;
   }
-  portableTools(threadId: string): CodexDynamicTool[] {
+  async invokePortableTool(
+    threadId: string,
+    localRunId: string,
+    name: string,
+    input: unknown,
+    authorize?: () => void,
+  ): Promise<unknown> {
+    const tool = this.portableTools(threadId, localRunId).find(
+      (tool) => tool.name === name,
+    );
+    if (!tool) throw new Error("Unknown conversation tool.");
+    return this.execute(threadId, localRunId, name, input, () => {
+      authorize?.();
+      return tool.call(input, { callId: "mcp", threadId, turnId: localRunId });
+    });
+  }
+  portableTools(threadId: string, localRunId?: string): CodexDynamicTool[] {
     return [
+      {
+        ...PUBLISH_CONVERSATION_ARTIFACT,
+        call: async (args) => this.publishArtifact(threadId, localRunId, args),
+      },
       {
         name: "list_accessible_computers",
         description:
@@ -1359,20 +1580,26 @@ export class ConversationContinuity {
         },
       },
       {
-        name: "read_conversation_artifact",
-        description:
-          "Read the verified bytes of an explicitly shared conversation artifact version.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            artifactId: { type: "string" },
-            version: { type: "integer" },
-          },
-          required: ["artifactId", "version"],
-          additionalProperties: false,
-        },
+        ...READ_CONVERSATION_ARTIFACT,
         call: async (args) => {
-          const input = args as { artifactId: string; version: number };
+          const input = args as {
+            artifactId: string;
+            version: number;
+            offset?: number;
+            limit?: number;
+          };
+          const offset = input.offset ?? 0;
+          const limit = input.limit ?? 6000;
+          if (
+            !Number.isSafeInteger(offset) ||
+            offset < 0 ||
+            !Number.isSafeInteger(limit) ||
+            limit < 1 ||
+            limit > 6000
+          )
+            throw new Error(
+              "Document page requires offset >= 0 and limit between 1 and 6000 Unicode characters.",
+            );
           const a = this.store
             .artifacts(threadId)
             .find(
@@ -1388,13 +1615,33 @@ export class ConversationContinuity {
             "base64",
           );
           const { createHash } = await import("node:crypto");
-          if (createHash("sha256").update(bytes).digest("hex") !== a.hash)
+          if (
+            bytes.length > 128 * 1024 ||
+            bytes.length !== a.size ||
+            createHash("sha256").update(bytes).digest("hex") !== a.hash
+          )
             throw new Error("Artifact hash changed on disk.");
+          let text: string;
+          try {
+            text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+          } catch {
+            throw new Error("This artifact is not a UTF-8 text document.");
+          }
+          const characters = Array.from(text);
+          if (offset > characters.length)
+            throw new Error(
+              "Document page offset exceeds its total character count.",
+            );
+          const end = Math.min(offset + limit, characters.length);
           return {
+            artifactId: a.artifactId,
+            version: a.version,
             name: a.name,
             sha256: a.hash,
-            contentBase64: bytes.toString("base64"),
-            text: bytes.toString("utf8"),
+            text: characters.slice(offset, end).join(""),
+            offset,
+            next: end < characters.length ? end : null,
+            total: characters.length,
           };
         },
       },

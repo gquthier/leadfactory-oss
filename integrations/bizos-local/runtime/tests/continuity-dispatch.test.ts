@@ -13,6 +13,7 @@ import type {
 import type { ClaudeTurnInput } from "../src/harness/claude-driver.js";
 import { canonicalEventHash } from "../src/harness/continuity-sync.js";
 import type { ContinuityTransport } from "../src/continuity-bridge.js";
+import { handleLocalTeamMessage } from "../src/local-team-mcp.js";
 const cleanup: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
@@ -895,4 +896,431 @@ it("outbox synchronization sends bounded UTF-8 batches and drains all valid mess
         256 * 1024,
     ),
   ).toBe(true);
+});
+
+it("the actual Codex tool publishes versioned text and a checkpoint that another installation reads", async () => {
+  const b = await backend();
+  const a = await computer("A", "codex", b.transport("install-a"), true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Portable document",
+  });
+  const sent = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Publish the approved brief" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  const tool = (a.turns[0] as CodexTurnInput).dynamicTools?.find(
+    (t) => t.name === "publish_conversation_artifact",
+  );
+  expect(tool).toBeDefined();
+  const context = {
+    callId: "publish-v1",
+    threadId: a.threadId,
+    turnId: "native-turn",
+  };
+  const first: any = await tool!.call(
+    {
+      name: "Brief.md",
+      mimeType: "text/markdown",
+      text: "Budget EUR 7",
+      version: 1,
+      previousHash: null,
+    },
+    context,
+  );
+  const second: any = await tool!.call(
+    {
+      artifactId: first.artifactId,
+      name: "Brief.md",
+      mimeType: "text/markdown",
+      text: "Corrected budget EUR 9",
+      version: 2,
+      previousHash: first.sha256,
+    },
+    { ...context, callId: "publish-v2" },
+  );
+  expect(second).toMatchObject({
+    artifactId: first.artifactId,
+    version: 2,
+    sha256: createHash("sha256").update("Corrected budget EUR 9").digest("hex"),
+    checkpointId: expect.any(String),
+  });
+  const checkpoints = b.requests.filter((r) => r.op === "checkpoints/put");
+  expect(checkpoints.at(-1)!.body.artifacts).toEqual([
+    { artifactId: first.artifactId, version: 2, sha256: second.sha256 },
+  ]);
+  const target = await computer("B", "claude", b.transport("install-b"));
+  await target.harness.continuity.attach(target.threadId, b.conversationId);
+  const reader = target.harness.continuity
+    .portableTools(target.threadId)
+    .find((t) => t.name === "read_conversation_artifact")!;
+  expect(
+    await reader.call({ artifactId: first.artifactId, version: 2 }, context),
+  ).toMatchObject({ text: "Corrected budget EUR 9", sha256: second.sha256 });
+  expect(
+    b.requests.filter((r) => r.op === "runs/admit").map((r) => r.body.target),
+  ).toEqual(["publish_conversation_artifact", "publish_conversation_artifact"]);
+  await a.harness.threads.cancelMission(sent.runIds[0]!);
+  const before = b.requests.filter((r) => r.op === "artifacts/put").length;
+  await expect(
+    tool!.call(
+      {
+        artifactId: first.artifactId,
+        name: "Brief.md",
+        mimeType: "text/markdown",
+        text: "Forbidden after STOP",
+        version: 3,
+        previousHash: second.sha256,
+      },
+      context,
+    ),
+  ).rejects.toThrow(/lease|stop|admit/i);
+  expect(b.requests.filter((r) => r.op === "artifacts/put")).toHaveLength(
+    before,
+  );
+});
+
+it("Claude MCP publication checks authority again after upload and refuses a checkpoint after STOP", async () => {
+  const b = await backend();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let uploaded = false;
+  const transport: ContinuityTransport = async (op, body) => {
+    const result = await b.transport("install-a")(op, body);
+    if (op === "artifacts/put") {
+      uploaded = true;
+      await gate;
+    }
+    return result as any;
+  };
+  const a = await computer("A", "claude", transport, true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "MCP publication",
+  });
+  const sent = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Publish then stop" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  const options: any = {
+    toolsets: new Set(["team", "continuity"]),
+    continuity: (tool: string, args: Record<string, unknown>) =>
+      (a.harness.continuity as any).invokePortableTool(
+        a.threadId,
+        sent.runIds[0]!,
+        tool,
+        args,
+      ),
+  };
+  const list = await handleLocalTeamMessage(
+    { id: 1, method: "tools/list" },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    options,
+  );
+  expect(JSON.stringify(list)).toContain("publish_conversation_artifact");
+  const publication = handleLocalTeamMessage(
+    {
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "publish_conversation_artifact",
+        arguments: {
+          name: "Brief.md",
+          mimeType: "text/markdown",
+          text: "Explicitly shared text",
+          version: 1,
+          previousHash: null,
+        },
+      },
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    options,
+  );
+  await until(() => uploaded);
+  await a.harness.threads.cancelMission(sent.runIds[0]!);
+  release();
+  expect((await publication)!.result).toMatchObject({ isError: true });
+  expect(b.requests.filter((r) => r.op === "checkpoints/put")).toHaveLength(0);
+  expect(a.harness.continuity.store.effects(a.threadId)).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        tool: "publish_conversation_artifact",
+        state: "unknown",
+      }),
+    ]),
+  );
+});
+
+it("publication refuses oversized text, disk paths and stale versions before writing any new artifact", async () => {
+  const b = await backend();
+  const a = await computer("A", "codex", b.transport("install-a"), true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Bounded documents",
+  });
+  await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Only share the approved text" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  const tool = (a.turns[0] as CodexTurnInput).dynamicTools!.find(
+    (t) => t.name === "publish_conversation_artifact",
+  )!;
+  const context = {
+    callId: "bounded",
+    threadId: a.threadId,
+    turnId: "native-turn",
+  };
+  const valid = {
+    name: "Brief.md",
+    mimeType: "text/markdown",
+    text: "Allowed",
+    version: 1,
+    previousHash: null,
+  };
+  const first: any = await tool.call(valid, context);
+  for (const input of [
+    { ...valid, text: "界".repeat(44000) },
+    { ...valid, path: "/personal/private.md" },
+    {
+      ...valid,
+      artifactId: first.artifactId,
+      version: 2,
+      previousHash: "0".repeat(64),
+    },
+  ])
+    await expect(tool.call(input, context)).rejects.toThrow(
+      /128 KiB|disk paths|version conflict/,
+    );
+  expect(b.requests.filter((r) => r.op === "artifacts/put")).toHaveLength(1);
+  expect(
+    a.harness.continuity.store
+      .effects(a.threadId)
+      .filter((e) => e.tool === "publish_conversation_artifact")
+      .map((e) => e.state),
+  ).toEqual(["confirmed", "failed", "failed", "failed"]);
+});
+
+it("parallel document publication serializes complete manifests despite a delayed first checkpoint", async () => {
+  const b = await backend();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let checkpointCalls = 0;
+  let waiting = false;
+  let secondCheckpoint!: () => void;
+  const secondReached = new Promise<void>((resolve) => {
+    secondCheckpoint = resolve;
+  });
+  const transport: ContinuityTransport = async (op, body) => {
+    if (op === "checkpoints/put") {
+      checkpointCalls++;
+      if (checkpointCalls === 1) {
+        waiting = true;
+        await gate;
+      } else secondCheckpoint();
+    }
+    return b.transport("install-a")(op, body);
+  };
+  const a = await computer("A", "codex", transport, true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Concurrent text documents",
+  });
+  await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Publish both approved documents" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  const tool = (a.turns[0] as CodexTurnInput).dynamicTools!.find(
+    (t) => t.name === "publish_conversation_artifact",
+  )!;
+  const context = {
+    callId: "first",
+    threadId: a.threadId,
+    turnId: "native-turn",
+  };
+  const input = {
+    name: "A.md",
+    mimeType: "text/markdown",
+    text: "Document A",
+    version: 1,
+    previousHash: null,
+  };
+  const first = tool.call(input, context);
+  await until(() => waiting);
+  const second = tool.call(
+    { ...input, name: "B.md", text: "Document B" },
+    { ...context, callId: "second" },
+  );
+  await Promise.race([
+    secondReached,
+    new Promise((resolve) => setTimeout(resolve, 500)),
+  ]);
+  const callsWhileWaiting = checkpointCalls;
+  release();
+  const receipts: any[] = await Promise.all([first, second]);
+  expect(callsWhileWaiting).toBe(1);
+  const manifests = b.requests.filter((r) => r.op === "checkpoints/put");
+  expect(
+    manifests
+      .at(-1)!
+      .body.artifacts.map((a: any) => a.artifactId)
+      .sort(),
+  ).toEqual(receipts.map((r) => r.artifactId).sort());
+  const competing = await Promise.allSettled(
+    ["First revision", "Conflicting revision"].map((text) =>
+      tool.call(
+        {
+          ...input,
+          artifactId: receipts[0].artifactId,
+          version: 2,
+          previousHash: receipts[0].sha256,
+          text,
+        },
+        context,
+      ),
+    ),
+  );
+  expect(
+    competing.filter((result) => result.status === "fulfilled"),
+  ).toHaveLength(1);
+  const conflict = competing.find(
+    (result) => result.status === "rejected",
+  ) as PromiseRejectedResult;
+  expect(String(conflict.reason)).toMatch(/version conflict/);
+  expect(
+    b.requests
+      .filter(
+        (r) =>
+          r.op === "artifacts/put" &&
+          r.body.artifactId === receipts[0].artifactId,
+      )
+      .map((r) => r.body.version),
+  ).toEqual([1, 2]);
+  const destination = await computer("B", "claude", b.transport("install-b"));
+  await destination.harness.continuity.attach(
+    destination.threadId,
+    b.conversationId,
+  );
+  expect(
+    destination.harness.continuity.store
+      .artifacts(destination.threadId)
+      .map((a) => a.artifactId)
+      .sort(),
+  ).toEqual(receipts.map((r) => r.artifactId).sort());
+});
+
+it("Claude MCP reads a large published UTF-8 document in explicit verified pages without truncation", async () => {
+  const b = await backend();
+  const a = await computer("A", "claude", b.transport("install-a"), true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Paged document",
+  });
+  const sent = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Publish and read the full authorized document" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  const options = {
+    toolsets: new Set(["team", "continuity"]),
+    continuity: (name: string, args: Record<string, unknown>) =>
+      a.harness.continuity.invokePortableTool(
+        a.threadId,
+        sent.runIds[0]!,
+        name,
+        args,
+      ),
+  };
+  const mcp = async (name: string, args: Record<string, unknown>) => {
+    const result: any = await handleLocalTeamMessage(
+      { id: 1, method: "tools/call", params: { name, arguments: args } },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options,
+    );
+    expect(result.result.isError).not.toBe(true);
+    return JSON.parse(result.result.content[0].text);
+  };
+  const text = '😀"\\\nX'.repeat(15000);
+  expect(text.length).toBeGreaterThan(64000);
+  const published = await mcp("publish_conversation_artifact", {
+    name: "Escaped.md",
+    mimeType: "text/markdown",
+    text,
+    version: 1,
+    previousHash: null,
+  });
+  let offset = 0;
+  let rebuilt = "";
+  let pages = 0;
+  for (;;) {
+    const page = await mcp("read_conversation_artifact", {
+      artifactId: published.artifactId,
+      version: 1,
+      offset,
+      limit: 6000,
+    });
+    expect(page.sha256).toBe(published.sha256);
+    expect(page.offset).toBe(offset);
+    expect(page.total).toBe(Array.from(text).length);
+    expect(page.contentBase64).toBeUndefined();
+    expect(Array.from(page.text).length).toBeLessThanOrEqual(6000);
+    rebuilt += page.text;
+    pages++;
+    if (page.next === null) break;
+    expect(page.next).toBeGreaterThan(offset);
+    offset = page.next;
+    if (pages > 50) throw new Error("pagination did not terminate");
+  }
+  expect(pages).toBeGreaterThan(1);
+  expect(rebuilt).toBe(text);
+  const local = a.harness.continuity.store.artifacts(a.threadId)[0]!;
+  writeFileSync(local.localPath!, Buffer.from("changed").toString("base64"));
+  const invalid: any = await handleLocalTeamMessage(
+    {
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: "read_conversation_artifact",
+        arguments: {
+          artifactId: published.artifactId,
+          version: 1,
+          offset: 0,
+          limit: 6000,
+        },
+      },
+    },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    options,
+  );
+  expect(invalid.result.isError).toBe(true);
+  expect(invalid.result.content[0].text).toMatch(/hash|size|bytes/);
 });
