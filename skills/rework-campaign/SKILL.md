@@ -2,6 +2,10 @@
 name: rework-campaign
 description: Audite un compte Meta Ads qui tourne, score chaque annonce sur des métriques réelles (CPL, hook rate, hold rate, CTR, CVR, fréquence) avec des gates de volume et de tracking, propose ou applique des actions réversibles (pause, ajustement borné de budget), et prépare des variations des gagnants. À utiliser pour "audite le compte Ads", "coupe les créas qui ne marchent pas", "scale les gagnants", "rework campaign" ; pas pour créer une campagne de zéro (meta-campaign-launcher).
 ---
+## Contexte d’exécution
+
+Dans BizOS cloud/SaaS, utiliser uniquement les outils du broker autorisés pour la mission ; ne jamais récupérer les clés de plateforme depuis des fichiers, variables, déploiements ou bases. Les instructions de connexion personnelle ci-dessous concernent seulement le mode autonome BYOK explicitement choisi par le propriétaire. Ne pas copier de secret dans les notes, livrables ou Git.
+
 
 # Rework Campaign
 

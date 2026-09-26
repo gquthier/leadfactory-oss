@@ -104,11 +104,11 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     expect(before.body).toEqual({
       installed: false,
       status: "not-installed",
-      template: { id: "lead-gen-agency", name: "Lead Gen Agency", version: 1 },
+      template: { id: "lead-gen-agency", name: "Lead Gen Agency", version: 2 },
       dashboardUrl: null,
       bots: [],
       teamThreadId: null,
-      skillsCount: 23,
+      skillsCount: 26,
       rootId: null,
       vaultPath: null,
       boundTemplateId: null,
@@ -122,7 +122,7 @@ describe.skipIf(!built)("the agency routes of a running sidecar", () => {
     expect(installed.body).toMatchObject({
       installed: true,
       status: "ready",
-      skillsCount: 23,
+      skillsCount: 26,
       rootId: "vault:lead-gen-agency",
       vaultPath: vault,
       boundTemplateId: null,

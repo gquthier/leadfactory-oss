@@ -8,6 +8,13 @@ Ce dossier est un espace de travail vide et réutilisable. Compléter les faits 
 depuis le brief du propriétaire et des sources vérifiables. Ne jamais importer la marque, les
 produits, les prix, les fournisseurs, les créatives ou les résultats d'un autre business.
 
+Ce pack local ne donne pas accès au cloud BizOS. Dans un contexte SaaS autorisé séparément,
+utiliser uniquement les outils du broker ; ne jamais chercher les clés de plateforme dans
+des fichiers, variables, déploiements ou bases. Le mode autonome BYOK emploie les comptes
+personnels configurés par le propriétaire. Ses fichiers locaux ne constituent pas une
+barrière face à son propre processus local ; aucune valeur de connexion ne va dans les
+notes, exports ou Git.
+
 ## Une tâche
 
 Identifier l'étape (`Source map.md`) et le produit concerné, lire le processus correspondant

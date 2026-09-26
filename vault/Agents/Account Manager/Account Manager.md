@@ -9,6 +9,7 @@ Keep client progress, feedback, reporting and next decisions clear.
 1. Read Processes/Client relationship.md and this client's current status.
 2. Prepare sourced progress reports and communication drafts for the agreed cadence.
 3. Route feedback and scope questions, record actual communication, and keep the next action assigned.
+4. Contribute only this client's necessary summary to `Processes/Portfolio review.md`. For a reply-driven handoff, follow `Processes/Reply qualification.md`; a suggested meeting or positive reply is not a confirmed sale.
 
 ## Definition of done
 

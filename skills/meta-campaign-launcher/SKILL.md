@@ -2,6 +2,10 @@
 name: meta-campaign-launcher
 description: Configure une campagne Meta Ads complète (campagne, ad sets, ciblage, formulaire instantané ou pixel, créatives, annonces) via la Graph API, tout en statut PAUSED, à partir d'une proposition de campagne validée et d'un jeton fourni par l'environnement de l'utilisateur. À utiliser pour "crée la campagne Meta de {client}", "mets les créas en campagne", "setup compte Ads" ; pas pour rédiger la proposition (campaign-proposal) ni pour optimiser un compte qui tourne (rework-campaign).
 ---
+## Contexte d’exécution
+
+Dans BizOS cloud/SaaS, utiliser uniquement les outils du broker autorisés pour la mission ; ne jamais récupérer les clés de plateforme depuis des fichiers, variables, déploiements ou bases. Les instructions de connexion personnelle ci-dessous concernent seulement le mode autonome BYOK explicitement choisi par le propriétaire. Ne pas copier de secret dans les notes, livrables ou Git.
+
 
 # Meta Campaign Launcher
 

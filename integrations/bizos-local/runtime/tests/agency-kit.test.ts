@@ -26,7 +26,7 @@ function fakeKit(): void {
   write("LICENSE", "MIT");
   write("THIRD_PARTY_NOTICES.md", "# notices");
   write("UPSTREAM-LICENSE.txt", "MIT upstream");
-  write("templates/lead-gen-agency.company-template.json", JSON.stringify({ id: "lead-gen-agency", version: 1, name: "Lead Gen Agency", folders: [], notes: [], bots: [], routines: [] }));
+  write("templates/lead-gen-agency.company-template.json", JSON.stringify({ id: "lead-gen-agency", version: 2, name: "Lead Gen Agency", folders: [], notes: [], bots: [], routines: [] }));
   write("lib/app.mjs", "export const createApp = () => {};");
   write("lib/notes.txt", "not a module");
   write("public/index.html", "<html></html>");
@@ -201,7 +201,7 @@ describe("the embedded kit on disk", () => {
       template: { id: string; version: number; name: string };
       ecommerce: { template: { id: string; version: number; name: string } } | null;
     };
-    expect(manifest.template).toEqual({ id: "lead-gen-agency", version: 1, name: "Lead Gen Agency" });
+    expect(manifest.template).toEqual({ id: "lead-gen-agency", version: 2, name: "Lead Gen Agency" });
     expect(manifest.ecommerce).toEqual({ template: { id: "ecommerce", version: 1, name: "E-commerce" } });
     expect(Object.keys(manifest.files).length).toBeGreaterThan(100);
     for (const [file, hash] of Object.entries(manifest.files)) {
@@ -217,7 +217,7 @@ describe("the embedded kit on disk", () => {
     }
     const kit = loadKit(DEFAULT_KIT_ROOT, AGENCY_TEMPLATE_FILE, "agency");
     expect(kit.template.bots).toHaveLength(6);
-    expect(kit.skills).toHaveLength(23);
+    expect(kit.skills).toHaveLength(26);
     // Both packs ship from the same staged kit, each with its own cockpit.
     const store = loadKit(ecommerceKitRoot(DEFAULT_KIT_ROOT), ECOMMERCE_TEMPLATE_FILE, "e-commerce");
     expect(store.template).toMatchObject({ id: "ecommerce", version: 1, name: "E-commerce" });

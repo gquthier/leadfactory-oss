@@ -11,3 +11,5 @@ Owner: Acquisition. Inputs: agency offer, market, capacity, approved sources, ou
 7. Hand a qualified opportunity to the Director with need, fit, evidence, open questions and the proposed next conversation.
 
 Done: research is sourced, draft sequence is reviewable, each prospect has a state and next action, and sending is either explicitly authorized/executed with evidence or clearly pending.
+
+Use `Processes/Outbound operations.md` to operate an approved campaign and reconcile provider receipts; use `Processes/Reply qualification.md` for actual responses. These workflows do not add a native email sender or individual-lead CRM to the cockpit. CSV/JSON exports and tasks remain pending imports until a configured provider confirms the operation.

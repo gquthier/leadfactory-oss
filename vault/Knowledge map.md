@@ -6,6 +6,9 @@
 | Boundaries and owner decisions | `Rules.md`, `Autonomy.md`, `Decisions.md` |
 | Who does the work | `Team.md`, `Agents/<Name>/<Name>.md` |
 | Prospecting and sales preparation | `Processes/Acquisition.md` |
+| Multi-client priorities, capacity and blockers | `Processes/Portfolio review.md`, skill `agency-portfolio-ops` |
+| Outbound account readiness, batches and receipts | `Processes/Outbound operations.md`, skill `outbound-campaign-ops` |
+| Actual replies, suppressions and opportunity handoff | `Processes/Reply qualification.md`, skill `outbound-reply-qualification` |
 | New client | `Processes/Client onboarding.md`, the client's `Brief.md` |
 | Campaign research and production | `Processes/Campaign delivery.md`, the campaign's `Campaign.md` |
 | Client reporting and retention | `Processes/Client relationship.md` |

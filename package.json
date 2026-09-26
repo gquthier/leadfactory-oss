@@ -9,7 +9,10 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "templates:build": "node scripts/build-agency-template.mjs && node ecommerce/scripts/build-template.mjs",
+    "templates:check": "node scripts/build-agency-template.mjs --check",
+    "templates:export": "node scripts/export-templates.mjs"
   },
   "license": "MIT",
   "repository": {

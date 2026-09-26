@@ -2,6 +2,10 @@
 name: meta-lead-notifications
 description: Met en place une notification (Slack, email ou webhook CRM) à chaque nouveau lead d'un formulaire Meta Lead Ads, par interrogation périodique de l'API Graph avec un état des leads déjà vus, sans webhook à héberger. À utiliser pour "préviens-moi à chaque nouveau lead Meta", "notif Slack lead", "brancher les leads Meta sur le CRM" ; pas pour créer la campagne (meta-campaign-launcher).
 ---
+## Contexte d’exécution
+
+Dans BizOS cloud/SaaS, utiliser uniquement les outils du broker autorisés pour la mission ; ne jamais récupérer les clés de plateforme depuis des fichiers, variables, déploiements ou bases. Les instructions de connexion personnelle ci-dessous concernent seulement le mode autonome BYOK explicitement choisi par le propriétaire. Ne pas copier de secret dans les notes, livrables ou Git.
+
 
 # Meta Lead Notifications
 

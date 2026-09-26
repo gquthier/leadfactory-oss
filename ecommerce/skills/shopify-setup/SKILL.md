@@ -8,6 +8,10 @@ license: MIT
 metadata:
   upstream: OrcaQubits/agentic-commerce-skills-plugins
 ---
+## Contexte d’exécution
+
+Dans BizOS cloud/SaaS, utiliser uniquement les outils du broker autorisés pour la mission ; ne jamais récupérer les clés de plateforme depuis des fichiers, variables, déploiements ou bases. Les instructions de connexion personnelle ci-dessous concernent seulement le mode autonome BYOK explicitement choisi par le propriétaire. Ne pas copier de secret dans les notes, livrables ou Git.
+
 
 ## BizOS E-commerce workspace
 

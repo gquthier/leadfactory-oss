@@ -47,13 +47,13 @@ afterEach(async () => {
 });
 
 describe("the embedded kit", () => {
-  it("loads the pack: six roles, twenty-three skills, safe paths", () => {
+  it("loads the pack: six roles, twenty-six skills, safe paths", () => {
     const kit = kitOf();
-    expect(kit.template).toMatchObject({ id: "lead-gen-agency", version: 1, name: "Lead Gen Agency" });
+    expect(kit.template).toMatchObject({ id: "lead-gen-agency", version: 2, name: "Lead Gen Agency" });
     expect(kit.template.bots.map((bot) => bot.slug)).toEqual([
       "agency-director", "acquisition", "onboarding", "strategist", "creative", "account-manager",
     ]);
-    expect(kit.skills).toHaveLength(23);
+    expect(kit.skills).toHaveLength(26);
     expect(kit.skills.find((skill) => skill.name === "creative-brief")).toEqual({
       name: "creative-brief",
       description: expect.stringContaining("brief créatif"),
@@ -80,11 +80,11 @@ describe("before the install", () => {
     expect(await agency.status()).toEqual({
       installed: false,
       status: "not-installed",
-      template: { id: "lead-gen-agency", name: "Lead Gen Agency", version: 1 },
+      template: { id: "lead-gen-agency", name: "Lead Gen Agency", version: 2 },
       dashboardUrl: null,
       bots: [],
       groupId: null,
-      skillsCount: 23,
+      skillsCount: 26,
       rootId: null,
       vaultPath: null,
       boundTemplateId: null,
@@ -118,7 +118,7 @@ describe("install", () => {
     expect(state).toMatchObject({
       installed: true,
       status: "ready",
-      skillsCount: 23,
+      skillsCount: 26,
       rootId: "vault:lead-gen-agency",
       vaultPath: vaultOf(),
       boundTemplateId: null,
@@ -538,7 +538,7 @@ describe("the agents' tools", () => {
     await harness.threads.send({ botId: strategist.id }, { text: "research" });
     const tools = toolsOf(turns[0]);
     const skills = await tools.agency_list_skills!.call({}, { callId: "c", threadId: "t", turnId: "u" }) as { count: number };
-    expect(skills.count).toBe(23);
+    expect(skills.count).toBe(26);
     await harness.threads.stop({ botId: strategist.id });
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));
     expect(await refused(tools.agency_list_skills!.call({}, { callId: "c", threadId: "t", turnId: "u" }))).toContain("invalid or expired");
@@ -559,7 +559,7 @@ describe("skills and documents", () => {
     const { call } = await pack();
     const vault = vaultOf();
     const listed = await call("agency_list_skills", {}) as { count: number; skills: Array<{ name: string; references: string[] }> };
-    expect(listed.count).toBe(23);
+    expect(listed.count).toBe(26);
     expect(listed.skills.map((skill) => skill.name)).toContain("outbound-sequence-writer");
     const skill = await call("agency_read_skill", { name: "creative-brief" }) as { text: string; path: string; truncated: boolean };
     expect(skill.path).toBe("skills/creative-brief/SKILL.md");
@@ -593,7 +593,7 @@ describe("skills and documents", () => {
     expect(kitOf(tampered).skills.map((skill) => skill.name)).not.toContain("evil");
     const { call } = await pack({ kitRoot: tampered });
     const listed = await call("agency_list_skills", {}) as { count: number; skills: Array<{ name: string; references: string[] }> };
-    expect(listed.count).toBe(23);
+    expect(listed.count).toBe(26);
     expect(listed.skills.map((skill) => skill.name)).not.toContain("evil");
     expect(listed.skills.find((skill) => skill.name === "creative-brief")!.references).toEqual(["brief-format.md"]);
     expect(existsSync(join(vaultOf(), "skills", "evil"))).toBe(false);

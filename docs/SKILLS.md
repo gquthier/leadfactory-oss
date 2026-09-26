@@ -1,6 +1,6 @@
 # Skills portables
 
-23 skills d'agence lead gen : 21 adaptations du pack public et 2 compléments originaux, réutilisables avec Codex, Claude Code ou tout agent lisant des dossiers `SKILL.md`. Source des adaptations : `tarsluna/my-custom-skills` (MIT, commit `232612d5d5e2f97f597ac501cb007bd3be669b9e`), voir `THIRD_PARTY_NOTICES.md` et `UPSTREAM-LICENSE.txt`.
+26 skills d'agence lead gen : 21 adaptations du pack public et 5 compléments originaux, réutilisables avec Codex, Claude Code ou tout agent lisant des dossiers `SKILL.md`. Source des adaptations : `tarsluna/my-custom-skills` (MIT, commit `232612d5d5e2f97f597ac501cb007bd3be669b9e`), voir `THIRD_PARTY_NOTICES.md` et `UPSTREAM-LICENSE.txt`.
 
 ## Installation
 
@@ -22,7 +22,7 @@ Destinations usuelles (à adapter, proposées à titre indicatif) :
 
 Tests : `node --test test-skills/*.test.mjs`.
 
-Deux compléments originaux sont installés de la même façon :
+Cinq compléments originaux sont installés de la même façon :
 
 | Skill | Rôle | Entrées | Sorties | Prérequis |
 |---|---|---|---|---|
@@ -35,6 +35,7 @@ Deux compléments originaux sont installés de la même façon :
 
 - **Dossier client** `{CLIENT_DIR}` : fourni par l'utilisateur. Les exports Markdown/JSON du cockpit local (client, campagnes, tâches, livrables) sont acceptés en entrée. Les skills écrivent dans des sous-dossiers numérotés (`00-onboarding`, `01-deep-search`, `02-competitor-ads`, `02b-offre`, `03-campaign-proposal`, `04-vsl`, `05-meta-ads`, `06-landing-page`, `07-meta-setup`, `08-outbound` / `08-rework`, `09-notifications`, `10-sales`, `11-devis`).
 - **Livrable par défaut** : Markdown ou JSON. Les PDF/DOCX/images/vidéos sont produits uniquement avec les outils configurés par l'utilisateur ; sinon le skill le signale.
+- **SaaS et secrets** : les agents appellent les outils autorisés du broker BizOS sans obtenir les clés de plateforme. Ne jamais demander de clé dans le chat, exporter les variables serveur ou rechercher un credential manquant. Les mentions de jetons ci-dessous désignent les connexions personnelles en autonome ; elles ne demandent jamais une clé SaaS.
 - **Capacités externes** (recherche web, Ads Library, Meta Graph API, génération d'images, envoi d'emails, déploiement) : utilisées via les outils et secrets de l'environnement de l'utilisateur ; jamais de mot de passe ou jeton demandé dans la conversation ; indisponibilité signalée, jamais de résultat fabriqué.
 - **Aucune garantie** de ventes, de ROI ou de conformité : objectifs écrits comme hypothèses, preuves uniquement sourcées.
 
@@ -56,8 +57,8 @@ Deux compléments originaux sont installés de la même façon :
 | `creative-statics-v2` | créatives rendues par modèle d'image | idem + profil de marque | `creatives-v2/`, matrice, prompts | moteur de génération d'images de l'utilisateur, approbation du coût |
 | `meta-ads-creative-framework` | specs visuelles Figma | brief visuel | `05-meta-ads/creative-specs.md` | aucun |
 | `meta-campaign-launcher` | création de campagne via Graph API, tout PAUSED | proposition validée, visuels | `07-meta-setup/recap.json` | `META_ACCESS_TOKEN` dans l'environnement, compte et Page |
-| `rework-campaign` | audit et optimisation d'un compte | mandat (CPL cible, budgets) | `08-rework/rapport-{date}.md` | jeton Meta ; exécution seulement sur mandat explicite |
-| `meta-lead-notifications` | notification à chaque lead Meta | page, formulaires, destination | script de polling + config planificateur + fiche | jeton Meta, jeton Slack ou webhook/SMTP |
+| `rework-campaign` | audit et optimisation d'un compte | mandat (CPL cible, budgets) | `08-rework/rapport-{date}.md` | outil Meta autorisé ; exécution seulement dans le mandat existant |
+| `meta-lead-notifications` | notification à chaque lead Meta | page, formulaires, destination | script de polling + config planificateur + fiche | outils Meta et notification autorisés ; connexions personnelles en autonome |
 | `cold-call-expert` | scripts de cold call B2B | offre, ICP, preuve, ton | `10-sales/cold-call-script.md` | aucun |
 | `outbound-sequence-writer` | séquences cold email (JSON provider) | preset ou contexte, provider | `08-outbound/sequence-*.{json,md}` | aucun (import manuel dans l'outil d'envoi) |
 | `sales-call-analyzer` | brief structuré depuis une transcription | transcription, URL site | `10-sales/brief-appel.{json,md}` | outil de fetch optionnel |

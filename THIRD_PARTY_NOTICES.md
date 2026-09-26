@@ -4,17 +4,18 @@
 
 Le cockpit autonome, les documents et les éléments originaux du kit d’agence sont sous **MIT**, voir [LICENSE](LICENSE). Les sources du runtime BizOS local embarquées dans [`integrations/bizos-local/runtime/`](integrations/bizos-local/runtime/) sont sous **AGPL-3.0-only**, voir leur [LICENSE](integrations/bizos-local/runtime/LICENSE). La licence MIT du kit ne remplace pas celle de ce sous-dossier.
 
-Le runtime conserve ses attributions amont, notamment les éléments Apache-2.0 documentés dans son `NOTICE` et son dossier `licenses/`. Son build copie le cockpit, les skills et les notes du présent kit comme ressources ; ces ressources conservent leurs licences et notices d’origine. Les fichiers du runtime sont des sources de l’intégration locale, pas un export du moteur cloud privé.
+Le runtime conserve ses attributions amont, notamment les éléments Apache-2.0 documentés dans son `NOTICE` et son dossier `LICENSES/`. Son build copie le cockpit, les skills et les notes du présent kit comme ressources ; ces ressources conservent leurs licences et notices d’origine. Les fichiers du runtime sont des sources de l’intégration locale, pas un export du moteur cloud privé.
 
 
 ## Skills (`skills/`)
 
-Parmi les 23 skills du dossier `skills/`, 21 sont des adaptations du dépôt public
+Parmi les 26 skills du dossier `skills/`, 21 sont des adaptations du dépôt public
 **tarsluna/my-custom-skills** — https://github.com/tarsluna/my-custom-skills —
 commit `232612d5d5e2f97f597ac501cb007bd3be669b9e`, licence MIT (copyright (c) 2026 tarsluna).
 Le texte intégral de la licence amont est reproduit dans `UPSTREAM-LICENSE.txt`.
 
-`agency-offer-design` et `agency-client-success` sont des compléments originaux du kit,
+`agency-offer-design`, `agency-client-success`, `agency-portfolio-ops`,
+`outbound-campaign-ops` et `outbound-reply-qualification` sont des compléments originaux du kit,
 distribués sous sa licence MIT.
 
 Les adaptations (réécriture des SKILL.md, retrait des chemins, secrets, données clients et

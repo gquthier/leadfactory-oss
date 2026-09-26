@@ -1,10 +1,10 @@
 # E-commerce dans BizOS local
 
-Un template réutilisable pour passer de la recherche produit à une boutique testée, puis organiser les créatives, l'acquisition et les opérations : dashboard métier, six agents, dossiers et 24 skills.
+Un template réutilisable pour passer de la recherche produit à une boutique testée, puis organiser les créatives, l'acquisition et les opérations : dashboard métier, six rôles source, dossiers et 24 skills.
 
 ## Dans BizOS
 
-Dans une version de BizOS qui embarque ce pack, choisissez **E-commerce** et votre coffre au premier démarrage du parcours Apps. Ce choix reste attaché à l'espace local. Le dashboard s'affiche dans Apps ; produits, livrables et mises à jour des agents partagent la même base dans ce coffre.
+Le runtime conserve l'identifiant `ecommerce` pour les installations existantes et l'installation du pack métier. Il ne fait plus partie des quatre choix de création initiaux actuels. Dans un espace E-commerce installé, le choix reste attaché au coffre local : le dashboard Apps, les outils agents et les dossiers partagent la même base. Cette documentation source ne certifie pas le contenu d'un binaire installé.
 
 Dans **Start Here**, renseignez votre activité. Connectez votre modèle personnel dans les réglages de BizOS, puis ouvrez l'équipe E-commerce dans Discussions. Première mission possible : « Recherche trois pistes de produits pour ce marché, cite tes sources et tes hypothèses, puis enregistre les dossiers et les prochaines tâches. »
 
@@ -39,6 +39,8 @@ L’installateur conserve les licences et refuse les collisions. Fournissez-lui 
 ## Parcours et connexions
 
 Le parcours couvre recherche, concurrents/ads, sourcing et coûts, offre, marque, Shopify, créatives, acquisition, rétention et opérations. Les comptes Shopify, publicité, email et médias sont les vôtres. L'agent vérifie les outils disponibles et vous indique les accès à connecter au moment utile. Les skills ne fournissent pas ces comptes.
+
+Dans BizOS cloud/SaaS, ces méthodes passent uniquement par les outils du broker autorisé ; elles ne demandent ni ne recherchent les clés de la plateforme. Le cockpit autonome et les connexions BYOK du propriétaire forment un autre contexte. Les exports distribuables sont des sources vides, jamais une copie du coffre ou de `data/` d'un utilisateur.
 
 Pour la boutique, les skills utilisent les [instructions officielles Shopify pour créer et prévisualiser un thème](https://shopify.dev/docs/storefronts/themes/getting-started/create), puis les contrôles du catalogue, du panier et du checkout. Une boutique en aperçu et une campagne préparée ont des statuts distincts de leur publication réelle. La QA utilise d'abord les modes test appropriés.
 

@@ -9,6 +9,7 @@ Research suitable prospects, prepare relevant outreach and qualify actual respon
 1. Read Company.md and Processes/Acquisition.md; confirm the ICP and offer.
 2. Research fit with source links, prepare original outreach drafts and record uncertainties.
 3. Hand qualified opportunities and discovery questions to the Agency Director.
+4. Use `outbound-campaign-ops` for authorized dispatch preparation and reconciliation; use `outbound-reply-qualification` on actual replies. Follow `Processes/Outbound operations.md` and `Processes/Reply qualification.md`; the cockpit is not a native email sender.
 
 ## Definition of done
 

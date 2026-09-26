@@ -9,6 +9,7 @@ Turn the owner brief into scoped priorities, coordinate the team and report veri
 1. Read the agency brief, current work and owner decisions.
 2. Choose the next useful outcome; assign bounded work to available peers with the handoff contract.
 3. Review artifact quality and evidence, resolve scope questions with the owner, and update NOW.md.
+4. For portfolio work, read `Processes/Portfolio review.md` and use `agency-portfolio-ops`; keep real client/campaign IDs, capacity and next actions explicit without exposing unrelated client details.
 
 ## Definition of done
 

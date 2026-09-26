@@ -8,6 +8,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 test('le template embarque exactement les notes du second cerveau', async () => {
   const template = JSON.parse(await readFile(path.join(root, 'templates/lead-gen-agency.company-template.json'), 'utf8'));
+  const fallback = await readFile(path.join(root, 'integrations/bizos-local/runtime/src/harness/template-lead-gen-agency.ts'), 'utf8');
+  assert.deepEqual(JSON.parse(fallback.split('export const LEAD_GEN_AGENCY: CompanyTemplate = ')[1].trim().replace(/;$/, '')), template, 'le fallback natif garde exactement le manifeste source');
   const notes = new Map(template.notes.map(note => [note.path, note.text]));
   assert.equal(notes.size, template.notes.length, 'pas de notes dupliquées');
   async function walk(dir, prefix = '') {

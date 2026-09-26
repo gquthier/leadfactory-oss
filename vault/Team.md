@@ -11,6 +11,8 @@ These are reusable role definitions. Use your runtime to create executable agent
 | Creative | Concepts, copy, image/video briefs, assets and quality checks | Versioned creative pack for approval |
 | Account Manager | Client communication drafts, progress, reporting, feedback and renewal preparation | Feedback or scope decision to the director |
 
-Six separate agents are described. The JSON deliberately creates no team group: the inspected BizOS group-creation UI currently limits selection to four agents. Grouping and inter-agent transport must be implemented by the chosen runtime and verified separately.
+Six source roles are described. Current BizOS creation installs only CEO and its thread; specialist instructions are preserved under `Roles/` for recruitment when an authorized mission needs them. Existing installations keep their agents. A source role sheet or team name does not prove an executable agent or a delivered handoff.
+
+CEO / Agency Director uses `agency-portfolio-ops` for capacity and client coordination. Acquisition uses `outbound-campaign-ops` and `outbound-reply-qualification` for approved operations and sourced replies. Account Manager receives the client-scoped summary, decisions and follow-up tasks. The cockpit owns client, campaign, task and deliverable records; coordination notes do not invent extra CRM fields.
 
 Use `Processes/Handoffs.md` for every cross-role task. Account Manager receives only the client context needed for the assignment. New client work does not silently reuse another client's private research or assets.

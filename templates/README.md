@@ -1,13 +1,23 @@
-# Lead Gen Agency template
+# Native business template sources
 
-`lead-gen-agency.company-template.json` describes the six agent roles and the notes in `../vault/`. It uses the `CompanyTemplate` shape inspected in the local BizOS harness on September 8, 2026: id, integer version, name, folders, notes, bots and routines.
+Prepared on **26 September 2026**, private GitHub preview. The recommended experience is **BizOS**, with native templates and agent roles designed for the chosen business model. Skills and process files are readable, editable and duplicable under their licenses.
 
-This JSON is a **data pack**. The LeadFactory-enabled build of BizOS local consumes it through Apps → LeadFactory → Install the template. See the [installation guide](../docs/BIZOS.md) for the corresponding build and source distribution. Copying this JSON alone does not install anything.
+`lead-gen-agency.company-template.json` describes the six source roles and notes in `../vault/`. Its fields follow `CompanyTemplate`: id, integer version, name, folders, notes, bots and routines. The modern runtime applies its creation transformation: **CEO and its real thread are installed first**, while specialist definitions remain in `Roles/` for recruitment when useful. Existing installations and historical roles are preserved; the source roster is not a promise that all six agents start immediately. No routine is activated by this data pack.
 
-The notes are also usable as ordinary Markdown in an agent workspace. Outside the BizOS installer, they do not automatically configure a model, discover skills, create executable agents, connect accounts or synchronize the management app.
+The current runtime supports five IDs: `lead-gen-agency`, `service-based-business`, `software`, `company-os` and legacy `ecommerce`. The first four are current creation choices. “Work OS” is an editorial alias, not a sixth runtime identifier. The standalone Company OS in the umbrella catalog and the lightweight native Company OS are distinct packages.
 
-There are six bot roles and zero routines. The local installer creates their real threads and a team conversation. It exposes the bundled LeadFactory skills and the cockpit through tools scoped to an active agency run. A personal model connection is still required to execute a mission.
+## Source and installation
 
-The JSON `notes` are an exact copy of the Markdown files under `vault/`. When editing the vault, update the corresponding JSON note text. Paths are relative to a new vault and contain no traversal or hidden segments. Do not apply the pack over an existing personalized workspace without a separate, reviewed migration.
+The runtime's `templateOf` loads the reviewed pack and bundled skills; `creationTemplateOf` provides the current initial layout. The Agency pack includes **26 skills** and the client cockpit. Human and agent tools share that cockpit's data when used through BizOS. A model connection is still required for a mission. Copying JSON alone does not install agents, connect accounts, start schedules or synchronize the app.
 
-For local BizOS, the user owns the workspace, models and accounts. A future cloud adapter must create separate cloud records and import only this public content; it must not transfer private engine code, secrets or other-mode context.
+The JSON notes must exactly mirror `vault/` Markdown. Update the source notes and manifest together and keep the runtime fallback in sync. Native installation preserves user edits and resumes without duplicates; do not overwrite an existing personalized workspace with a raw copy.
+
+## Private source exports
+
+Run `node scripts/export-templates.mjs --output <new-directory>` from a development checkout. It builds the runtime, exports all five real manifests, materializes notes and includes runnable Agency/E-commerce cockpits from `export-allowlist.json`. It also records the CEO-only creation manifests for the four current choices. The output contains component licenses and integrity hashes. Review and scan the actual output before private publication; never export live company data.
+
+The kit/cockpit resources retain MIT; runtime-derived exports retain AGPL-3.0-only and upstream notices. A private GitHub source license does not make downloads publicly accessible. The [umbrella catalog](https://github.com/gquthier/bizos-templates) remains private.
+
+## Credential boundary
+
+In BizOS SaaS, agents use authorized server tools without receiving platform provider keys. A template does not grant new access. Standalone operation uses the owner's own accounts and local data; local file permissions do not hide credentials from the machine's owner. Never transfer SaaS keys into the template, model context, local environment or downloads.

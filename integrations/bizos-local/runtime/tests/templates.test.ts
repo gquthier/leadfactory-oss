@@ -108,7 +108,7 @@ describe("the Lead Gen Agency pack", () => {
     expect(Object.keys(TEMPLATE_CATALOG)).toEqual(TEMPLATE_IDS);
     expect(TEMPLATE_CATALOG["lead-gen-agency"]).toBe(LEAD_GEN_AGENCY);
     expect(TEMPLATE_CATALOG["service-based-business"]).toBe(SERVICE_BASED_BUSINESS);
-    expect(LEAD_GEN_AGENCY).toMatchObject({ id: "lead-gen-agency", version: 1, name: "Lead Gen Agency" });
+    expect(LEAD_GEN_AGENCY).toMatchObject({ id: "lead-gen-agency", version: 2, name: "Lead Gen Agency" });
     expect(LEAD_GEN_AGENCY.bots.map((bot) => bot.slug)).toEqual([
       "agency-director",
       "acquisition",
@@ -117,8 +117,8 @@ describe("the Lead Gen Agency pack", () => {
       "creative",
       "account-manager",
     ]);
-    expect(LEAD_GEN_AGENCY.notes).toHaveLength(41);
-    expect(LEAD_GEN_AGENCY.folders).toHaveLength(12);
+    expect(LEAD_GEN_AGENCY.notes).toHaveLength(44);
+    expect(LEAD_GEN_AGENCY.folders).toHaveLength(16);
     expect(LEAD_GEN_AGENCY.routines).toEqual([]);
     expect(LEAD_GEN_AGENCY.team).toBeUndefined();
     expect(LEAD_GEN_AGENCY.bots.filter((bot) => bot.welcome)).toHaveLength(1);
@@ -146,7 +146,7 @@ describe("the Lead Gen Agency pack", () => {
     expect(seedTemplateVault(vault, LEAD_GEN_AGENCY)).toBe("seeded");
     for (const folder of LEAD_GEN_AGENCY.folders) expect(lstatSync(join(vault, folder)).isDirectory()).toBe(true);
     const scan = scanVault({ id: "v", label: "Agency", path: vault });
-    expect(scan.notes).toHaveLength(41);
+    expect(scan.notes).toHaveLength(44);
     expect(scan.graph.nodes.filter((node) => node.ghost)).toEqual([]);
     expect(scan.graph.edges).toContainEqual({ source: "AGENTS.md", target: "Start here.md" });
     expect(scan.graph.edges).toContainEqual({ source: "Start here.md", target: "Processes/Acquisition.md" });
@@ -184,11 +184,11 @@ function legacyPendingAgency(): void {
 }
 
 describe("harness.templates.list", () => {
-  it("lists exactly the three ordered creation choices on a fresh state", async () => {
+  it("lists exactly the four ordered creation choices on a fresh state", async () => {
     const harness = harnessFor();
     const { templates } = await harness.templates.list();
     expect(templates.map((row) => row.id)).toEqual(CREATION_TEMPLATE_IDS);
-    expect(templates[0]).toMatchObject({ name: "Lead Gen Agency", version: 1, notes: SHIPPED_AGENCY.notes.length, folders: SHIPPED_AGENCY.folders.length });
+    expect(templates[0]).toMatchObject({ name: "Lead Gen Agency", version: 2, notes: SHIPPED_AGENCY.notes.length, folders: SHIPPED_AGENCY.folders.length });
     expect(templates[0]!.agents).toHaveLength(1);
     expect(templates[0]!.agents[0]).toEqual({ slug: "ceo", name: "CEO", title: "Chief executive and owner interface" });
     expect(templates[1]).toMatchObject({ name: "Service-based Business", version: 1, agents: expect.any(Array) });
@@ -417,7 +417,7 @@ describe("harness.templates.apply", () => {
     expect(registry.pending).toEqual({});
     expect(registry.installations["lead-gen-agency"]).toMatchObject({
       id: "lead-gen-agency",
-      version: 1,
+      version: 2,
       rootId: "vault:lead-gen-agency",
       vaultPath: "vaults/lead-gen-agency",
       vault: "seeded",
