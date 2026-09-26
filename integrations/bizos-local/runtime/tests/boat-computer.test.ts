@@ -168,6 +168,17 @@ describe("the helper", () => {
     expect(helperPath()).toMatch(/^\/home\/user\/bizos\/computer-helper-[0-9a-f]{16}\.mjs$/);
   });
 
+  it("activates the selected page before live frames and after live navigation", () => {
+    const source = computerHelperSource();
+    const session = source.slice(source.indexOf("async function controlSession"), source.indexOf("function daemon()"));
+
+    expect(session).toContain('await cdp.send("Page.enable", {});\n  await activatePage(cdp);');
+    expect(session.indexOf("await activatePage(cdp);")).toBeLessThan(session.indexOf('cdp.send("Page.startScreencast"'));
+    expect(session).toContain('await cdp.send("Page.reload", {}, 5000); await activatePage(cdp); return;');
+    expect(session).toContain('await cdp.send("Page.navigate", { url: String(event.url) }, 10000); await activatePage(cdp);');
+    expect(session).toContain('await cdp.send("Page.navigateToHistoryEntry", { entryId: target.id }, 5000); await activatePage(cdp);');
+  });
+
   it("gets page actions as the same scripts the native backend injects", () => {
     const actions = toHelperActions([
       { kind: "clickSelector", selector: "#go", button: "left" },
