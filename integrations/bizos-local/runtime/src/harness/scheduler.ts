@@ -67,6 +67,8 @@ export interface SchedulerDependencies {
   onExpired?(routine: Routine): void;
   /** A clear refusal when the routine's owner cannot execute. */
   ineligibleReason?(routine: Routine): string | null;
+  /** Durable deduplication can return a run that settled before this boot. */
+  isRunTerminal?(runId: string): boolean;
   /** Start a routine turn. Returns the run it started, so a manual run and
    * a scheduled one are literally the same code path — `runNow` used to
    * bypass every piece of bookkeeping below. */
@@ -118,11 +120,21 @@ export class Scheduler {
     for(const [id,record] of Object.entries(this.occurrences)){
       if(record.done||!this.running)continue;
       const current=this.deps.routines.get(record.input.routine.id);if(!current||this.ineligibleReason(current))continue;
-      const result=await this.deps.fire(record.input);
-      const next=computeNextRun(current.trigger,this.deps.clock.now(),current.endsAt);
-      this.deps.routines.setSchedule(current.id,{...record.schedule,nextRunAt:next?.toISOString()??null,...(!next?{enabled:false}:{})});
-      this.writeOccurrence(id,{...record,...(result?{runId:result.runId}:{}),done:true});
-      if(result)this.inFlight.set(current.id,{token:Symbol(current.id),runId:result.runId});
+      if(this.inFlight.has(current.id))continue;
+      const token=Symbol(current.id);
+      this.inFlight.set(current.id,{token});
+      try {
+        const next=computeNextRun(current.trigger,this.deps.clock.now(),current.endsAt);
+        this.deps.routines.setSchedule(current.id,{...record.schedule,nextRunAt:next?.toISOString()??null,...(!next?{enabled:false}:{})});
+        const result=await this.deps.fire(record.input);
+        this.writeOccurrence(id,{...record,...(result?{runId:result.runId}:{}),done:true});
+        const held=this.inFlight.get(current.id);
+        if(!result || held?.settledEarly?.has(result.runId) || this.deps.isRunTerminal?.(result.runId)) this.release(current.id,token);
+        else if(held?.token===token)held.runId=result.runId;
+      } catch(error) {
+        this.release(current.id,token);
+        throw error;
+      }
     }
   }
 
@@ -329,7 +341,7 @@ export class Scheduler {
       // returning is the turn being QUEUED, not the turn being over.
       const held = this.inFlight.get(routine.id);
       if (held?.token === token) {
-        if (held.settledEarly?.has(started.runId)) {
+        if (held.settledEarly?.has(started.runId) || this.deps.isRunTerminal?.(started.runId)) {
           // This run was already over before its name got here (the dispatcher
           // refuses a turn — a deleted bot, a Stop — inside the enqueue). The
           // lock it was going to hold is handed back now, or the routine would

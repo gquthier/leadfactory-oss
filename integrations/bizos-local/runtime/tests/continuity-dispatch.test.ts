@@ -52,6 +52,8 @@ async function backend() {
       const b = JSON.parse(Buffer.concat(chunks).toString() || "{}");
       const op = req.url!.split("/").slice(3).join("/");
       requests.push({ op, body: b });
+      if (Buffer.concat(chunks).length > 256 * 1024)
+        throw new Error("body_too_large");
       let result: any = {};
       if (req.url === "/v1/chat/completions") {
         res.setHeader("content-type", "application/json");
@@ -661,3 +663,236 @@ it("a persistence error during a provider callback revokes the active lease and 
     spy.mockRestore();
   }
 }, 15000);
+
+it.each(["cancelMission", "cancelRun"] as const)(
+  "%s cancels admission in flight without launching a provider when its claim returns",
+  async (cancel) => {
+    const b = await backend();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let claimed = false;
+    const transport: ContinuityTransport = async (op, body) => {
+      const result = await b.transport("install-a")(op, body);
+      if (op === "runs/claim") {
+        claimed = true;
+        await gate;
+      }
+      return result as any;
+    };
+    const a = await computer("A", "claude", transport, true);
+    await a.harness.continuity.link(a.threadId, {
+      agentId: "cloud-agent",
+      audience: "private",
+      title: "Stop while claiming",
+    });
+    const sent = await a.harness.threads.send(
+      { botId: a.bot.id },
+      { text: "Stop this preparation" },
+    );
+    await until(() => claimed);
+    expect(await a.harness.threads[cancel](sent.runIds[0]!)).toBe(true);
+    release();
+    await until(
+      () => b.requests.some((r) => r.op === "runs/stop") || a.turns.length > 0,
+    );
+    expect(a.turns).toHaveLength(0);
+    expect((await a.harness.runs.get(sent.runIds[0]!))?.state).toBe(
+      "cancelled",
+    );
+    expect(
+      a.harness.continuity.store.queued()[sent.runIds[0]!],
+    ).toBeUndefined();
+    expect(a.harness.continuity.guard.get(a.threadId)).toBeUndefined();
+  },
+);
+
+it("offline STOP survives coordinator reconstruction and excludes shutdown transfer when connectivity returns", async () => {
+  const b = await backend();
+  b.controls.autoContinue = true;
+  let offline = false;
+  const transport: ContinuityTransport = async (op, body) => {
+    if (offline) throw new Error("fixture offline");
+    return b.transport("install-a")(op, body);
+  };
+  const a = await computer("A", "claude", transport, true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Durable STOP",
+  });
+  const sent = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Stop even offline" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  offline = true;
+  await a.harness.threads.cancelMission(sent.runIds[0]!);
+  await until(
+    () => a.harness.continuity.store.status(a.threadId)!.error !== null,
+  );
+  offline = false;
+  const { ConversationContinuity } =
+    await import("../src/harness/continuity-sync.js");
+  const reopened = new ConversationContinuity(
+    (a.harness as any).storage,
+    transport,
+  );
+  cleanup.push(() => reopened.close());
+  await reopened.prepareShutdown();
+  expect(b.requests.filter((r) => r.op.startsWith("transfers/"))).toHaveLength(
+    0,
+  );
+  await expect(
+    reopened.prepareTransfer(a.threadId, {
+      transferId: randomUUID(),
+      destination: { kind: "cloud", model: "fixture-cloud" },
+    }),
+  ).rejects.toThrow(/stop/i);
+});
+
+it("a cancelled old claim returning after the next run starts cannot revoke the new lease", async () => {
+  const b = await backend();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let claims = 0;
+  const transport: ContinuityTransport = async (op, body) => {
+    const result = await b.transport("install-a")(op, body);
+    if (op === "runs/claim" && ++claims === 1) await gate;
+    return result as any;
+  };
+  const a = await computer("A", "claude", transport, true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Separate admission generations",
+  });
+  const old = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Old cancelled admission" },
+  );
+  await until(() => claims === 1);
+  await a.harness.threads.cancelMission(old.runIds[0]!);
+  await until(() => b.requests.some((r) => r.op === "runs/stop"));
+  const next = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "New authorized work" },
+  );
+  await until(() => a.turns.length === 1);
+  const lease = a.harness.continuity.guard.get(a.threadId);
+  release();
+  await pause();
+  await pause();
+  expect(a.turns).toHaveLength(1);
+  expect(a.harness.continuity.guard.get(a.threadId)).toEqual(lease);
+  expect((await a.harness.runs.get(next.runIds[0]!))?.state).toBe("working");
+  expect((await a.harness.runs.get(old.runIds[0]!))?.state).toBe("cancelled");
+});
+
+it("STOP arriving during checkpoint upload prevents the remaining transfer calls", async () => {
+  const b = await backend();
+  b.controls.autoContinue = true;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let checkpoint = false;
+  const transport: ContinuityTransport = async (op, body) => {
+    const result = await b.transport("install-a")(op, body);
+    if (op === "checkpoints/put") {
+      checkpoint = true;
+      await gate;
+    }
+    return result as any;
+  };
+  const a = await computer("A", "claude", transport, true);
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Transfer STOP race",
+  });
+  const sent = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Transfer only while permitted" },
+  );
+  await until(() => a.turns.length === 1);
+  await pause();
+  const transfer = a.harness.continuity.prepareShutdown();
+  await until(() => checkpoint);
+  a.harness.continuity.stop(a.threadId, sent.runIds[0]!);
+  release();
+  expect(await transfer).toMatchObject([
+    { state: "waiting", reason: expect.stringMatching(/stop/i) },
+  ]);
+  expect(b.requests.filter((r) => r.op.startsWith("transfers/"))).toHaveLength(
+    0,
+  );
+});
+
+it("voice cancellation removes durable queued work and recovery refuses an old cancelled command", async () => {
+  const b = await backend();
+  const a = await computer("A", "claude", b.transport("install-a"), true);
+  await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Blocking first turn" },
+  );
+  const queued = await a.harness.threads.send(
+    { botId: a.bot.id },
+    { text: "Cancelled queued command" },
+  );
+  const id = queued.runIds[0]!;
+  const raw = a.harness.continuity.store.queued()[id];
+  expect(raw).toBeDefined();
+  expect(await a.harness.threads.cancelRun(id)).toBe(true);
+  expect(a.harness.continuity.store.queued()[id]).toBeUndefined();
+  a.harness.stop();
+  // Also recover a stale record from a crash/older runtime after the durable
+  // run cancellation but before removal of its queue projection.
+  a.harness.continuity.store.queue(id, raw);
+  const launched = vi.fn();
+  const next = new LocalBizosHarness({
+    ...(a.harness as any).options,
+    startClaudeTurn: launched,
+  });
+  cleanup.push(() => next.stop());
+  (next as any).dispatcher.resumeInterruptedTasks();
+  await pause();
+  expect(launched).not.toHaveBeenCalled();
+  expect((await next.runs.get(id))?.state).toBe("cancelled");
+  expect(next.continuity.store.queued()[id]).toBeUndefined();
+});
+
+it("outbox synchronization sends bounded UTF-8 batches and drains all valid messages", async () => {
+  const b = await backend();
+  const a = await computer("A", "claude", b.transport("install-a"));
+  await a.harness.continuity.link(a.threadId, {
+    agentId: "cloud-agent",
+    audience: "private",
+    title: "Offline backlog",
+  });
+  for (let i = 0; i < 14; i++)
+    a.harness.continuity.store.capture({
+      id: `offline-${i}`,
+      threadId: a.threadId,
+      seq: i + 1,
+      role: "user",
+      blocks: [{ kind: "text", text: (i % 2 ? "界" : "a").repeat(20000) }],
+      createdAt: "2026-09-26T00:00:00Z",
+    });
+  await a.harness.continuity.sync(a.threadId);
+  expect(a.harness.continuity.store.status(a.threadId)!.pending).toBe(0);
+  expect(b.events).toHaveLength(14);
+  const batches = b.requests.filter((r) => r.op === "conversations/append");
+  expect(batches.length).toBeGreaterThan(1);
+  expect(
+    batches.every(
+      (r) =>
+        Buffer.byteLength(JSON.stringify({ operation: r.op, body: r.body })) <=
+        256 * 1024,
+    ),
+  ).toBe(true);
+});

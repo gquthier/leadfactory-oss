@@ -753,13 +753,7 @@ export class Dispatcher {
     const threadId = threadIdForTarget(target);
     const chainIds = new Set<string>();
     const preparing = this.preparing.get(threadId);
-    if (preparing) {
-      this.preparing.delete(threadId);
-      this.deps.continuity?.stop(threadId, preparing.runId);
-      this.deps.continuity?.store.dequeue(preparing.runId);
-      this.deps.runs.update(preparing.runId, { state: "cancelled" });
-      chainIds.add(preparing.chainId);
-    }
+    if (preparing) chainIds.add(preparing.chainId);
     const running = this.active.get(threadId);
     if (running) chainIds.add(running.chainId);
     for (const queued of this.queues.get(threadId) ?? []) chainIds.add(queued.chainId);
@@ -771,6 +765,13 @@ export class Dispatcher {
   /** Cancel one run without stopping unrelated work queued on the same
    * thread. Voice STOP uses this exact ownership boundary. */
   cancelRun(runId: string): boolean {
+    for (const [threadId, queued] of this.preparing) {
+      if (queued.runId !== runId) continue;
+      this.preparing.delete(threadId);
+      this.cancelBeforeLaunch(queued);
+      this.pump(threadId);
+      return true;
+    }
     for (const running of this.active.values()) {
       if (running.runId !== runId) continue;
       running.cancelled = true;
@@ -785,12 +786,7 @@ export class Dispatcher {
       const [queued] = queue.splice(index, 1);
       if (!queued) return false;
       this.queues.set(threadId, queue);
-      this.releaseChain(queued.chainId);
-      this.deps.runs.update(runId, { state: "cancelled" });
-      this.deps.events.publish({ type: "run.cancelled", runId, threadId, botId: queued.botId });
-      if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, runId);
-      this.deps.onRunStopped?.(runId);
-      this.deps.onRunSettled?.(runId);
+      this.cancelBeforeLaunch(queued);
       if (!this.active.has(threadId)) this.pump(threadId);
       return true;
     }
@@ -806,9 +802,10 @@ export class Dispatcher {
 
   private cancelQueued(threadId: string): void {
     for (const queued of this.queues.get(threadId) ?? []) {
-      this.releaseChain(queued.chainId);
-      this.deps.continuity?.store.dequeue(queued.runId);
+      // The terminal run is durable before its queue projection disappears.
       this.deps.runs.update(queued.runId, { state: "cancelled" });
+      this.deps.continuity?.store.dequeue(queued.runId);
+      this.releaseChain(queued.chainId);
       this.deps.events.publish({
         type: "run.cancelled",
         runId: queued.runId,
@@ -823,10 +820,27 @@ export class Dispatcher {
     this.queues.set(threadId, []);
   }
 
+  private cancelBeforeLaunch(queued: QueuedTurn): void {
+    this.deps.runs.update(queued.runId, { state: "cancelled" });
+    this.deps.continuity?.store.dequeue(queued.runId);
+    this.deps.continuity?.stop(queued.threadId, queued.runId);
+    this.releaseChain(queued.chainId);
+    this.deps.events.publish({ type: "run.cancelled", runId: queued.runId, threadId: queued.threadId, botId: queued.botId });
+    if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
+    this.deps.onRunStopped?.(queued.runId);
+    this.deps.onRunSettled?.(queued.runId);
+  }
+
   /** STOP follows a mission across DM child dispatches, not merely across
    * one transcript. All queued and active descendants share `chainId`. */
   private cancelChain(chainId: string): void {
     const pump = new Set<string>();
+    for (const [threadId, queued] of this.preparing) {
+      if (queued.chainId !== chainId) continue;
+      this.preparing.delete(threadId);
+      this.cancelBeforeLaunch(queued);
+      pump.add(threadId);
+    }
     for (const [threadId, queue] of this.queues) {
       const kept: QueuedTurn[] = [];
       for (const queued of queue) {
@@ -834,13 +848,7 @@ export class Dispatcher {
           kept.push(queued);
           continue;
         }
-        this.releaseChain(queued.chainId);
-        this.deps.continuity?.store.dequeue(queued.runId);
-      this.deps.runs.update(queued.runId, { state: "cancelled" });
-        this.deps.events.publish({ type: "run.cancelled", runId: queued.runId, threadId, botId: queued.botId });
-        if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
-        this.deps.onRunStopped?.(queued.runId);
-        this.deps.onRunSettled?.(queued.runId);
+        this.cancelBeforeLaunch(queued);
         pump.add(threadId);
       }
       this.queues.set(threadId, kept);
@@ -1351,6 +1359,12 @@ export class Dispatcher {
     for (const raw of Object.values(this.deps.continuity?.store.queued() ?? {})) {
       const turn = raw as QueuedTurn;
       if (!turn || typeof turn.runId !== "string" || typeof turn.text !== "string" || !this.deps.runs.get(turn.runId)) continue;
+      if (["cancelled", "completed", "failed"].includes(this.deps.runs.get(turn.runId)!.state)) {
+        // Started commands may contain unknown effects and remain available
+        // for reconciliation, but no terminal command is ever re-enqueued.
+        if (turn.dispatchState !== "started") this.deps.continuity?.store.dequeue(turn.runId);
+        continue;
+      }
       if (turn.dispatchState === "started") {
         this.deps.runs.update(turn.runId,{state:"failed",error:"Execution was interrupted after admission; the durable command is retained for reconciliation."});
         continue;
@@ -1762,10 +1776,14 @@ export class Dispatcher {
         const active = this.active.get(threadId);
         if (active?.runId === queued.runId) { active.cancelled = true; this.deps.onRunStopped?.(queued.runId); active.handle?.stop(); }
       }).then(() => {
-        if (this.preparing.get(threadId) !== queued) return;
+        if (this.preparing.get(threadId) !== queued) {
+          continuity!.stop(threadId, queued.runId);
+          return;
+        }
         this.preparing.delete(threadId);
         this.launch(queued, bot, {...options, linkedReady: true});
       }).catch(error => {
+        if (this.preparing.get(threadId) !== queued) return;
         this.preparing.delete(threadId);
         this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error));
       });

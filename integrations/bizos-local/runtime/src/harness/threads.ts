@@ -57,10 +57,30 @@ export class ThreadStore {
     const canonical = this.continuity?.projection(threadId) ?? [];
     if (!canonical.length) return collapseMessages(rows);
     const ids = new Set(canonical.map(row => row.id));
-    // Canonical sequence is authoritative. Pending local intents stay visible
-    // at the tail, with their own stable IDs until the server acknowledges.
-    const head = Math.max(...canonical.map(row => row.seq));
-    return [...canonical, ...collapseMessages(rows).filter(row => !ids.has(row.id)).map((row, i) => ({...row, seq: head+i+1}))];
+    const local = new Map<string, ThreadMessage>();
+    const after = new Map<string | null, ThreadMessage[]>();
+    let anchor: string | null = null;
+    for (const row of collapseMessages(rows)) {
+      local.set(row.id, row);
+      if (ids.has(row.id)) anchor = row.id;
+      else after.set(anchor, [...(after.get(anchor) ?? []), row]);
+    }
+    // Pre-link history precedes the linked archive. Local-only draft/control
+    // rows keep their position after the preceding shared message. Canonical
+    // ordering applies inside the archive; UI seq covers the whole projection.
+    const merged = [...(after.get(null) ?? [])];
+    for (const row of canonical) {
+      const original = local.get(row.id);
+      merged.push(original ? {
+        ...original,
+        ...row,
+        createdAt: original.createdAt,
+        blocks: [...row.blocks, ...original.blocks.filter(block => block.kind !== "text"
+          && !(block.kind === "meta" && block.text === "Saved on this computer; awaiting synchronization."))],
+      } : row);
+      merged.push(...(after.get(row.id) ?? []));
+    }
+    return merged.map((row, index) => ({ ...row, seq: index + 1 }));
   }
 
   /** Highest seq on disk, by a loop — never a spread into `Math.max`. */

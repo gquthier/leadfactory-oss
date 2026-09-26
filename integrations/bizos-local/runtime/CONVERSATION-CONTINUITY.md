@@ -16,6 +16,11 @@ Messages awaiting a server receipt remain visible from the ledger even if the
 NDJSON projection write fails. Storage errors are raised; corrupt security
 ledgers are not reset to empty.
 
+Projection keeps pre-link local history before the shared archive. Matching local
+messages retain attachments, reply metadata and timestamps while canonical text
+is refreshed. Polling forward from the last pre-link message reaches new shared
+messages. Upload batches obey both the 100-event and 256 KiB UTF-8 request limits.
+
 The first explicit link starts from that boundary; it does not import old native
 CLI chats. A second installation discovers an authorized BizOS conversation and
 attaches its public projection to a chosen local bot. A copied workspace cannot
@@ -67,11 +72,23 @@ remote form submission or any other external effect.
 Its exact request is durable before transmission and is retried identically after
 a lost response. STOP/revocation/new ownership can still reject it; the local
 result remains visibly pending rather than pretending it reached the cloud.
+An atomic terminal receipt exceeding 256 KiB waits for reconciliation with a
+visible size error; it is not repeatedly transmitted as an oversized request.
+
+Explicit STOP is persisted separately from terminal receipts, including while
+admission is awaiting the server. It is reconciled before ordinary synchronization
+when connectivity returns. Stopped missions are excluded from shutdown and quota
+continuations, and transfer checks STOP again after each asynchronous boundary.
+Late admission responses cannot launch a cancelled command or revoke a newer run.
 
 Routine occurrence journals store the original payload and occurrence ID before
 advancing the schedule. The same ID deduplicates a lost enqueue response. Queued
 commands survive normal shutdown; a command interrupted after provider admission
 is retained for reconciliation and is not automatically repeated.
+Cancelling a queued command removes its durable queue record; recovery also
+refuses stale records whose runs are terminal. Routine recovery takes its mutex
+before dispatch, handles immediate settlement and checks the durable run state
+when deduplication returns a run completed during an earlier process.
 
 ## Main bridge and lifecycle
 
@@ -133,7 +150,7 @@ publication, disk errors and occurrence recovery. Full backend SQL/RLS, signed
 cross-repository integration and desktop UI proofs are separate parent-agent work.
 
 Validation on 26 September 2026: `npm run build` passed (TypeScript compilation
-and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **452 tests
+and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **462 tests
 in 51 files**, with no skipped tests. `git diff --check` passed. Test providers,
 network services and writable workspaces are fixtures; this is not a claim of
 real-provider execution or installed desktop validation.

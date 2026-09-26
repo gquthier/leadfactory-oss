@@ -821,6 +821,7 @@ export class LocalBizosHarness {
       storage: this.storage,
       routines: this.routineStore,
       clock: this.clock,
+      isRunTerminal: runId => ["completed", "failed", "cancelled"].includes(this.runStore.get(runId)?.state ?? ""),
       // A scheduled fire refreshes the session first. The Supabase token
       // rotates roughly hourly; without this every routine that fired more
       // than an hour after launch was told "this Mac's BizOS session is

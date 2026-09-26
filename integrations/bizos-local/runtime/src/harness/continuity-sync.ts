@@ -45,8 +45,11 @@ interface LinkedRun {
   transferring?: boolean;
   processStopped?: boolean;
   finishPayload?: Record<string, unknown>;
+  stopAcknowledged?: boolean;
 }
 const RUNS = "continuity-runs.json";
+const STOPS = "continuity-stops.json";
+const MAX_REQUEST_BYTES = 256 * 1024;
 export function wireEvent(
   event: Pick<
     NeutralEvent,
@@ -99,7 +102,7 @@ export class ConversationContinuity {
   private readonly syncing = new Map<string, Promise<void>>();
   private runs: Record<string, LinkedRun>;
   private readonly renewals = new Map<string, ReturnType<typeof setInterval>>();
-  private readonly stopped = new Set<string>();
+  private readonly stopped: Set<string>;
   private closed = false;
   private tickTimer: ReturnType<typeof setTimeout> | undefined;
   private tickFailures = 0;
@@ -119,6 +122,7 @@ export class ConversationContinuity {
     this.store = new ContinuityStore(storage);
     this.guard = new LeaseGuard(this.store, now);
     this.runs = storage.readJsonStrict(RUNS, {});
+    this.stopped = new Set(storage.readJsonStrict<string[]>(STOPS, []));
     this.incoming = storage.readJsonStrict("continuity-incoming.json", {});
     for (const { threadId } of this.store.links())
       for (const effect of this.store.effects(threadId))
@@ -148,7 +152,10 @@ export class ConversationContinuity {
     return { orgId: link.orgId, conversationId: link.conversationId };
   }
   private saveRun(run: LinkedRun): void {
-    const next = { ...this.runs, [run.localRunId]: run };
+    const next = {
+      ...this.runs,
+      [run.localRunId]: { ...this.runs[run.localRunId], ...run },
+    };
     this.storage.writeJson(RUNS, next);
     this.runs = next;
   }
@@ -291,17 +298,29 @@ export class ConversationContinuity {
           "This conversation link belongs to another account or installation; explicitly reattach it on this app.",
         );
       const scope = this.scope(threadId);
+      // STOP is durable and takes priority over any later publication/handoff.
+      for (const run of Object.values(this.runs))
+        if (
+          run.threadId === threadId &&
+          this.stopped.has(run.localRunId) &&
+          !run.stopAcknowledged
+        )
+          await this.reconcileStop(run);
       // Read first: the server may have accepted a previously lost append.
       await this.pull(threadId);
       for (const run of Object.values(this.runs).filter(
-        (r) => r.threadId === threadId && !r.finished && r.finishPayload,
+        (r) =>
+          r.threadId === threadId &&
+          !r.finished &&
+          r.finishPayload &&
+          !this.stopped.has(r.localRunId),
       )) {
         await this.call("runs/finish", run.finishPayload!);
         await this.pull(threadId);
         this.saveRun({ ...run, finished: true });
       }
       for (;;) {
-        const pending = this.store.pending(threadId).slice(0, 100);
+        const pending = this.appendBatch(scope, this.store.pending(threadId));
         if (!pending.length) break;
         await this.call("conversations/append", {
           ...scope,
@@ -332,6 +351,30 @@ export class ConversationContinuity {
         );
       throw error;
     }
+  }
+  private appendBatch(
+    scope: Record<string, unknown>,
+    events: NeutralEvent[],
+  ): NeutralEvent[] {
+    const batch: NeutralEvent[] = [];
+    for (const event of events.slice(0, 100)) {
+      const candidate = [...batch, event];
+      const request = {
+        operation: "conversations/append",
+        body: { ...scope, events: candidate.map(wireEvent) },
+      };
+      if (
+        Buffer.byteLength(JSON.stringify(request), "utf8") > MAX_REQUEST_BYTES
+      ) {
+        if (!batch.length)
+          throw new Error(
+            "A conversation event exceeds the 256 KiB request limit; waiting for reconciliation.",
+          );
+        break;
+      }
+      batch.push(event);
+    }
+    return batch;
   }
   private async pull(threadId: string): Promise<void> {
     for (let pages = 0; pages < 1000; pages++) {
@@ -421,6 +464,7 @@ export class ConversationContinuity {
         "Conversation execution is disabled in its continuity policy.",
       );
     await this.sync(threadId);
+    this.assertNotStopped(threadId, localRunId);
     const requiredVersions = new Map<
       string,
       ReturnType<ContinuityStore["artifacts"]>[number]
@@ -477,6 +521,7 @@ export class ConversationContinuity {
       run = { ...run, ...started };
       this.saveRun(run);
     }
+    this.assertNotStopped(threadId, localRunId);
     if (!run.claimId) {
       run = { ...run, claimId: randomUUID() };
       this.saveRun(run);
@@ -493,13 +538,7 @@ export class ConversationContinuity {
     });
     run = { ...run, ...claim };
     this.saveRun(run);
-    if (this.stopped.has(localRunId)) {
-      await this.call("runs/stop", {
-        ...this.scope(threadId),
-        runId: run.runId,
-      });
-      throw new Error("Run was stopped.");
-    }
+    this.assertNotStopped(threadId, localRunId);
     const lease: ExecutionLease = {
       runId: run.runId!,
       generation: run.epoch!,
@@ -552,19 +591,45 @@ export class ConversationContinuity {
     this.renewals.delete(threadId);
   }
   stop(threadId: string, localRunId?: string): void {
-    if (localRunId) this.stopped.add(localRunId);
-    this.clearRenewal(threadId);
-    this.guard.stop(threadId);
     const run = localRunId
       ? this.runs[localRunId]
       : Object.values(this.runs)
           .reverse()
           .find((r) => r.threadId === threadId && !r.finished);
-    if (run?.runId)
-      void this.call("runs/stop", {
-        ...this.scope(threadId),
-        runId: run.runId,
-      }).catch((e) => this.store.error(threadId, String(e)));
+    const id = localRunId ?? run?.localRunId;
+    try {
+      if (id && this.linked(threadId) && !this.stopped.has(id)) {
+        this.stopped.add(id);
+        // Even if persistence fails, this process must fail closed. The
+        // caller receives the storage error instead of a false saved STOP.
+        this.storage.writeJson(STOPS, [...this.stopped]);
+      }
+    } finally {
+      // A late cancelled claim must never revoke a different turn's lease.
+      const lease = this.guard.get(threadId);
+      if (!lease || !localRunId || lease.runId === run?.runId) {
+        this.clearRenewal(threadId);
+        this.guard.stop(threadId);
+      }
+    }
+    if (run?.runId && !run.stopAcknowledged)
+      void this.reconcileStop(run).catch((e) => {
+        if (!this.closed) this.store.error(threadId, String(e));
+      });
+  }
+  private assertNotStopped(threadId: string, localRunId: string): void {
+    if (!this.stopped.has(localRunId)) return;
+    this.stop(threadId, localRunId);
+    throw new Error("Run was stopped; continuation is not authorized.");
+  }
+  private async reconcileStop(run: LinkedRun): Promise<void> {
+    if (!run.runId || run.stopAcknowledged) return;
+    await this.call("runs/stop", {
+      ...this.scope(run.threadId),
+      runId: run.runId,
+    });
+    if (!this.closed)
+      this.saveRun({ ...this.runs[run.localRunId]!, stopAcknowledged: true });
   }
   async finish(
     threadId: string,
@@ -591,6 +656,7 @@ export class ConversationContinuity {
       }
       if (
         !ok &&
+        !this.stopped.has(localRunId) &&
         run.supervised &&
         /quota|rate.?limit|429|capacity|unavailable/i.test(error ?? "")
       ) {
@@ -615,11 +681,17 @@ export class ConversationContinuity {
       const humans = this.store
         .pending(threadId)
         .filter((e) => e.author === "human");
-      for (let offset = 0; offset < humans.length; offset += 100)
+      for (let offset = 0; offset < humans.length; ) {
+        const batch = this.appendBatch(
+          this.scope(threadId),
+          humans.slice(offset),
+        );
         await this.call("conversations/append", {
           ...this.scope(threadId),
-          events: humans.slice(offset, offset + 100).map(wireEvent),
+          events: batch.map(wireEvent),
         });
+        offset += batch.length;
+      }
       if (humans.length) await this.pull(threadId);
       const results = this.store
         .pending(threadId)
@@ -639,6 +711,15 @@ export class ConversationContinuity {
         ...(results.length ? { finalEvents: results.map(wireEvent) } : {}),
         ...(!ok && error ? { error: error.slice(0, 400) } : {}),
       };
+      if (
+        Buffer.byteLength(
+          JSON.stringify({ operation: "runs/finish", body }),
+          "utf8",
+        ) > MAX_REQUEST_BYTES
+      )
+        throw new Error(
+          "Terminal output exceeds the 256 KiB atomic receipt limit; results remain pending for reconciliation.",
+        );
       this.saveRun({ ...run, finishPayload: body });
       await this.call("runs/finish", body);
       await this.pull(threadId);
@@ -712,8 +793,21 @@ export class ConversationContinuity {
         state: string;
         reason?: string;
       }> = [];
+      for (const run of Object.values(this.runs)) {
+        if (!this.stopped.has(run.localRunId) || run.stopAcknowledged) continue;
+        try {
+          await this.reconcileStop(run);
+        } catch (error) {
+          results.push({
+            threadId: run.threadId,
+            state: "waiting",
+            reason: String(error),
+          });
+        }
+      }
       for (const run of Object.values(this.runs).filter(
-        (r) => !r.finished && !r.transferring,
+        (r) =>
+          !r.finished && !r.transferring && !this.stopped.has(r.localRunId),
       )) {
         try {
           const { policy } = await this.call<{
@@ -774,6 +868,7 @@ export class ConversationContinuity {
       .find((r) => r.threadId === threadId && !r.finished);
     if (!run?.runId || !run.epoch)
       throw new Error("No linked mission can be transferred.");
+    this.assertNotStopped(threadId, run.localRunId);
     if (!run.supervised)
       throw new Error(
         "This CLI has unverified native effects; automatic transfer is unavailable. Stop and reconcile it first.",
@@ -789,12 +884,19 @@ export class ConversationContinuity {
       Date.now() + 7000,
       this.shutdownDeadline ?? Infinity,
     );
-    while (!this.runs[run.localRunId]?.processStopped && Date.now() < deadline)
+    while (
+      !this.runs[run.localRunId]?.processStopped &&
+      Date.now() < deadline
+    ) {
+      this.assertNotStopped(threadId, run.localRunId);
       await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    this.assertNotStopped(threadId, run.localRunId);
     run = this.runs[run.localRunId]!;
     if (!run.processStopped || !this.guard.transferable(threadId))
       throw new Error("The source has not confirmed quiescence.");
     await this.sync(threadId);
+    this.assertNotStopped(threadId, run.localRunId);
     const through = String(this.store.status(threadId)!.head);
     const artifacts = this.store.artifacts(threadId);
     if (artifacts.some((a) => !a.available))
@@ -840,6 +942,7 @@ export class ConversationContinuity {
         supervised: true,
       },
     );
+    this.assertNotStopped(threadId, run.localRunId);
     const body = {
       ...this.scope(threadId),
       runId: run.runId,
@@ -853,12 +956,14 @@ export class ConversationContinuity {
       "transfers/prepare",
       body,
     );
+    this.assertNotStopped(threadId, run.localRunId);
     await this.call("transfers/quiesce", {
       ...this.scope(threadId),
       runId: run.runId,
       epoch: run.epoch,
       transferId: input.transferId,
     });
+    this.assertNotStopped(threadId, run.localRunId);
     const receipt = {
       ...prepared,
       checkpointId,
@@ -882,6 +987,7 @@ export class ConversationContinuity {
         manifestHash: checkpoint.manifestHash,
         sourceStopped: true,
       });
+      this.assertNotStopped(threadId, run.localRunId);
       this.saveRun({ ...run, finished: true });
       return committed;
     }

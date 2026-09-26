@@ -275,3 +275,104 @@ it("persists a routine occurrence before advancing its schedule, and recovers th
   expect(calls[0].routine.prompt).toBe("Durable original payload");
   recovered.stop();
 });
+
+it("linked projections keep pre-link history before new messages and preserve local attachment metadata", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } =
+    await import("../src/harness/continuity-sync.js");
+  const { ThreadStore } = await import("../src/harness/threads.js");
+  const { systemClock } = await import("../src/harness/clock.js");
+  const continuity = new ConversationContinuity(storage);
+  const threads = new ThreadStore(storage, systemClock, continuity);
+  let previous = "";
+  for (let i = 0; i < 75; i++)
+    previous = threads.append("bot:a", {
+      role: "user",
+      blocks: [{ kind: "text", text: `Before linking ${i}` }],
+    }).id;
+  continuity.store.link("bot:a", binding);
+  const file = {
+    kind: "file" as const,
+    name: "Brief.md",
+    path: "/fixture/Brief.md",
+    id: "fixture-file",
+    mimeType: "text/markdown",
+    size: 4,
+  };
+  const created = threads.append("bot:a", {
+    role: "user",
+    replyToMessageId: previous,
+    blocks: [{ kind: "text", text: "New linked message" }, file],
+  });
+  for (const acknowledged of [false, true]) {
+    if (acknowledged)
+      continuity.store.accept(
+        "bot:a",
+        continuity.store.pending("bot:a").map((e, i) => ({ ...e, seq: i + 1 })),
+      );
+    const reopened = new ThreadStore(
+      storage,
+      systemClock,
+      new ConversationContinuity(storage),
+    );
+    const page = reopened.pageAfter({ botId: "a" }, previous)!;
+    expect(page.messages.map((m) => m.id)).toEqual([created.id]);
+    expect(reopened.snapshot({ botId: "a" }).messages.at(-1)?.id).toBe(
+      created.id,
+    );
+    expect(page.messages[0]!.seq).toBeGreaterThan(75);
+    expect(page.messages[0]!.blocks).toContainEqual(file);
+    expect(page.messages[0]!.replyToMessageId).toBe(previous);
+    expect(page.messages[0]!.createdAt).toBe(created.createdAt);
+  }
+  continuity.close();
+});
+
+it.each(["immediate", "already-terminal"])(
+  "routine recovery releases its lock for %s settlement",
+  async (mode) => {
+    const { storage } = fixture();
+    const { RoutineStore } = await import("../src/harness/routines.js");
+    const { Scheduler } = await import("../src/harness/scheduler.js");
+    const { fixedClock } = await import("../src/harness/clock.js");
+    const clock = fixedClock(Date.parse("2026-09-26T00:00:00Z"));
+    const routines = new RoutineStore(storage, clock);
+    const routine = routines.create({
+      botId: "bot-a",
+      name: "Review",
+      prompt: "Keep checking",
+      trigger: { kind: "schedule", frequency: "interval", everyMinutes: 5 },
+    });
+    storage.writeJson("routine-occurrences.json", {
+      old: {
+        input: { routine, missed: false, occurrenceId: "old" },
+        schedule: {
+          lastRunAt: clock.nowIso(),
+          nextRunAt: clock.nowIso(),
+          running: true,
+        },
+      },
+    });
+    let count = 0;
+    const recovered = new Scheduler({
+      storage,
+      routines,
+      clock,
+      isRunTerminal: (runId: string) =>
+        mode === "already-terminal" && runId === "old-run",
+      fire: () => {
+        const runId = count++ === 0 ? "old-run" : "new-run";
+        if (mode === "immediate" && runId === "old-run")
+          recovered.settle(routine.id, runId);
+        return { runId };
+      },
+    });
+    recovered.start();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(routines.get(routine.id)?.running).toBe(false);
+    await expect(recovered.runNow(routine.id)).resolves.toEqual({
+      runId: "new-run",
+    });
+    recovered.stop();
+  },
+);
