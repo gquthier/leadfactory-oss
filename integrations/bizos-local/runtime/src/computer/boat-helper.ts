@@ -803,6 +803,13 @@ async function sendHistory(cdp, ws, state) {
   } catch {}
 }
 
+/** The restored agent page can be a background tab because Chrome also opens
+ * its command-line about:blank tab. Screencast does not paint that hidden
+ * target autonomously, so make the selected page the active tab. */
+async function activatePage(cdp) {
+  await cdp.send("Page.bringToFront", {}, 5000);
+}
+
 /** One person on one seat, for as long as the socket lives. */
 async function controlSession(ws, query) {
   if (!secretMatches(query.get("k"))) { ws.sendText(JSON.stringify({ t: "error", error: "refused" })); ws.close(); return; }
@@ -832,12 +839,12 @@ async function controlSession(ws, query) {
     if (event.t === "input") { enqueue(() => dispatchInput(cdp, event, state)); return; }
     if (event.t === "nav") {
       enqueue(async () => {
-        if (event.what === "reload") { await cdp.send("Page.reload", {}, 5000); return; }
-        if (event.what === "url") { if (/^https?:\/\//i.test(String(event.url || ""))) await cdp.send("Page.navigate", { url: String(event.url) }, 10000); return; }
+        if (event.what === "reload") { await cdp.send("Page.reload", {}, 5000); await activatePage(cdp); return; }
+        if (event.what === "url") { if (/^https?:\/\//i.test(String(event.url || ""))) { await cdp.send("Page.navigate", { url: String(event.url) }, 10000); await activatePage(cdp); } return; }
         const history = await cdp.send("Page.getNavigationHistory", {}, 3000);
         const index = Number(history.currentIndex) || 0;
         const target = (Array.isArray(history.entries) ? history.entries : [])[event.what === "back" ? index - 1 : index + 1];
-        if (target && Number.isInteger(target.id)) await cdp.send("Page.navigateToHistoryEntry", { entryId: target.id }, 5000);
+        if (target && Number.isInteger(target.id)) { await cdp.send("Page.navigateToHistoryEntry", { entryId: target.id }, 5000); await activatePage(cdp); }
       });
     }
   };
@@ -858,6 +865,7 @@ async function controlSession(ws, query) {
   });
   cdp.on("Page.frameNavigated", (params) => { if (params.frame && !params.frame.parentId) void sendHistory(cdp, ws, state); });
   await cdp.send("Page.enable", {});
+  await activatePage(cdp);
   ws.sendText(JSON.stringify({ t: "ready", seat: ":" + seat.display }));
   await sendHistory(cdp, ws, state);
   await cdp.send("Page.startScreencast", { format: "jpeg", quality: CONTROL_QUALITY, maxWidth: W, maxHeight: H, everyNthFrame: 1 });
