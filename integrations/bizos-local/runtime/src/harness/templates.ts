@@ -90,10 +90,66 @@ function isCreationTemplateId(id: string): id is CreationTemplateId {
   return (CREATION_TEMPLATE_IDS as readonly string[]).includes(id);
 }
 
+/** What the desktop knows about the person when it applies a creation
+ * template (onboarding in the chat, 2026-09-26): the account's name and the
+ * app's language. Both optional; the welcome and Company.md use them. */
+export type OnboardingLanguage = "fr" | "en";
+export interface CreationOptions {
+  owner?: { name?: string };
+  language?: OnboardingLanguage;
+}
+
+export const CREATION_TEMPLATE_LABELS: Readonly<Record<CreationTemplateId, Readonly<Record<OnboardingLanguage, string>>>> = {
+  "lead-gen-agency": { fr: "Agence de prospection", en: "Lead generation agency" },
+  "service-based-business": { fr: "Entreprise de services", en: "Service business" },
+  software: { fr: "Logiciel", en: "Software" },
+};
+
+/** The first word of the account's name, or nothing. */
+export function firstNameOf(name: string | undefined): string | undefined {
+  const first = name?.trim().split(/\s+/)[0] ?? "";
+  return first ? first : undefined;
+}
+
+/** The CEO's first words in a new company: short, in the app's language,
+ * with the person's first name when the app knows it. */
+export function creationWelcome(id: CreationTemplateId, options: CreationOptions = {}): string {
+  const language = options.language ?? "fr";
+  const label = CREATION_TEMPLATE_LABELS[id][language];
+  const first = firstNameOf(options.owner?.name);
+  return language === "en"
+    ? `Hi${first ? ` ${first}` : ""} 👋 I'm your CEO. You picked “${label}”. Tell me in one sentence what you sell and to whom, I'll take it from there.`
+    : `Salut${first ? ` ${first}` : ""} 👋 Je suis ton CEO. Tu as choisi « ${label} ». Dis-moi en une phrase ce que tu vends et à qui, je m’occupe du reste.`;
+}
+
+const FIRST_REPLY = [
+  "First reply after installation (your welcome asked what the person sells and to whom): answer like a messaging app — short, in the language they wrote in.",
+  "(a) Restate their business in one or two lines.",
+  "(b) If Company.md names the owner and the CLI you run on has its own native web search (Claude Code WebSearch, Codex web search), run one quick PUBLIC search on that name, plus the business when given. Only with reliable matches say you did a little research (FR: « J’ai fait quelques recherches sur toi »), at most 3 facts, each with its source link. Never invent; with nothing reliable, say nothing about research. Search results only: for anything else your computer_* tools remain your only browser.",
+  "(c) Call propose_company_name with one good name for the business.",
+  "(d) Call offer_quick_replies with 2 or 3 useful next answers.",
+  "(e) Recruit the most useful first specialist with recruit_agent and a concrete, verifiable first task that involves no external action and no spending.",
+  "Then write what you learned into Company.md in their words and keep every other rule of this role.",
+].join(" ");
+
+/** Company.md's founder lines, filled from what the app knows. Each creation
+ * template words the line its own way; a TODO is the only thing replaced. */
+function withOwner(text: string, options: CreationOptions): string {
+  const name = options.owner?.name?.trim();
+  let result = text;
+  if (name) result = result.replace(/^(- Owner[^:\n]*:) TODO$/m, `$1 ${name}`);
+  if (options.language) {
+    const language = options.language === "en" ? "English" : "French";
+    result = result.replace(/^(- (?:Working language[^:\n]*|Language and tone|Markets and languages):) TODO$/m, `$1 ${language}`);
+  }
+  return result;
+}
+
 /** Creation-only adaptation. Legacy payloads and journals retain their exact
  * original semantics; archived role sources remain available in source.md. */
-export function creationTemplateOf(source: CompanyTemplate): CompanyTemplate {
+export function creationTemplateOf(source: CompanyTemplate, options: CreationOptions = {}): CompanyTemplate {
   if (!isCreationTemplateId(source.id)) return source;
+  const templateId = source.id;
   const director = source.bots[0];
   if (!director) throw new BrainError(`${source.name} has no CEO role`);
   const specialists = source.bots.slice(1);
@@ -143,7 +199,7 @@ export function creationTemplateOf(source: CompanyTemplate): CompanyTemplate {
   const team = `# Team\n\n${bootstrap}\n\nThe owner sets the mission and authority in Company.md. CEO is the only default member. Inspect runtime state for the current roster; this file is not a live membership database.\n\n${delegation}\n\nRead Roles/README.md for the available role library. Give every task its objective, sources, permitted actions, output, acceptance evidence, budget and stop condition. Respect the runtime's chain and STOP limits. No routine is active on installation.\n`;
   const notes = source.notes
     .filter((note) => !note.path.startsWith("Agents/") && note.path !== "Team.md")
-    .map((note) => ({ ...note, text: adapt(note.text) }));
+    .map((note) => ({ ...note, text: note.path === "Company.md" ? withOwner(adapt(note.text), options) : adapt(note.text) }));
   const rootAgent = notes.find((note) => note.path === "AGENTS.md");
   if (rootAgent) rootAgent.text = `${bootstrap}\n\n${delegation}\n\n${rootAgent.text}`;
   const directorPrefix = `Agents/${director.name}/`;
@@ -183,9 +239,10 @@ export function creationTemplateOf(source: CompanyTemplate): CompanyTemplate {
       "Before working, read system.md in your working folder (Agents/CEO), ../../AGENTS.md and ../../Roles/README.md. system.md contains your full company-specific role; source.md is a legacy archive, not current operating instructions.",
       "Recruit only when useful for an already-authorized mission, with the closest role_slug, concrete initial_task and needed context. That operational delegation needs no second ceremonial approval. It grants no new files, spending, publishing or external-action authority. Inspect tool results and actual run status before claiming that work started or finished.",
       "The runtime manifest is authoritative. Use the user's connected plan and existing permission settings. Do not invent tools, teammates, photo generation, messages or outcomes. Unknown facts stay TODO; preserve owner files and verify deliverables.",
+      FIRST_REPLY,
     ].join("\n\n"),
     pinned: true,
-    welcome: "Bonjour, je suis le CEO de votre nouvelle entreprise. Dites-moi le premier résultat que vous voulez : je m’y mets directement et je recrute un spécialiste seulement si c’est utile. Rien n’est encore lancé.",
+    welcome: creationWelcome(templateId, options),
   };
   return {
     ...source,

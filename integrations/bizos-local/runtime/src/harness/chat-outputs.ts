@@ -245,6 +245,36 @@ export function parseSendToChat(raw: unknown): SendToChatInput {
   return { files, ...(caption ? { caption } : {}) };
 }
 
+export const MAX_QUICK_REPLIES = 4;
+export const MAX_QUICK_REPLY_CHARS = 40;
+export const MAX_COMPANY_NAME_CHARS = 48;
+
+/** `offer_quick_replies`: 1 to 4 short answers, trimmed, each 1..40
+ * characters, duplicates dropped. */
+export function parseQuickReplies(raw: unknown): string[] {
+  const input = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const list = Array.isArray(input.choices) ? input.choices : [];
+  if (!list.length) throw new Error("choices must list at least one short answer");
+  const choices: string[] = [];
+  list.forEach((entry, index) => {
+    const text = typeof entry === "string" ? entry.trim().replace(/\s+/g, " ") : "";
+    if (!text) throw new Error(`choices[${index}] must be a non-empty string`);
+    if (text.length > MAX_QUICK_REPLY_CHARS) throw new Error(`choices[${index}] is longer than ${MAX_QUICK_REPLY_CHARS} characters`);
+    if (!choices.includes(text)) choices.push(text);
+  });
+  if (choices.length > MAX_QUICK_REPLIES) throw new Error(`offer at most ${MAX_QUICK_REPLIES} answers`);
+  return choices;
+}
+
+/** `propose_company_name`: one name, trimmed, 1..48 characters. */
+export function parseCompanyName(raw: unknown): string {
+  const input = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+  const name = typeof input.name === "string" ? input.name.trim().replace(/\s+/g, " ") : "";
+  if (!name) throw new Error("name must be a non-empty string");
+  if (name.length > MAX_COMPANY_NAME_CHARS) throw new Error(`name is longer than ${MAX_COMPANY_NAME_CHARS} characters`);
+  return name;
+}
+
 /** `<root>/outputs/YYYY-MM-DD` — where produced files belong. */
 export function outputsDirFor(workspaceRoot: string, at: Date): string {
   const year = at.getFullYear();
