@@ -1053,6 +1053,7 @@ export class LocalBizosHarness {
         label: "Cursor",
         homePath: join(this.homeDir, ".cursor"),
         status: "connected",
+        settingsVisible: false,
         ...(status.emailHint ? { emailHint: status.emailHint } : {}),
         createdAt: this.clock.nowIso(),
       });
@@ -2497,6 +2498,7 @@ export class LocalBizosHarness {
     if (existing) {
       this.planRegistry.update(plan.id, {
         status: signedIn ? "connected" : "disconnected",
+        settingsVisible: true,
         ...(status.emailHint ? { emailHint: status.emailHint } : {}),
       });
     }
@@ -2553,6 +2555,7 @@ export class LocalBizosHarness {
         if (existing) {
           const check = await this.plans.test(existing.id);
           if (!check.ok) throw new SettingsError(`the default ${provider === "codex" ? "ChatGPT" : "Claude Code"} plan on this Mac is not signed in`);
+          this.planRegistry.update(existing.id, { settingsVisible: true });
           return { planId: existing.id, loginStarted: false };
         }
         if (provider === "codex") {

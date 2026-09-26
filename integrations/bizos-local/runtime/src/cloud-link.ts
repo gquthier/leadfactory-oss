@@ -249,6 +249,15 @@ export class CloudLink {
     return { code, verifyUrl };
   }
 
+  /** Cancel only the code awaiting approval. An approved device stays linked. */
+  cancelPending(): boolean {
+    if (this.link || !this.pending) return false;
+    this.pending = null;
+    this.clearPoll();
+    this.lastError = null;
+    return true;
+  }
+
   /** Forget the link here, and revoke it on the web (best effort). */
   async unlink(): Promise<void> {
     const link = this.link;

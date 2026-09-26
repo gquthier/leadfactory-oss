@@ -207,6 +207,22 @@ describe("cloud link", () => {
     expect(existsSync(join(root, CLOUD_LINK_FILE))).toBe(false);
   });
 
+  it("cancels only a pending code and never revokes a completed link", async () => {
+    const link = makeLink();
+    await link.start();
+    expect(link.status().pending?.code).toBe("ABCD-EFGH");
+    expect(link.cancelPending()).toBe(true);
+    expect(link.status().pending).toBeUndefined();
+    expect(web.requests.some((row) => row.method === "DELETE")).toBe(false);
+
+    web.pollAnswers.push("approved");
+    await link.start();
+    await until(() => link.status().linked, "approved link");
+    expect(link.cancelPending()).toBe(false);
+    expect(link.status().linked).toBe(true);
+    expect(web.requests.some((row) => row.method === "DELETE")).toBe(false);
+  });
+
   it("forgets an expired code", async () => {
     const link = makeLink();
     web.pollAnswers.push("pending", "expired");
