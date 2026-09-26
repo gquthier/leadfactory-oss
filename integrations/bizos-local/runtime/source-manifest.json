@@ -59,7 +59,7 @@
     "src/harness/ids.ts": "43cdb6e73e687520a4826b790be53bb14348b38e08cf2fa628d6f5f521c02787",
     "src/harness/inference.ts": "ad3f60742e3790dfa1a728be2151bcc4f9722cccc486eeee5d0acdbe67fc065a",
     "src/harness/login-launcher.ts": "04e95e0a6012517b876cc15d4b619a9f21556d35a7cd7f245ddfc649cd49a362",
-    "src/harness/managed-cli.ts": "6b62a9dc9cba34f1c56cdb53a93d527b58d44a725e778e67d015b2b53db51c37",
+    "src/harness/managed-cli.ts": "0fcce385b0cae8431c0008c1c66798ec2b3ef01aea1d4e44a08b3bcdbda8aac4",
     "src/harness/mcp-mount.ts": "48b858831073a7f316271bcf9bd40e5b86b59f86702e473d1c977da8f3378e41",
     "src/harness/memory.ts": "bdfb4f63e7a2aec2ddde3cd052ed649784c63d7bcdb01806eaaf449a5668a58a",
     "src/harness/mentions.ts": "87bcc25b4551a79012782cca27b7cf7b7ff8fcb720707cda4abe6c80c145d103",
