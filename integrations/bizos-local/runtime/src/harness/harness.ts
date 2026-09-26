@@ -659,7 +659,7 @@ export class LocalBizosHarness {
           // One token per spawn, bound to THIS bot. There is nothing in the
           // child's environment that could name another agent's machine.
           ...(this.computerBroker && (options.computerHost || options.computerBackend) && !bot.id.startsWith("qchat_")
-            ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue(bot.id) } }
+            ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue({ botId: bot.id, threadId: context.threadId, runId: context.runId }) } }
             : {}),
         });
         const localTeam = bot.id.startsWith("qchat_")
@@ -674,8 +674,14 @@ export class LocalBizosHarness {
         bot.id.startsWith("qchat_")
           ? []
           : options.localTeamTools!(localTeamMount(bot, context)) } : {}),
-      ...(options.onLocalRunSettled ? { onRunSettled: (runId: string) => options.onLocalRunSettled!(runId) } : {}),
-      ...(options.onLocalRunStopped ? { onRunStopped: (runId: string) => options.onLocalRunStopped!(runId) } : {}),
+      onRunSettled: (runId: string) => {
+        this.computerManager?.cancelHandoff(runId);
+        options.onLocalRunSettled?.(runId);
+      },
+      onRunStopped: (runId: string) => {
+        this.computerManager?.cancelHandoff(runId);
+        options.onLocalRunStopped?.(runId);
+      },
       workspaceFor: (bot) => this.workspaceFor(bot),
       ...(options.linkPreviews !== undefined ? { linkPreviews: options.linkPreviews } : {}),
       ...(options.fetchLinkPreview ? { fetchLinkPreview: options.fetchLinkPreview } : {}),
@@ -761,15 +767,17 @@ export class LocalBizosHarness {
       : null;
     this.computerManager = new ComputerManager({
       approvals: {
-        hasActiveTurn: (botId) => this.dispatcher.hasActiveTurn(botId),
+        hasActiveTurn: (requester) => this.dispatcher.hasActiveTurn(requester),
         isRemembered: (botId, host) => this.dispatcher.isRemembered(computerHostKey(botId, host)),
-        ask: ({ botId, host }) =>
+        ask: ({ requester, host }) =>
           this.dispatcher.askLocally({
-            botId,
-            summary: `Allow ${this.botStore.get(botId)?.name ?? "this agent"} to act on ${host}?`,
+            ...requester,
+            summary: `Allow ${this.botStore.get(requester.botId)?.name ?? "this agent"} to act on ${host}?`,
             detailText: `${host} · this computer is signed in there, so anything it does happens as you.`,
-            approvalKey: computerHostKey(botId, host),
+            approvalKey: computerHostKey(requester.botId, host),
           }),
+        requestHandoff: ({ requester, reason }) => this.dispatcher.requestComputerHandoff({ ...requester, reason }),
+        setHandoffWaiting: (requester, waiting) => this.dispatcher.setComputerHandoffWaiting(requester, waiting),
       },
       workspaceFor: (botId) => {
         const bot = this.botStore.get(botId);
@@ -3388,7 +3396,7 @@ export class LocalBizosHarness {
     /** Take control, live: the session the desktop connects to (cloud), or
      * none (native: input is forwarded). The agent is paused either way. */
     control: async (botId: string) => this.computerManager.controlSession(botId),
-    giveBack: async (botId: string): Promise<ComputerState> => this.computerManager.giveBack(botId),
+    giveBack: async (botId: string, handoffId?: string): Promise<ComputerState> => this.computerManager.giveBack(botId, handoffId),
     /** The latest full frame of this agent's screen (the cloud computer's is
      * the last one an action produced — no round trip). */
     frame: async (botId: string) => this.computerManager.frame(botId),
@@ -3412,13 +3420,18 @@ export class LocalBizosHarness {
    * Claude MCP bridge). Same door as the loopback broker: `handleComputerCall`,
    * so the turn rule and the signed-in-host cards apply exactly as there.
    */
-  async computerTool(botId: string, name: string, args: unknown): Promise<RichToolResult> {
+  async computerTool(
+    botId: string,
+    name: string,
+    args: unknown,
+    scope: { threadId?: string; runId?: string } = {},
+  ): Promise<RichToolResult> {
     if (!isComputerToolName(name)) return richToolResult(`Unknown computer tool: ${name}`);
     if (this.boatComputer && !this.options.computerHost && !this.options.computerBackend && !this.boatComputer.usable()) {
       throw new Error(this.options.cloudComputer?.isConfigured() ? NOT_ALLOWED_MESSAGE : NOT_CONFIGURED_MESSAGE);
     }
     const input = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
-    const { payload } = await handleComputerCall(this.computerManager, botId, computerCallBody(name, input));
+    const { payload } = await handleComputerCall(this.computerManager, { botId, ...scope }, computerCallBody(name, input));
     const answer = (payload ?? {}) as { ok?: boolean; text?: unknown; error?: unknown; image?: { mimeType?: unknown; data?: unknown } | null };
     if (!answer.ok) throw new Error(String(answer.error ?? "the computer refused that"));
     const image = answer.image && typeof answer.image.data === "string" && answer.image.data

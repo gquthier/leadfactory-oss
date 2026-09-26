@@ -862,7 +862,11 @@ export function buildHandlers(
       harness.computer.watch(asString(at(args, 0), "botId", 64), at(args, 1) === true),
     "lbz:computer:takeControl": (args) =>
       harness.computer.takeControl(asString(at(args, 0), "botId", 64)),
-    "lbz:computer:giveBack": (args) => harness.computer.giveBack(asString(at(args, 0), "botId", 64)),
+    "lbz:computer:giveBack": (args) => {
+      const botId = asString(at(args, 0), "botId", 64);
+      const handoffId = asOptionalString(at(args, 1), "handoffId", 64);
+      return handoffId ? harness.computer.giveBack(botId, handoffId) : harness.computer.giveBack(botId);
+    },
     "lbz:computer:open": async (args) => {
       const botId = asString(at(args, 0), "botId", 64);
       if (!openComputer) return false;

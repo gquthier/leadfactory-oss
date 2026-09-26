@@ -113,6 +113,8 @@ export const TOOL_LABELS: Record<string, string> = {
   computer_observe: "Looking at its screen",
   computer_act: "Using its computer",
   computer_download: "Downloading a file",
+  computer_request_handoff: "Waiting for you at its computer",
+  computer_handoff: "Waiting for you at its computer",
   send_to_chat: "Sending to the chat",
   offer_quick_replies: "Offering quick replies",
   propose_company_name: "Proposing a company name",
@@ -154,6 +156,8 @@ export const APPROVAL_LABELS: Record<string, string> = {
   computer_observe: "look at its own screen",
   computer_act: "use its computer",
   computer_download: "download a file",
+  computer_request_handoff: "ask you to take control of its computer",
+  computer_handoff: "ask you to take control of its computer",
   // The card the computer raises itself carries its own whole sentence
   // ("Allow Vega to act on github.com?"), so this entry is the fallback for a
   // build that somehow lost it — not the usual path.

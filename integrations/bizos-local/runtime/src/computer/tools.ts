@@ -7,7 +7,7 @@
 // are applied, whichever backend is behind it.
 import { MAX_ACTIONS, MAX_SETTLE_MS } from "./types.js";
 
-export const COMPUTER_TOOL_NAMES = ["computer_observe", "computer_act", "computer_download"] as const;
+export const COMPUTER_TOOL_NAMES = ["computer_observe", "computer_act", "computer_download", "computer_request_handoff"] as const;
 export type ComputerToolName = typeof COMPUTER_TOOL_NAMES[number];
 
 export function isComputerToolName(name: unknown): name is ComputerToolName {
@@ -60,11 +60,23 @@ export const COMPUTER_TOOL_SPECS = [{
     required: ["url"],
     additionalProperties: false,
   },
+}, {
+  name: "computer_request_handoff",
+  description: "Ask your user to take over YOUR computer for a login, CAPTCHA, 2FA code, passkey, payment detail, or another step only they should complete. The request appears in this run's chat. If they accept, all of your computer tools stay paused until they explicitly choose Give back. You cannot give control back yourself.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      reason: { type: "string", minLength: 1, maxLength: 500, description: "One short sentence saying what the person needs to complete and what page is open. Never ask them to paste a secret into chat." },
+    },
+    required: ["reason"],
+    additionalProperties: false,
+  },
 }] as const;
 
 /** A tool call as the body `handleComputerCall` takes. */
 export function computerCallBody(name: ComputerToolName, args: Record<string, unknown>): Record<string, unknown> {
   if (name === "computer_observe") return { op: "observe" };
   if (name === "computer_download") return { op: "download", url: args.url };
+  if (name === "computer_request_handoff") return { op: "request_handoff", reason: args.reason };
   return { op: "act", actions: args.actions, observe: args.observe, settle_ms: args.settle_ms };
 }

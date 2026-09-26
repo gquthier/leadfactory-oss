@@ -69,6 +69,10 @@ describe("local team-tool status", () => {
     });
     const runtime = await new CollaborationFacade(harness, "status-fixture", new LocalTeamBroker()).localRuntime() as any;
     expect(runtime.tools).toEqual(status);
+    expect(runtime.providers.toolSurface).toEqual({
+      computer: { codex: true, claude: true, api: true, ollama: true, cursor: false },
+      cursorReason: expect.stringMatching(/not mounted/i),
+    });
     expect(await fixture({ codex: true }).plans.list()).toEqual([]);
   });
 

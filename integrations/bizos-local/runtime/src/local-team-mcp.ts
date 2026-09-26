@@ -251,7 +251,7 @@ const callCloud: TeamCall = (input) => callEndpoint("/api/internal/local-team/cl
 
 /** The agent's own computer: `{ tool, arguments }` → `{ ok, text, image? }`.
  * A wake of the cloud computer plus a slow page can take minutes. */
-const callComputer: TeamCall = (input) => callEndpoint("/api/internal/local-team/computer", input, 6 * 60_000);
+const callComputer: TeamCall = (input) => callEndpoint("/api/internal/local-team/computer", input, 30 * 60_000);
 
 /** A computer answer as MCP content: the words, then the screenshot as an
  * image block the model sees. */

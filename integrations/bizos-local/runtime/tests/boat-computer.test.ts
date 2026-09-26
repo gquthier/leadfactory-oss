@@ -145,6 +145,8 @@ function approvals(overrides: Partial<ComputerApprovals> = {}) {
     hasActiveTurn: () => true,
     isRemembered: () => false,
     ask: async ({ host }) => { asked.push(host); return true; },
+    requestHandoff: async () => "allowed",
+    setHandoffWaiting: () => undefined,
     ...overrides,
   };
   return { value, asked };

@@ -63,6 +63,9 @@ export interface ComputerState {
   openUrl?: string;
   /** The user has taken control; the agent is paused until they give it back. */
   userInControl?: boolean;
+  /** Exact accepted human handoff lease. Give back must echo it; an old UI
+   * event can never release a newer run's lease. Absent for manual control. */
+  handoffId?: string;
   /** Present only with `status: "error"`. One sentence, no code. */
   error?: string;
 }

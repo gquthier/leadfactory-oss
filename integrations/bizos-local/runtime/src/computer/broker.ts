@@ -25,7 +25,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { parseComputerActions, settleMs, ComputerActionError } from "./actions.js";
-import type { ComputerManager } from "./manager.js";
+import type { ComputerManager, ComputerRequester, ComputerRequesterInput } from "./manager.js";
 import { formatObservation } from "./observe.js";
 import { MAX_ACTIONS } from "./types.js";
 
@@ -38,7 +38,7 @@ export const GRANT_TTL_MS = 12 * 60 * 60_000;
 
 interface Grant {
   digest: Buffer;
-  botId: string;
+  requester: ComputerRequester;
   expiresAt: number;
 }
 
@@ -46,7 +46,7 @@ export interface ComputerBroker {
   /** `http://127.0.0.1:<port>` — handed to the tool server as LBZ_COMPUTER_URL. */
   readonly url: string;
   /** Mint the token for one spawn of one agent's tool server. */
-  issue(botId: string): string;
+  issue(requester: ComputerRequesterInput): string;
   outstanding(): number;
   close(): Promise<void>;
 }
@@ -88,14 +88,14 @@ const digestOf = (token: string): Buffer => createHash("sha256").update(token).d
  */
 export async function handleComputerCall(
   manager: ComputerManager,
-  botId: string,
+  requester: ComputerRequesterInput,
   body: unknown,
 ): Promise<{ status: number; payload: unknown }> {
   const request = (body ?? {}) as Record<string, unknown>;
   const op = String(request.op ?? "");
   try {
     if (op === "observe") {
-      const { observation, text } = await manager.observe(botId);
+      const { observation, text } = await manager.observe(requester);
       return {
         status: 200,
         payload: {
@@ -114,13 +114,13 @@ export async function handleComputerCall(
       const wantsObservation = request.observe !== false;
       // The settle wait and the look happen in the backend, in the same round
       // trip as the batch — one call on the cloud computer, not three.
-      const result = await manager.act(botId, actions, wantsObservation, settle);
+      const result = await manager.act(requester, actions, wantsObservation, settle);
       if (!wantsObservation) {
         return { status: 200, payload: { ok: true, completed: result.completed, text: `${result.completed} action(s) done.` } };
       }
       const { observation, text } = result.observation
         ? { observation: result.observation, text: formatObservation(result.observation) }
-        : await manager.observe(botId);
+        : await manager.observe(requester);
       return {
         status: 200,
         payload: {
@@ -134,7 +134,7 @@ export async function handleComputerCall(
       };
     }
     if (op === "download") {
-      const outcome = await manager.download(botId, String(request.url ?? ""));
+      const outcome = await manager.download(requester, String(request.url ?? ""));
       const where = manager.backendKind() === "container"
         ? "It is in your own folder on the cloud computer; cloud_computer_run can read it there."
         : "It is inside your own workspace, so upload_document can read it.";
@@ -146,6 +146,16 @@ export async function handleComputerCall(
           path: outcome.path,
         },
       };
+    }
+    if (op === "request_handoff") {
+      const reason = typeof request.reason === "string" ? request.reason.trim() : "";
+      const result = await manager.requestHandoff(requester, reason);
+      const text = result === "given_back"
+        ? "Your user gave the computer back. Observe it before continuing."
+        : result === "denied"
+          ? "Your user declined the handoff. Ask what they want you to do next."
+          : "The handoff was cancelled because this run is no longer active.";
+      return { status: 200, payload: { ok: true, result, text } };
     }
     return { status: 400, payload: { ok: false, error: `unknown computer operation ${op || "(missing)"}` } };
   } catch (error) {
@@ -175,13 +185,13 @@ export async function startComputerBroker(options: ComputerBrokerOptions): Promi
 
   /** Which agent this token speaks for — and no other. A token cannot name a
    * bot: the binding was made when it was minted, in this process. */
-  const botFor = (token: string): string | null => {
+  const requesterFor = (token: string): ComputerRequester | null => {
     sweep();
     if (!token) return null;
     const wanted = digestOf(token);
     for (const grant of grants) {
       if (grant.digest.length !== wanted.length) continue;
-      if (timingSafeEqual(grant.digest, wanted)) return grant.botId;
+      if (timingSafeEqual(grant.digest, wanted)) return grant.requester;
     }
     return null;
   };
@@ -196,8 +206,8 @@ export async function startComputerBroker(options: ComputerBrokerOptions): Promi
       send(404, { ok: false, error: "not_found" });
       return;
     }
-    const botId = botFor(tokenFromRequest(request.headers.authorization));
-    if (!botId) {
+    const requester = requesterFor(tokenFromRequest(request.headers.authorization));
+    if (!requester) {
       send(401, { ok: false, error: "token_rejected" });
       return;
     }
@@ -210,7 +220,7 @@ export async function startComputerBroker(options: ComputerBrokerOptions): Promi
           send(400, { ok: false, error: "bad_request" });
           return;
         }
-        const { status, payload } = await handleComputerCall(options.manager, botId, body);
+        const { status, payload } = await handleComputerCall(options.manager, requester, body);
         send(status, payload);
       })
       .catch(() => send(400, { ok: false, error: "bad_request" }));
@@ -234,10 +244,11 @@ export async function startComputerBroker(options: ComputerBrokerOptions): Promi
 
   return {
     url: `http://${host}:${address.port}`,
-    issue(botId: string): string {
+    issue(input: ComputerRequesterInput): string {
       sweep();
       const token = randomBytes(32).toString("hex");
-      grants.push({ digest: digestOf(token), botId, expiresAt: now() + GRANT_TTL_MS });
+      const requester = typeof input === "string" ? { botId: input } : input;
+      grants.push({ digest: digestOf(token), requester: { ...requester }, expiresAt: now() + GRANT_TTL_MS });
       return token;
     },
     outstanding(): number {

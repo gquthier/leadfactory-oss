@@ -1549,7 +1549,14 @@ export class CollaborationFacade {
     const source = settings.local.inferenceProviderId ? "provider" : settings.local.activePlanId ? "plan" : "auto";
     return {
       mode: "local-harness", backendMode: "local", settings, plans, models, tools,
-      providers: { supported: LOCAL_PROVIDERS, recruitment: { codex: true, claude: true, ollama: true } },
+      providers: {
+        supported: LOCAL_PROVIDERS,
+        recruitment: { codex: true, claude: true, ollama: true },
+        toolSurface: {
+          computer: { codex: true, claude: true, api: true, ollama: true, cursor: false },
+          cursorReason: "Cursor print mode is not mounted to the run-scoped Local BizOS tool bridge.",
+        },
+      },
       inference: {
         source,
         planId: settings.local.activePlanId ?? null,
@@ -2147,8 +2154,11 @@ export class CollaborationFacade {
 
   /** An agent's own `computer_*` call (Claude's MCP twin of the dynamic
    * tools); the capability already named the agent. */
-  computerTool(botId: string, name: string, args: unknown) {
-    return this.harness.computerTool(botId, name, args);
+  computerTool(capability: Pick<TeamCapability, "botId" | "threadId" | "runId">, name: string, args: unknown) {
+    return this.harness.computerTool(capability.botId, name, args, {
+      threadId: capability.threadId,
+      runId: capability.runId,
+    });
   }
 
   /** The panel's view of one agent's computer; with `full`, its latest
@@ -2174,8 +2184,16 @@ export class CollaborationFacade {
   }
 
   /** The owner gives the seat back; the agent may act again. */
-  computerRelease(id: string) {
-    return this.harness.computer.giveBack(this.computerBotId(id));
+  async computerRelease(id: string, raw: unknown) {
+    const input = objectBody(raw, ["handoffId"]);
+    const handoffId = optionalString(input.handoffId, "handoffId", 64);
+    try {
+      return handoffId
+        ? await this.harness.computer.giveBack(this.computerBotId(id), handoffId)
+        : await this.harness.computer.giveBack(this.computerBotId(id));
+    } catch (error) {
+      throw new HttpError(409, "stale_handoff", error instanceof Error ? error.message : String(error));
+    }
   }
 
   /** The panel names an agent by its public id (`local:<instance>:agent:…`);
@@ -2691,7 +2709,7 @@ async function serve(): Promise<void> {
         const input = objectBody(await bodyOf(request), ["tool", "arguments"]);
         if (!isComputerToolName(input.tool)) throw new HttpError(404, "not_found", "Unknown computer tool.");
         try {
-          const result = await facade.computerTool(capability.botId, input.tool, input.arguments ?? {});
+          const result = await facade.computerTool(capability, input.tool, input.arguments ?? {});
           return sendJson(response, 200, { ok: true, text: result.text, ...(result.image ? { image: result.image } : {}) });
         } catch (error) {
           // A refusal is a result the model reads, not a transport failure.
@@ -2733,7 +2751,9 @@ async function serve(): Promise<void> {
         }
       }
       const computerRelease = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/release$/);
-      if (computerRelease && method === "POST") return sendJson(response, 200, await facade.computerRelease(computerRelease));
+      if (computerRelease && method === "POST") {
+        return sendJson(response, 200, await facade.computerRelease(computerRelease, await bodyOf(request)));
+      }
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
       // The web dashboard link (device-code flow + snapshot push). The device
       // token never crosses this boundary; only status does.
@@ -3093,8 +3113,11 @@ async function serve(): Promise<void> {
           description: tool.description,
           inputSchema: tool.inputSchema as unknown as Record<string, unknown>,
           call: async (argumentsValue: unknown) => {
-            const { botId } = teamBroker.authorize(session);
-            return harness.computerTool(botId, tool.name, argumentsValue);
+            const capability = teamBroker.authorize(session);
+            return harness.computerTool(capability.botId, tool.name, argumentsValue, {
+              threadId: capability.threadId,
+              runId: capability.runId,
+            });
           },
         }))
         : [];

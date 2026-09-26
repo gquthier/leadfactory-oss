@@ -18,6 +18,7 @@
 //      `bots.clearApprovals` already revokes it.
 //   3. **The user's screen is never captured.** The only surface this process
 //      can capture is the agent's own offscreen one (see `host.ts`).
+import { randomUUID } from "node:crypto";
 import { hostOf, hostsNeedingApproval, hostsTouched } from "./actions.js";
 import type { CapturedFrame } from "./host.js";
 import { formatObservation } from "./observe.js";
@@ -35,7 +36,7 @@ import type {
  * on top of the Dispatcher; a test implements it in six lines. */
 export interface ComputerApprovals {
   /** Is this agent answering somebody right now? */
-  hasActiveTurn(botId: string): boolean;
+  hasActiveTurn(requester: ComputerRequester): boolean;
   /** Has the user already said "always" for this agent on this host? */
   isRemembered(botId: string, host: string): boolean;
   /**
@@ -45,7 +46,34 @@ export interface ComputerApprovals {
    * turn ending underneath it, which is the same thing from here: nothing was
    * agreed to.
    */
-  ask(input: { botId: string; host: string }): Promise<boolean>;
+  ask(input: { requester: ComputerRequester; host: string }): Promise<boolean>;
+  /** Ask the person to take the exact run's seat. Unlike a host approval this
+   * can never be remembered, and cancellation is distinct from refusal. */
+  requestHandoff(input: { requester: ComputerRequester; reason: string }): Promise<"allowed" | "denied" | "cancelled">;
+  /** Keep the run visibly waiting after the person accepts, until Give back. */
+  setHandoffWaiting(requester: ComputerRequester, waiting: boolean): void;
+}
+
+/** The authority behind an agent computer call. `threadId` and `runId` are
+ * mandatory on real tool bridges; optional only for old embedders/tests. */
+export interface ComputerRequester {
+  botId: string;
+  threadId?: string;
+  runId?: string;
+}
+export type ComputerRequesterInput = ComputerRequester | string;
+
+function requesterOf(input: ComputerRequesterInput): ComputerRequester {
+  return typeof input === "string" ? { botId: input } : input;
+}
+
+export type ComputerHandoffResult = "given_back" | "denied" | "cancelled";
+
+interface PendingHandoff {
+  id: string;
+  requester: ComputerRequester;
+  cancelled: boolean;
+  resolve(result: ComputerHandoffResult): void;
 }
 
 /** What the renderer is told. `computer.status` and `computer.screen` are the
@@ -105,6 +133,8 @@ export class ComputerManager {
   private readonly frameTimers = new Map<string, { cancel(): void }>();
   private readonly interval: (fn: () => void, ms: number) => { cancel(): void };
   private readonly provisioned: Set<string>;
+  private readonly handoffRequests = new Map<string, ComputerRequester>();
+  private readonly handoffs = new Map<string, PendingHandoff>();
 
   constructor(private readonly options: ComputerManagerOptions) {
     const backend = options.backend;
@@ -129,13 +159,18 @@ export class ComputerManager {
     const backend = this.backend;
     if (!backend) return { backend: "none", status: "none", apps: [] };
     const live = backend.state(botId);
-    if (live.status !== "none") return live;
+    if (live.status !== "none") return this.withHandoff(botId, live);
     // It exists, it is simply not running: its partition and everything it is
     // signed into are on disk, waiting for the next task.
     if (this.provisioned.has(botId)) {
       return { backend: backend.kind, status: "sleeping", apps: [{ id: "browser", open: false }] };
     }
     return live;
+  }
+
+  private withHandoff(botId: string, state: ComputerState): ComputerState {
+    const handoff = this.handoffs.get(botId);
+    return handoff ? { ...state, userInControl: true, handoffId: handoff.id } : state;
   }
 
   async setUp(botId: string): Promise<ComputerState> {
@@ -167,23 +202,30 @@ export class ComputerManager {
   }
 
   /** The agent has (or is about to have) a running machine. */
-  private async ensure(botId: string): Promise<ManagedComputerBackend> {
-    const backend = this.machineFor(botId);
+  private async ensure(requester: ComputerRequester): Promise<ManagedComputerBackend> {
+    const { botId } = requester;
+    const backend = this.machineFor(requester);
     if (!backend.has(botId)) {
       this.remember(botId);
       await backend.start(botId);
       this.publishStatus(botId);
     }
+    // Starting/waking is an await boundary: STOP may have won while the
+    // backend came up. Never return a machine to an ended requester.
+    if (!this.options.approvals.hasActiveTurn(requester)) {
+      throw new Error("This computer only runs while this exact agent run is active.");
+    }
     return backend;
   }
 
   /** A tool call arrived. Everything that can refuse it, refuses it here. */
-  private machineFor(botId: string): ManagedComputerBackend {
+  private machineFor(requester: ComputerRequester): ManagedComputerBackend {
+    const { botId } = requester;
     const backend = this.backend;
     if (!backend) {
       throw new Error("Computers run on the desktop app. This runtime does not have one.");
     }
-    if (!this.options.approvals.hasActiveTurn(botId)) {
+    if (!this.options.approvals.hasActiveTurn(requester)) {
       throw new Error(
         "This computer only runs while you are answering someone. There is no turn in flight for this agent.",
       );
@@ -191,9 +233,15 @@ export class ComputerManager {
     return backend;
   }
 
-  async observe(botId: string): Promise<{ observation: ComputerObservation; text: string }> {
-    const backend = await this.ensure(botId);
+  async observe(input: ComputerRequesterInput): Promise<{ observation: ComputerObservation; text: string }> {
+    const requester = requesterOf(input);
+    const { botId } = requester;
+    const backend = await this.ensure(requester);
+    this.requireAgentControl(backend, requester);
     const observation = await backend.observe(botId);
+    // Do not hand a screenshot containing a password/2FA entry back to a
+    // model if the person took control while capture was in flight.
+    this.requireAgentControl(backend, requester);
     this.publishScreen(botId);
     return { observation, text: formatObservation(observation) };
   }
@@ -208,19 +256,25 @@ export class ComputerManager {
    * shown two questions at once and never agrees to a host by agreeing to
    * another.
    */
-  async act(botId: string, actions: ComputerAction[], observe: boolean, settleMs = 0): Promise<ComputerActionResult> {
-    const backend = await this.ensure(botId);
+  async act(input: ComputerRequesterInput, actions: ComputerAction[], observe: boolean, settleMs = 0): Promise<ComputerActionResult> {
+    const requester = requesterOf(input);
+    const { botId } = requester;
+    const backend = await this.ensure(requester);
+    this.requireAgentControl(backend, requester);
     const touched = hostsTouched(actions, backend.currentUrl(botId));
     const signedIn = await backend.signedInHosts(botId);
+    this.requireAgentControl(backend, requester);
     const needed = hostsNeedingApproval(touched, signedIn, (host) =>
       this.options.approvals.isRemembered(botId, host),
     );
     for (const host of needed) {
-      const allowed = await this.options.approvals.ask({ botId, host });
+      const allowed = await this.options.approvals.ask({ requester, host });
       if (!allowed) {
         throw new Error(`Your user did not allow acting on ${host}. Tell them what you wanted to do there.`);
       }
+      this.requireAgentControl(backend, requester);
     }
+    this.requireAgentControl(backend, requester);
     const result = await backend.act(botId, actions, observe, settleMs);
     this.publishScreen(botId);
     return result;
@@ -232,17 +286,83 @@ export class ComputerManager {
    * Same host rule as `act`: fetching from a host the agent is signed in to is
    * fetching something only that account can see.
    */
-  async download(botId: string, url: string): Promise<ComputerDownloadResult> {
-    const backend = await this.ensure(botId);
+  async download(input: ComputerRequesterInput, url: string): Promise<ComputerDownloadResult> {
+    const requester = requesterOf(input);
+    const { botId } = requester;
+    const backend = await this.ensure(requester);
+    this.requireAgentControl(backend, requester);
     const host = hostOf(url);
     const signedIn = await backend.signedInHosts(botId);
+    this.requireAgentControl(backend, requester);
     const needed = hostsNeedingApproval([host], signedIn, (candidate) =>
       this.options.approvals.isRemembered(botId, candidate),
     );
-    if (needed.length && !(await this.options.approvals.ask({ botId, host }))) {
+    if (needed.length && !(await this.options.approvals.ask({ requester, host }))) {
       throw new Error(`Your user did not allow downloading from ${host}.`);
     }
+    this.requireAgentControl(backend, requester);
     return backend.download(botId, url);
+  }
+
+  /** Pause this exact run while the person completes a secret-bearing step.
+   * Acceptance takes the backend lease before this promise is exposed as
+   * waiting, so no concurrent agent request can slip into the seat. */
+  async requestHandoff(input: ComputerRequesterInput, reason: string): Promise<ComputerHandoffResult> {
+    const requester = requesterOf(input);
+    const { botId } = requester;
+    if (!reason.trim() || reason.length > 500) throw new Error("reason must be a short non-empty sentence");
+    const backend = await this.ensure(requester);
+    if (!this.options.approvals.hasActiveTurn(requester)) {
+      throw new Error("This computer only runs while this exact agent run is active.");
+    }
+    if (backend.state(botId).userInControl) {
+      throw new Error("the user still controls this computer; wait for them to give it back");
+    }
+    if (this.handoffRequests.has(botId) || this.handoffs.has(botId)) {
+      throw new Error("this computer already has a human handoff in progress");
+    }
+    // Block every other tool call before the card is shown. A second request
+    // from the same model process cannot click while the person is deciding.
+    this.handoffRequests.set(botId, requester);
+    let decision: "allowed" | "denied" | "cancelled";
+    try {
+      decision = await this.options.approvals.requestHandoff({ requester, reason: reason.trim() });
+    } catch (error) {
+      this.handoffRequests.delete(botId);
+      throw error;
+    }
+    if (decision !== "allowed") {
+      this.handoffRequests.delete(botId);
+      return decision;
+    }
+    // STOP or a terminal turn may have won while the answer crossed the
+    // process boundary. An old card never opens a fresh lease.
+    if (!this.options.approvals.hasActiveTurn(requester)) {
+      this.handoffRequests.delete(botId);
+      return "cancelled";
+    }
+    try {
+      backend.takeControl(botId);
+    } catch (error) {
+      this.handoffRequests.delete(botId);
+      throw error;
+    }
+    return new Promise<ComputerHandoffResult>((resolve) => {
+      this.handoffRequests.delete(botId);
+      this.handoffs.set(botId, { id: randomUUID(), requester, cancelled: false, resolve });
+      this.publishStatus(botId);
+      this.options.approvals.setHandoffWaiting(requester, true);
+    });
+  }
+
+  private requireAgentControl(backend: ManagedComputerBackend, requester: ComputerRequester): void {
+    const { botId } = requester;
+    if (!this.options.approvals.hasActiveTurn(requester)) {
+      throw new Error("This computer only runs while this exact agent run is active.");
+    }
+    if (this.handoffRequests.has(botId) || this.handoffs.has(botId) || backend.state(botId).userInControl) {
+      throw new Error("the user has taken control of this computer; wait until they give it back");
+    }
   }
 
   // ── the user's side ───────────────────────────────────────────────────
@@ -274,9 +394,42 @@ export class ComputerManager {
     return { state: this.state(botId), session };
   }
 
-  giveBack(botId: string): ComputerState {
-    this.backend?.giveBack(botId);
+  giveBack(botId: string, handoffId?: string): ComputerState {
+    const pending = this.handoffs.get(botId);
+    if (pending) {
+      if (!handoffId || pending.id !== handoffId) {
+        throw new Error("this Give back request does not match the current human handoff");
+      }
+      this.backend?.giveBack(botId);
+      this.handoffs.delete(botId);
+      if (!pending.cancelled) {
+        this.options.approvals.setHandoffWaiting(pending.requester, false);
+        pending.resolve("given_back");
+      }
+    } else {
+      if (handoffId) throw new Error("this human handoff is stale");
+      this.backend?.giveBack(botId);
+    }
     return this.state(botId);
+  }
+
+  /** STOP/terminal outcome cancels the waiter, but deliberately leaves the
+   * human lease held. Only the owner-facing Give back path releases it. */
+  cancelHandoff(runId: string): boolean {
+    for (const [botId, requester] of this.handoffRequests) {
+      if (requester.runId !== runId) continue;
+      this.handoffRequests.delete(botId);
+      return true;
+    }
+    for (const [botId, pending] of this.handoffs) {
+      if (pending.requester.runId !== runId) continue;
+      // Keep the lease and its id until the person explicitly gives it back.
+      // Only the tool waiter is cancelled; a stale run never regains control.
+      pending.cancelled = true;
+      pending.resolve("cancelled");
+      return true;
+    }
+    return false;
   }
 
   navigateForUser(botId: string, what: "back" | "forward" | "reload"): void {
@@ -373,6 +526,12 @@ export class ComputerManager {
   }
 
   dispose(botId: string): void {
+    this.handoffRequests.delete(botId);
+    const pending = this.handoffs.get(botId);
+    if (pending) {
+      this.handoffs.delete(botId);
+      pending.resolve("cancelled");
+    }
     this.watchers.get(botId)?.cancel();
     this.watchers.delete(botId);
     this.frameTimers.get(botId)?.cancel();
@@ -382,6 +541,9 @@ export class ComputerManager {
   }
 
   stop(): void {
+    this.handoffRequests.clear();
+    for (const pending of this.handoffs.values()) pending.resolve("cancelled");
+    this.handoffs.clear();
     for (const watcher of this.watchers.values()) watcher.cancel();
     for (const timer of this.frameTimers.values()) timer.cancel();
     this.watchers.clear();

@@ -371,7 +371,11 @@ interface ActiveTurn extends QueuedTurn {
    * differently. So a local ask is an ordinary `ask` block with an ordinary
    * `askId`; what is local is only WHO is waiting for the answer.
    */
-  localAsks: Map<string, { approvalKey: string; settle(allowed: boolean): void }>;
+  localAsks: Map<string, {
+    /** null for a handoff: taking the seat is never a standing permission. */
+    approvalKey: string | null;
+    settle(decision: "allowed" | "denied" | "cancelled"): void;
+  }>;
   /** Files and images `send_to_chat` staged for the NEXT reply message of
    * this turn (`image` / `file` blocks), and the caption to use when no
    * text comes with them. Drained when a reply lands; flushed at the end. */
@@ -910,14 +914,14 @@ export class Dispatcher {
     const local = turn.localAsks.get(input.askId);
     if (local) {
       const allowed = input.answer.kind === "allow_once" || input.answer.kind === "allow_always";
-      if (input.answer.kind === "allow_always") {
+      if (input.answer.kind === "allow_always" && local.approvalKey) {
         this.approvals[local.approvalKey] = true;
         this.deps.storage.writeJson(APPROVALS_FILE, this.approvals);
       }
       turn.localAsks.delete(input.askId);
       this.markAskAnswered(turn, input.askId, input.answer.kind);
       this.deps.runs.update(turn.runId, { state: "working" });
-      local.settle(allowed);
+      local.settle(allowed ? "allowed" : "denied");
       return;
     }
     const ask = turn.asks.get(input.askId);
@@ -943,11 +947,19 @@ export class Dispatcher {
    * anybody would ever see — which is the definition of a back door, not of a
    * feature. See `computer/manager.ts`.
    */
-  hasActiveTurn(botId: string): boolean {
+  hasActiveTurn(requester: string | { botId: string; threadId?: string; runId?: string }): boolean {
+    const scope = typeof requester === "string" ? { botId: requester } : requester;
+    return Boolean(this.activeTurnFor(scope));
+  }
+
+  private activeTurnFor(scope: { botId: string; threadId?: string; runId?: string }): ActiveTurn | undefined {
     for (const turn of this.active.values()) {
-      if (turn.botId === botId && !turn.cancelled && !turn.discarded) return true;
+      if (turn.botId !== scope.botId || turn.cancelled || turn.discarded) continue;
+      if (scope.threadId !== undefined && turn.threadId !== scope.threadId) continue;
+      if (scope.runId !== undefined && turn.runId !== scope.runId) continue;
+      return turn;
     }
-    return false;
+    return undefined;
   }
 
   /** Has the user already said "always" to this exact thing? */
@@ -965,14 +977,14 @@ export class Dispatcher {
    */
   askLocally(input: {
     botId: string;
+    threadId?: string;
+    runId?: string;
     summary: string;
     detailText?: string;
     approvalKey: string;
   }): Promise<boolean> {
     if (this.approvals[input.approvalKey] === true) return Promise.resolve(true);
-    const turn = [...this.active.values()].find(
-      (candidate) => candidate.botId === input.botId && !candidate.cancelled && !candidate.discarded,
-    );
+    const turn = this.activeTurnFor(input);
     if (!turn) return Promise.resolve(false);
     // `skip-all` is ONE global switch for every permission, whichever process
     // asks: the CLIs never raise a card under it, and neither does this one.
@@ -981,9 +993,10 @@ export class Dispatcher {
     const askId = newAskId();
     return new Promise<boolean>((resolve) => {
       let settled = false;
-      const settle = (allowed: boolean): void => {
+      const settle = (decision: "allowed" | "denied" | "cancelled"): void => {
         if (settled) return;
         settled = true;
+        const allowed = decision === "allowed";
         if (!allowed) turn.blockedOnInput = true;
         resolve(allowed);
       };
@@ -1016,6 +1029,64 @@ export class Dispatcher {
         botId: input.botId,
       });
     });
+  }
+
+  /** A run-bound card for login/CAPTCHA/2FA. It deliberately has no approval
+   * key: “Always allow” can never make a later handoff happen silently. */
+  requestComputerHandoff(input: {
+    botId: string;
+    threadId?: string;
+    runId?: string;
+    reason: string;
+  }): Promise<"allowed" | "denied" | "cancelled"> {
+    const turn = this.activeTurnFor(input);
+    if (!turn) return Promise.resolve("cancelled");
+    const askId = newAskId();
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (decision: "allowed" | "denied" | "cancelled"): void => {
+        if (settled) return;
+        settled = true;
+        if (decision !== "allowed") turn.blockedOnInput = true;
+        resolve(decision);
+      };
+      turn.localAsks.set(askId, { approvalKey: null, settle });
+      const name = this.deps.bots.get(input.botId)?.name ?? "This agent";
+      turn.message.blocks.push({
+        kind: "ask",
+        askId,
+        runId: turn.runId,
+        requestType: "permission",
+        tool: "computer_handoff",
+        summary: `${name} needs you to take control of its computer.`,
+        detailText: input.reason,
+        action: "Take control",
+        target: "this agent's computer",
+        impact: "medium",
+        reversible: true,
+        allowAlways: false,
+        details: { kind: "text", text: input.reason },
+        status: "pending",
+      });
+      this.persist(turn);
+      this.deps.runs.update(turn.runId, { state: "waiting_input" });
+      this.deps.bots.setStatus(input.botId, "waiting");
+      this.deps.events.publish({ type: "thread.ask", threadId: turn.threadId, messageId: turn.message.id, runId: turn.runId, askId });
+      this.deps.events.publish({ type: "run.waiting_input", runId: turn.runId, threadId: turn.threadId, botId: input.botId });
+    });
+  }
+
+  setComputerHandoffWaiting(
+    requester: { botId: string; threadId?: string; runId?: string },
+    waiting: boolean,
+  ): void {
+    const turn = this.activeTurnFor(requester);
+    if (!turn) return;
+    this.deps.runs.update(turn.runId, { state: waiting ? "waiting_input" : "working" });
+    this.deps.bots.setStatus(turn.botId, waiting ? "waiting" : "working");
+    if (waiting) {
+      this.deps.events.publish({ type: "run.waiting_input", runId: turn.runId, threadId: turn.threadId, botId: turn.botId });
+    }
   }
 
   /** How many "always allow" decisions this bot carries. */
@@ -1305,7 +1376,7 @@ export class Dispatcher {
       turn.asks.clear();
       for (const [askId, local] of turn.localAsks) {
         this.markAskAnswered(turn, askId, "expired");
-        local.settle(false);
+        local.settle("cancelled");
       }
       turn.localAsks.clear();
       turn.handle.stop();
@@ -1904,7 +1975,7 @@ export class Dispatcher {
     turn.asks.clear();
     for (const [askId, local] of turn.localAsks) {
       this.markAskAnswered(turn, askId, "expired");
-      local.settle(false);
+      local.settle("cancelled");
     }
     turn.localAsks.clear();
     this.deps.runs.update(turn.runId, { state: "failed", error: failure ?? "plan failover" });
@@ -2020,7 +2091,9 @@ export class Dispatcher {
       } } : {}),
       ...(shared.folders.length ? { grantedFolders: shared.folders } : {}),
       ...(shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(this.deps.hasComputer?.(bot) ? { hasComputer: true } : {}),
+      ...(runtime.provider !== "cursor" && this.deps.hasComputer?.(bot)
+        && runtime.tools.some((tool) => tool === "mcp:bizos_computer" || tool === "mcp:local_team_actions" || tool === "tool:computer_observe")
+        ? { hasComputer: true } : {}),
       teamTools: runtime.tools.some((tool) => tool === "mcp:local_team_actions" || tool === "tool:checkpoint_task"),
       memory,
     });
@@ -2148,7 +2221,9 @@ export class Dispatcher {
       sharedFolders: [this.deps.workspaceFor(bot)],
       ...(!nativeProvider(runtime.provider) && shared.folders.length ? { grantedFolders: shared.folders } : {}),
       ...(!nativeProvider(runtime.provider) && shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(!nativeProvider(runtime.provider) && this.deps.hasComputer?.(bot) ? { hasComputer: true } : {}),
+      ...(this.deps.hasComputer?.(bot)
+        && runtime.tools.some((tool) => tool === "mcp:bizos_computer" || tool === "mcp:local_team_actions" || tool === "tool:computer_observe")
+        ? { hasComputer: true } : {}),
       ...(architecture ? { localArchitecture: {
         ...architecture,
         sandbox: settings.local.permissions === "skip-all" ? "danger-full-access" as const : settings.local.sandbox,
@@ -2525,7 +2600,7 @@ export class Dispatcher {
     // tool call that must not proceed.
     for (const [askId, local] of turn.localAsks) {
       this.markAskAnswered(turn, askId, "expired");
-      local.settle(false);
+      local.settle("cancelled");
     }
     turn.localAsks.clear();
     this.persist(turn);
