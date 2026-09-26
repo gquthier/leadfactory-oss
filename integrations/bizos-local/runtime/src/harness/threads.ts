@@ -2,6 +2,7 @@
 // message per line. A snapshot is the tail of that file; older pages walk
 // backwards from a cursor. Appending never rewrites history, so a crash
 // mid-turn costs at most the line being written.
+import type { ConversationContinuity } from "./continuity-sync.js";
 import type { Clock } from "./clock.js";
 import { newMessageId } from "./ids.js";
 import type { Storage } from "./storage.js";
@@ -48,12 +49,18 @@ export class ThreadStore {
   constructor(
     private readonly storage: Storage,
     private readonly clock: Clock,
+    private readonly continuity?: ConversationContinuity,
   ) {}
 
   private rows(threadId: string): ThreadMessage[] {
-    return collapseMessages(
-      this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage),
-    );
+    const rows = this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage);
+    const canonical = this.continuity?.projection(threadId) ?? [];
+    if (!canonical.length) return collapseMessages(rows);
+    const ids = new Set(canonical.map(row => row.id));
+    // Canonical sequence is authoritative. Pending local intents stay visible
+    // at the tail, with their own stable IDs until the server acknowledges.
+    const head = Math.max(...canonical.map(row => row.seq));
+    return [...canonical, ...collapseMessages(rows).filter(row => !ids.has(row.id)).map((row, i) => ({...row, seq: head+i+1}))];
   }
 
   /** Highest seq on disk, by a loop — never a spread into `Math.max`. */
@@ -147,6 +154,7 @@ export class ThreadStore {
       ...(input.links?.length ? { links: input.links } : {}),
       createdAt: this.clock.nowIso(),
     };
+    this.continuity?.capture(message);
     this.storage.appendNdjson(this.storage.threadPath(threadId), message);
     return message;
   }
@@ -154,6 +162,7 @@ export class ThreadStore {
   /** A streaming bot message is rewritten as it grows. The log stays
    * append-only — a later line for the same id wins on read. */
   replace(message: ThreadMessage): ThreadMessage {
+    this.continuity?.capture(message);
     this.storage.appendNdjson(this.storage.threadPath(message.threadId), message);
     return message;
   }
@@ -168,6 +177,7 @@ export class ThreadStore {
    * codex resume cursor is the dispatcher's half of the same promise. */
   clear(target: ThreadTarget): void {
     const threadId = threadIdForTarget(target);
+    if (this.continuity?.linked(threadId)) throw new Error("A linked conversation cannot be cleared locally; its server archive is still retained.");
     this.storage.removeFile(this.storage.threadPath(threadId));
     this.storage.removeFile(this.storage.nativePath(threadId));
     this.sequences.delete(threadId);

@@ -21,21 +21,24 @@ export class RunStore {
     // Its in_progress task is flagged instead, so the next start can resume
     // it once from its checkpoint (`Dispatcher.resumeInterruptedTasks`).
     this.runs = (Array.isArray(raw) ? raw : []).map((run) =>
-      TERMINAL.includes(run.state) ? run : { ...run, state: "cancelled", endedAt: run.endedAt ?? run.startedAt,
+      TERMINAL.includes(run.state) || run.state === "queued" ? run : { ...run, state: "cancelled", endedAt: run.endedAt ?? run.startedAt,
         ...(run.task ? { task: { ...run.task, status: "interrupted" as const } } : {}),
         ...(run.task?.status === "in_progress" ? { interruption: "shutdown" as const } : {}),
       },
     );
   }
 
-  private persist(): void {
-    if (this.runs.length > MAX_RUNS) this.runs = this.runs.slice(-MAX_RUNS);
-    this.storage.writeJson(RUNS_FILE, this.runs);
+  private persist(runs: Run[] = this.runs): void {
+    const next = runs.length > MAX_RUNS ? runs.slice(-MAX_RUNS) : runs;
+    this.storage.writeJson(RUNS_FILE, next);
+    this.runs = next;
   }
 
-  start(input: { threadId: string; botId: string; routineId?: string; heartbeat?: boolean; state?: RunState }): Run {
+  start(input: { id?: string; threadId: string; botId: string; routineId?: string; heartbeat?: boolean; state?: RunState }): Run {
+    const existing=input.id ? this.get(input.id) : undefined;
+    if(existing)return existing;
     const run: Run = {
-      id: newRunId(),
+      id: input.id ?? newRunId(),
       threadId: input.threadId,
       botId: input.botId,
       state: input.state ?? "working",
@@ -43,8 +46,7 @@ export class RunStore {
       ...(input.routineId ? { routineId: input.routineId } : {}),
       ...(input.heartbeat ? { heartbeat: true } : {}),
     };
-    this.runs.push(run);
-    this.persist();
+    this.persist([...this.runs, run]);
     return { ...run };
   }
 
@@ -58,8 +60,9 @@ export class RunStore {
       updatedAt: this.clock.nowIso(),
       ...(patch.state && TERMINAL.includes(patch.state) ? { endedAt: this.clock.nowIso() } : {}),
     };
-    this.runs[index] = next;
-    this.persist();
+    const runs = [...this.runs];
+    runs[index] = next;
+    this.persist(runs);
     return { ...next };
   }
 

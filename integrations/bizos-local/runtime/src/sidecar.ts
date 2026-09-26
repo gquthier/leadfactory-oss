@@ -1,3 +1,4 @@
+import { desktopContinuityTransport } from "./continuity-bridge.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
@@ -655,6 +656,8 @@ export interface Packs {
 export class LocalTeamBroker {
   private readonly tickets = new Map<string, TeamCapability>();
   private readonly sessions = new Map<string, TeamCapability>();
+  private authorityCheck?: (capability: TeamCapability) => void;
+  setAuthorityCheck(check: (capability: TeamCapability) => void): void { this.authorityCheck = check; }
 
   issue(input: Omit<TeamCapability, "expiresAt">): string {
     const ticket = randomBytes(32).toString("base64url");
@@ -691,6 +694,7 @@ export class LocalTeamBroker {
         "Team recruitment and handoff are unavailable during a voice task. Do the work yourself or tell the user to continue in the chat.",
       );
     }
+    this.authorityCheck?.(capability);
     return capability;
   }
 }
@@ -2668,54 +2672,86 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/internal/local-team/exchange") {
         return sendJson(response, 200, { token: teamBroker.exchange(bearer) });
       }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/recruit") {
-        return sendJson(response, 201, await facade.recruit(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/manage") {
-        return sendJson(response, 200, await facade.manageAgent(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/routine") {
-        return sendJson(response, 201, await facade.scheduleRoutine(() => teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/checkpoint") {
-        return sendJson(response, 200, facade.checkpointTask(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/send") {
-        return sendJson(response, 200, facade.sendToChat(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/quick-replies") {
-        return sendJson(response, 200, facade.offerQuickReplies(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/propose-name") {
-        return sendJson(response, 200, facade.proposeCompanyName(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && (url.pathname === "/api/internal/local-team/agency" || url.pathname === "/api/internal/local-team/pack")) {
-        return sendJson(response, 200, await facade.packTool(teamBroker.authorize(bearer), await bodyOf(request)));
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/cloud") {
-        const capability = teamBroker.authorize(bearer, { allowDuringVoice: true });
-        const input = objectBody(await bodyOf(request), ["tool", "arguments"]);
-        if (!cloud || !isCloudToolName(input.tool)) throw new HttpError(404, "not_found", "Unknown cloud computer tool.");
-        const args = input.arguments && typeof input.arguments === "object" && !Array.isArray(input.arguments) ? input.arguments as Record<string, unknown> : {};
-        try {
-          return sendJson(response, 200, await cloud.tool(capability.botId, String(input.tool), args));
-        } catch (error) {
-          throw cloudHttpError(error);
-        }
-      }
-      if (method === "POST" && url.pathname === "/api/internal/local-team/computer") {
-        const capability = teamBroker.authorize(bearer);
-        const input = objectBody(await bodyOf(request), ["tool", "arguments"]);
-        if (!isComputerToolName(input.tool)) throw new HttpError(404, "not_found", "Unknown computer tool.");
-        try {
-          const result = await facade.computerTool(capability, input.tool, input.arguments ?? {});
-          return sendJson(response, 200, { ok: true, text: result.text, ...(result.image ? { image: result.image } : {}) });
-        } catch (error) {
-          // A refusal is a result the model reads, not a transport failure.
-          return sendJson(response, 200, { ok: false, error: error instanceof Error ? error.message : String(error) });
-        }
+      if (method === "POST" && url.pathname.startsWith("/api/internal/local-team/")) {
+        const operation = url.pathname.slice("/api/internal/local-team/".length);
+        const capability = teamBroker.authorize(bearer, {allowDuringVoice: operation === "cloud"});
+        const input = await bodyOf(request);
+        const parsed = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string,unknown> : {};
+        const toolName = typeof parsed.tool === "string" ? parsed.tool : operation;
+        const result = await harness.continuity.execute(capability.threadId,capability.runId,toolName,input,async () => {
+          // Recheck immediately before dispatch after the network admission.
+          teamBroker.authorize(bearer, {allowDuringVoice: operation === "cloud"});
+          if (operation === "recruit") return facade!.recruit(capability,input);
+          if (operation === "manage") return facade!.manageAgent(capability,input);
+          if (operation === "routine") return facade!.scheduleRoutine(() => teamBroker.authorize(bearer),input);
+          if (operation === "checkpoint") return facade!.checkpointTask(capability,input);
+          if (operation === "send") return facade!.sendToChat(capability,input);
+          if (operation === "quick-replies") return facade!.offerQuickReplies(capability,input);
+          if (operation === "propose-name") return facade!.proposeCompanyName(capability,input);
+          if (operation === "agency" || operation === "pack") return facade!.packTool(capability,input);
+          if (operation === "archive" || operation === "artifact" || operation === "computers") {
+            const tool=harness.continuity.portableTools(capability.threadId).find(t=>t.name===(operation === "computers" ? "list_accessible_computers" : operation === "archive" ? "read_conversation_archive" : "read_conversation_artifact"))!;
+            return tool.call(input,{callId:"mcp",threadId:capability.threadId,turnId:capability.runId});
+          }
+          if (operation === "cloud") {
+            if (!cloud || !isCloudToolName(parsed.tool)) throw new HttpError(404,"not_found","Unknown cloud computer tool.");
+            const args=parsed.arguments&&typeof parsed.arguments === "object"&&!Array.isArray(parsed.arguments)?parsed.arguments as Record<string,unknown>:{};
+            return cloud.tool(capability.botId,String(parsed.tool),args);
+          }
+          if (operation === "computer") {
+            if (!isComputerToolName(parsed.tool)) throw new HttpError(404,"not_found","Unknown computer tool.");
+            const result=await facade!.computerTool(capability,parsed.tool,parsed.arguments??{});
+            return {ok:true,text:result.text,...(result.image?{image:result.image}:{})};
+          }
+          throw new HttpError(404,"not_found","Unknown local team operation.");
+        });
+        return sendJson(response, operation === "recruit" || operation === "routine" ? 201 : 200, result);
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      if (url.pathname === "/api/local/continuity/prepare-shutdown" && method === "POST") return sendJson(response,200,{results:await harness.continuity.prepareShutdown()});
+      if (url.pathname === "/api/local/continuity/transfers" && method === "GET") return sendJson(response,200,await harness.continuity.pendingTransfers());
+      if (url.pathname === "/api/local/continuity/status" && method === "GET") {
+        const threadId = url.searchParams.get("threadId");
+        return sendJson(response, 200, threadId ? harness.continuity.store.status(threadId) : harness.continuity.store.links().map(row => ({threadId:row.threadId, ...harness.continuity.store.status(row.threadId)})));
+      }
+      if (url.pathname === "/api/local/continuity/policy" && method === "GET") {
+        const threadId=url.searchParams.get("threadId");if(!threadId)throw new HttpError(400,"invalid_body","Conversation required.");
+        return sendJson(response,200,await harness.continuity.policy(threadId));
+      }
+      if (url.pathname === "/api/local/continuity/agents" && method === "GET") return sendJson(response, 200, await harness.continuity.agents());
+      if (url.pathname === "/api/local/continuity/conversations" && method === "GET") return sendJson(response, 200, await harness.continuity.list());
+      if (url.pathname.startsWith("/api/local/continuity/") && method === "POST") {
+        const input = objectBody(await bodyOf(request), ["threadId", "agentId", "audience", "cloudThreadId", "title", "conversationId", "artifactId", "version", "previousHash", "name", "mimeType", "contentBase64", "transferId", "destination", "summary", "runId", "epoch", "checkpointId", "expectedHead", "manifestHash", "modelRuntime"]);
+        if (typeof input.threadId !== "string" || input.threadId.length > 128 || !/^(bot|group|chat):/.test(input.threadId)) throw new HttpError(400,"invalid_body","A local conversation is required.");
+        const threadId = input.threadId;
+        if (url.pathname.endsWith("/link")) {
+          if (typeof input.agentId !== "string" || !["private","thread"].includes(String(input.audience)) || typeof input.title !== "string") throw new HttpError(400,"invalid_body","Choose an authorized cloud agent and conversation audience.");
+          return sendJson(response, 200, await harness.continuity.link(threadId,{agentId:input.agentId,audience:input.audience as "private"|"thread",title:input.title,...(typeof input.cloudThreadId === "string" ? {threadId:input.cloudThreadId}: {})}));
+        }
+        if (url.pathname.endsWith("/attach")) {
+          if (typeof input.conversationId !== "string") throw new HttpError(400,"invalid_body","Choose an authorized conversation.");
+          return sendJson(response,200,await harness.continuity.attach(threadId,input.conversationId));
+        }
+        if (url.pathname.endsWith("/sync")) { await harness.continuity.sync(threadId); return sendJson(response,200,harness.continuity.store.status(threadId)); }
+        if (url.pathname.endsWith("/transfer/prepare")) {
+          const d=input.destination&&typeof input.destination === "object"&&!Array.isArray(input.destination)?input.destination as Record<string,unknown>:{};
+          if(typeof input.transferId!=="string"||!((d.kind==="cloud"&&typeof d.model==="string")||(d.kind==="installation"&&typeof d.installationId==="string"&&["claude","codex"].includes(String(d.modelRuntime)))))throw new HttpError(400,"invalid_body","Choose an authorized transfer destination.");
+          return sendJson(response,200,await harness.continuity.prepareTransfer(threadId,{transferId:input.transferId,destination:d as {kind:"installation";installationId:string;modelRuntime:"claude"|"codex"}|{kind:"cloud";model:string},...(typeof input.summary==="string"?{summary:input.summary}:{})}));
+        }
+        if (url.pathname.endsWith("/transfer/accept")) {
+          if([input.transferId,input.runId,input.checkpointId,input.expectedHead,input.manifestHash].some(value=>typeof value!=="string")||!Number.isSafeInteger(input.epoch)||!["claude","codex"].includes(String(input.modelRuntime)))throw new HttpError(400,"invalid_body","The complete transfer receipt is required.");
+          return sendJson(response,200,await harness.continuity.acceptTransfer(threadId,{transferId:String(input.transferId),runId:String(input.runId),epoch:Number(input.epoch),checkpointId:String(input.checkpointId),expectedHead:String(input.expectedHead),manifestHash:String(input.manifestHash),modelRuntime:input.modelRuntime as "claude"|"codex"}));
+        }
+        if (url.pathname.endsWith("/artifact/read")) {
+          if(typeof input.artifactId !== "string" || !Number.isSafeInteger(input.version)) throw new HttpError(400,"invalid_body","Artifact and version are required.");
+          return sendJson(response,200,await harness.continuity.readArtifact(threadId,input.artifactId,Number(input.version)));
+        }
+        if (url.pathname.endsWith("/artifact/put")) {
+          if(!Number.isSafeInteger(input.version)||typeof input.name!=="string"||typeof input.mimeType!=="string"||typeof input.contentBase64!=="string"||(input.previousHash!==null&&typeof input.previousHash!=="string"))throw new HttpError(400,"invalid_body","A bounded artifact version is required.");
+          return sendJson(response,200,await harness.continuity.putArtifact(threadId,{version:Number(input.version),name:input.name,mimeType:input.mimeType,contentBase64:input.contentBase64,previousHash:input.previousHash,...(typeof input.artifactId==="string"?{artifactId:input.artifactId}:{})}));
+        }
+        throw new HttpError(404,"not_found","Unknown continuity operation.");
+      }
       // A file an agent sent to the chat, or a link preview's image: the
       // bytes, from the path the transcript recorded, owner-bearer only.
       const attachmentId = routeId(url.pathname, /^\/api\/local\/attachments\/([^/]+)$/);
@@ -3053,6 +3089,7 @@ async function serve(): Promise<void> {
     : undefined;
   const harness: LocalBizosHarness = new LocalBizosHarness({
     rootDir: harnessRoot,
+    ...(nativeDescriptorPath ? {continuityTransport: desktopContinuityTransport(resolve(nativeDescriptorPath))} : {}),
     cloudComputer,
     ...(nativeComputer ? { computerBackend: nativeComputer } : {}),
     baseUrl: origin,
@@ -3073,7 +3110,7 @@ async function serve(): Promise<void> {
       // Exchange the one-shot ticket inside the trusted host. Neither token
       // reaches Codex, its prompt, argv, environment, or the renderer.
       const session = teamBroker.exchange(teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }));
-      const teamTools = LOCAL_TEAM_TOOL_SPECS.map((tool) => ({
+      const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !tool.name.startsWith("read_conversation_")).map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -3131,7 +3168,7 @@ async function serve(): Promise<void> {
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
-        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}`,
+        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },
@@ -3162,6 +3199,9 @@ async function serve(): Promise<void> {
         peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name })),
         recruitment: "autonomous-local-tools",
       }),
+  });
+  teamBroker.setAuthorityCheck(capability => {
+    if (harness.continuity.linked(capability.threadId)) harness.continuity.guard.assert(capability.threadId);
   });
   computerWorkspaceFor = (botId) => harness.computerWorkspaceFor(botId);
   // The packs share this harness: their agents are roster bots the generic
@@ -3230,6 +3270,9 @@ async function serve(): Promise<void> {
     }
     connector?.stop();
     cloudLink?.stop();
+    // Graceful close can hand off only while main's signer and this source
+    // process are still available. A hard kill never fabricates quiescence.
+    await harness.continuity.prepareShutdown().catch(error=>process.stderr.write(`[localbizos] continuity shutdown: ${String(error).slice(0,200)}\n`));
     harness.stop();
     // Stop accepting calls immediately, but keep the process and state lock
     // until the CLI/MCP groups have exited (including SIGKILL escalation).

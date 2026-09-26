@@ -13,7 +13,6 @@
 // crash mid-write leaves the previous file intact rather than a truncated
 // one. Everything is 0600: this directory holds the user's conversations.
 import {
-  appendFileSync,
   closeSync,
   existsSync,
   fsyncSync,
@@ -126,11 +125,13 @@ export class Storage {
   }
 
   appendNdjson(path: string, entry: unknown): void {
+    const descriptor = openSync(path, "a", FILE_MODE);
     try {
-      appendFileSync(path, `${JSON.stringify(entry)}\n`, { mode: FILE_MODE });
-    } catch {
-      /* never let persistence break a run */
-    }
+      const bytes = Buffer.from(`${JSON.stringify(entry)}\n`);
+      let offset = 0;
+      while (offset < bytes.length) offset += writeSync(descriptor, bytes, offset, bytes.length - offset);
+      fsyncSync(descriptor);
+    } finally { closeSync(descriptor); }
   }
 
   readNdjson<T>(path: string): T[] {
@@ -197,10 +198,14 @@ export function writeFileAtomic(path: string, contents: string): void {
   const temporary = `${path}.${process.pid}.tmp`;
   const descriptor = openSync(temporary, "w", FILE_MODE);
   try {
-    writeSync(descriptor, contents);
+    const bytes = Buffer.from(contents);
+    let offset = 0;
+    while (offset < bytes.length) offset += writeSync(descriptor, bytes, offset, bytes.length - offset);
     fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
   }
   renameSync(temporary, path);
+  const directory = openSync(dirname(path), "r");
+  try { fsyncSync(directory); } finally { closeSync(directory); }
 }

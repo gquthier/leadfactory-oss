@@ -1,3 +1,5 @@
+import { ConversationContinuity } from "./continuity-sync.js";
+import type { ContinuityTransport } from "../continuity-bridge.js";
 import { EntitlementStore, type Entitlement, type ProFeature } from "./entitlement.js";
 import { QuickChatStore, quickMessageId } from "./quick-chats.js";
 // Composition root for the local runtime. Everything Electron-specific is
@@ -236,6 +238,8 @@ export const REMOTE_TASK_NOTE = "Task from BizOS admin";
 export const DEVICE_CAPABILITY_CACHE_MS = 10 * 60_000;
 
 export interface HarnessOptions {
+  /** Trusted main bridge only; absent for independent Local OSS. */
+  continuityTransport?: ContinuityTransport;
   /** `<userData>/localbizos` — every file the runtime owns lives here. */
   rootDir: string;
   /** Origin of the BizOS web app this window is showing. */
@@ -492,6 +496,7 @@ export interface ModelsResponse {
 }
 
 export class LocalBizosHarness {
+  readonly continuity: ConversationContinuity;
   private readonly quickChatStore: QuickChatStore;
   readonly storage: Storage;
   readonly events = new EventBus();
@@ -543,6 +548,7 @@ export class LocalBizosHarness {
   constructor(private readonly options: HarnessOptions) {
     this.clock = options.clock ?? systemClock;
     this.storage = new Storage(options.rootDir);
+    this.continuity = new ConversationContinuity(this.storage, options.continuityTransport);
     this.storageRootRealPath = realpathSync(this.storage.layout.root);
     this.settingsStore = new SettingsStore(
       this.storage,
@@ -557,7 +563,7 @@ export class LocalBizosHarness {
     this.botStore = new BotStore(this.storage, this.clock);
     this.botStore.resetTransient();
     this.groupStore = new GroupStore(this.storage, this.clock);
-    this.threadStore = new ThreadStore(this.storage, this.clock);
+    this.threadStore = new ThreadStore(this.storage, this.clock, this.continuity);
     this.routineStore = new RoutineStore(this.storage, this.clock);
     this.runStore = new RunStore(this.storage, this.clock);
     this.planRegistry = new PlanRegistry(this.storage);
@@ -584,6 +590,7 @@ export class LocalBizosHarness {
     });
 
     this.dispatcher = new Dispatcher({
+      continuity: this.continuity,
       bots: this.botStore,
       chatExecutor: id => this.quickChatStore.executor(id),
       groups: this.groupStore,
@@ -811,6 +818,7 @@ export class LocalBizosHarness {
     });
 
     this.scheduler = new Scheduler({
+      storage: this.storage,
       routines: this.routineStore,
       clock: this.clock,
       // A scheduled fire refreshes the session first. The Supabase token
@@ -820,13 +828,14 @@ export class LocalBizosHarness {
       prepare: () => this.refreshSessionCookie(),
       ineligibleReason: (routine) => this.routineOwnerIneligibleReason(routine.botId),
       onExpired: (routine) => this.publishRoutineUpdated(routine, "expired"),
-      fire: ({ routine, missed, final }) => {
+      fire: ({ routine, missed, final, occurrenceId }) => {
         const bot = this.botStore.get(routine.botId);
         const reason = this.routineOwnerIneligibleReason(routine.botId);
         if (!bot || reason) throw new Error(reason ?? "routine owner does not exist");
         return this.dispatcher.runRoutine({
           botId: routine.botId,
           routineId: routine.id,
+          ...(occurrenceId ? {occurrenceId} : {}),
           routine: { name: routine.name, trigger: routine.trigger, ...(routine.endsAt ? { endsAt: routine.endsAt } : {}) },
           prompt: routineRunPrompt({
             name: routine.name,
@@ -985,6 +994,12 @@ export class LocalBizosHarness {
   }
 
   async start(): Promise<void> {
+    this.continuity.start((threadId,messages)=>{for(const message of messages)this.events.publish({type:"thread.message.created",threadId,message});},()=>{
+      const runtimes:Array<"claude"|"codex">=[];
+      try { requireClaudePath(undefined,this.environment(),{packaged:this.options.packaged});runtimes.push("claude"); } catch {}
+      try { requireCodexPath(this.settingsStore.get().local.codexPath,this.environment(),{packaged:this.options.packaged});runtimes.push("codex"); } catch {}
+      return {runtimes,supervised:runtimes.length===1&&runtimes[0]==="claude"};
+    });
     // Before anything else: the window is about to be created, and it should be
     // created in the theme this machine last chose.
     this.options.onSettingsChanged?.(this.settingsStore.get());
@@ -1081,6 +1096,7 @@ export class LocalBizosHarness {
     this.scheduler.stop();
     this.heartbeat.stop();
     this.dispatcher.stopAll();
+    this.continuity.close();
     this.events.clear();
     void this.broker?.close();
     this.broker = null;

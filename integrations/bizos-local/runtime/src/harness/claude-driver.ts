@@ -29,6 +29,8 @@ import { classifyError } from "./retry.js";
 import type { ReasoningEffort, SandboxMode } from "./types.js";
 
 export interface ClaudeTurnInput {
+  /** Linked transferable profile: only the injected mediated MCP surface. */
+  boundedTools?: boolean;
   cli: string;
   cwd: string;
   /** Additional user-authorized roots visible to this turn. */
@@ -112,6 +114,7 @@ export function permissionModeFor(sandbox: SandboxMode): "acceptEdits" | "defaul
 }
 
 export function buildClaudeArgs(input: {
+  boundedTools?: boolean;
   text: string;
   model?: string;
   system?: string;
@@ -135,6 +138,7 @@ export function buildClaudeArgs(input: {
    */
   skipPermissions?: boolean;
 }): string[] {
+  const bypass = input.skipPermissions && !input.boundedTools;
   const args = [
     "-p",
     "--input-format",
@@ -146,10 +150,11 @@ export function buildClaudeArgs(input: {
     "--verbose",
     "--include-partial-messages",
     "--permission-mode",
-    input.skipPermissions ? "bypassPermissions" : permissionModeFor(input.sandbox),
-    ...(input.skipPermissions ? ["--dangerously-skip-permissions"] : []),
+    bypass ? "bypassPermissions" : input.boundedTools ? "manual" : permissionModeFor(input.sandbox),
+    ...(bypass ? ["--dangerously-skip-permissions"] : []),
     ...[...new Set([input.cwd, ...(input.additionalDirectories ?? [])])].flatMap((directory) => ["--add-dir", directory]),
   ];
+  if (input.boundedTools) args.push("--restricted", "--safe-mode", "--tools", "", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--settings", JSON.stringify({disableAllHooks:true}));
   if (input.model) args.push("--model", input.model);
   if (input.system) args.push("--append-system-prompt", input.system);
   if (input.resumeCursor) args.push("--resume", input.resumeCursor);
@@ -159,7 +164,7 @@ export function buildClaudeArgs(input: {
   // Protected mode keeps the existing connector isolation.
   if (input.mcpConfigPath) {
     args.push("--mcp-config", input.mcpConfigPath);
-    if (!input.skipPermissions) args.push("--strict-mcp-config");
+    if (!input.skipPermissions && !input.boundedTools) args.push("--strict-mcp-config");
   }
   if (input.allowedTools?.length) args.push("--allowedTools", input.allowedTools.join(","));
   return args;
@@ -251,6 +256,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
       state.child = null;
     }
     dropMcpConfig();
+    if (ok) emit({ type: "context.confirmed" });
     emit({ type: "turn.completed", ok, stopReason });
   };
 
@@ -284,6 +290,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
       ...(input.model ? { model: input.model } : {}),
       ...(input.system ? { system: input.system } : {}),
       ...(input.resumeCursor ? { resumeCursor: input.resumeCursor } : {}),
+      ...(input.boundedTools ? { boundedTools: true } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(state.mcpConfigPath ? { mcpConfigPath: state.mcpConfigPath } : {}),
       ...(allowedTools.length ? { allowedTools } : {}),
@@ -336,6 +343,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
           continue;
         }
         state.initialized = true;
+        emit({ type: "context.sent" });
         writeFrame({ type: "user", session_id: input.resumeCursor ?? "", parent_tool_use_id: null,
           message: { role: "user", content: input.text } });
         continue;
@@ -379,6 +387,16 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
           summary: `Allow ${tool} in this agent's workspace?`, detail,
           detailText: `Workspace: ${input.cwd}\n${visible}` });
         continue;
+      }
+      if (input.boundedTools && message.type === "system" && message.subtype === "init") {
+        const tools = message.tools;
+        const allowedPrefixes = Object.keys(input.mcpServers ?? {}).map(name => `mcp__${name}__`);
+        if (!Array.isArray(tools) || tools.some(tool => typeof tool !== "string" || !allowedPrefixes.some(prefix => tool.startsWith(prefix)))) {
+          emit({type:"runtime.error", message:"Claude exposed an unverified tool surface; linked execution stopped."});
+          finish(false, "unverified_tool_surface");
+          return;
+        }
+        emit({type:"capabilities.verified", supervised:true, tools:tools as string[]});
       }
       handleClaudeLine(message, state, emit);
       if (message.type === "result") {
