@@ -50,7 +50,14 @@ function safeDirectory(path: string, root: string, create: boolean): void {
   let current = "/";
   for (const part of parts) {
     current = join(current, part);
-    if (!existsSync(current) && create) mkdirSync(current, { mode: 0o700 });
+    if (!existsSync(current) && create) {
+      try { mkdirSync(current, { mode: 0o700 }); }
+      catch (error) {
+        // A second installer may create this ancestor before either holds the
+        // provider lock. The lstat checks below still verify the winner.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
     if (!existsSync(current)) return;
     const stat = lstatSync(current);
     const managedComponent = current === root || current.startsWith(root + "/");
