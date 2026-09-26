@@ -949,10 +949,10 @@ export class Dispatcher {
    */
   hasActiveTurn(requester: string | { botId: string; threadId?: string; runId?: string }): boolean {
     const scope = typeof requester === "string" ? { botId: requester } : requester;
-    return Boolean(this.activeTurnFor(scope));
+    return Boolean(this.findActiveTurnFor(scope));
   }
 
-  private activeTurnFor(scope: { botId: string; threadId?: string; runId?: string }): ActiveTurn | undefined {
+  private findActiveTurnFor(scope: { botId: string; threadId?: string; runId?: string }): ActiveTurn | undefined {
     for (const turn of this.active.values()) {
       if (turn.botId !== scope.botId || turn.cancelled || turn.discarded) continue;
       if (scope.threadId !== undefined && turn.threadId !== scope.threadId) continue;
@@ -984,7 +984,7 @@ export class Dispatcher {
     approvalKey: string;
   }): Promise<boolean> {
     if (this.approvals[input.approvalKey] === true) return Promise.resolve(true);
-    const turn = this.activeTurnFor(input);
+    const turn = this.findActiveTurnFor(input);
     if (!turn) return Promise.resolve(false);
     // `skip-all` is ONE global switch for every permission, whichever process
     // asks: the CLIs never raise a card under it, and neither does this one.
@@ -1039,7 +1039,7 @@ export class Dispatcher {
     runId?: string;
     reason: string;
   }): Promise<"allowed" | "denied" | "cancelled"> {
-    const turn = this.activeTurnFor(input);
+    const turn = this.findActiveTurnFor(input);
     if (!turn) return Promise.resolve("cancelled");
     const askId = newAskId();
     return new Promise((resolve) => {
@@ -1080,7 +1080,7 @@ export class Dispatcher {
     requester: { botId: string; threadId?: string; runId?: string },
     waiting: boolean,
   ): void {
-    const turn = this.activeTurnFor(requester);
+    const turn = this.findActiveTurnFor(requester);
     if (!turn) return;
     this.deps.runs.update(turn.runId, { state: waiting ? "waiting_input" : "working" });
     this.deps.bots.setStatus(turn.botId, waiting ? "waiting" : "working");

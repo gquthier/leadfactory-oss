@@ -251,7 +251,7 @@ describe("the CEO's welcome in a new company", () => {
   });
 
   it("keeps computer_* as the browser and allows only the CLI's native search for a search the role asks for", () => {
-    expect(COMPUTER_DOCTRINE).toContain("Those two tools ARE your browser");
+    expect(COMPUTER_DOCTRINE).toContain("`computer_act` and `computer_observe` tools drive the browser");
     expect(COMPUTER_DOCTRINE).toContain("native web search (Claude Code WebSearch, Codex web search)");
     expect(COMPUTER_DOCTRINE).toContain("search results only");
   });

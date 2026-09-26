@@ -13,7 +13,7 @@ export const LOCAL_BACKEND_CAPABILITIES = {
   inviteGuests: false,
   cloudOrganization: false,
   cloudTools: false,
-  computer: true,
+  computer: false,
   devices: false,
   sharedWorkspaceContext: false,
   /** `/api/local/cloud-link`: mirror the dashboard summary to the web. */

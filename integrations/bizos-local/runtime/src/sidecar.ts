@@ -1065,7 +1065,7 @@ export class CollaborationFacade {
         cloudOrgId: null,
       },
       session: { userId: this.userId, workspaceId: this.workspaceId, access: "owner" as const },
-      capabilities: LOCAL_BACKEND_CAPABILITIES,
+      capabilities: { ...LOCAL_BACKEND_CAPABILITIES, computer: this.harness.computerToolsAvailable() },
       providers: {
         supported: LOCAL_PROVIDERS,
         configured: [...new Set([...plans.filter((plan) => plan.status !== "disconnected").map((plan) => plan.provider), ...(inference.providers.some(provider => provider.kind === "ollama") ? ["ollama"] : [])])],
