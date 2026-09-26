@@ -137,7 +137,12 @@ not prove a native desktop build or deletion inside an external CLI provider.
 
 `POST /api/local/brain/templates/apply` accepts optional `companyName` and
 `context: { sourceLabel, files: [{ path, text }] }`, beside `owner.name` and
-`language`. Context requires `company-os` in a new managed vault. Electron owns
+`language`. Context requires `company-os` in a new managed vault. Send all creation options
+in this first apply call; it already binds and installs atomically. Do not call
+`workspace-template/bind` first: that route installs immediately without creation
+options. A late context import into such an installation now returns 409 instead
+of silently claiming success. Read `workspace-template` afterward to verify the
+resulting binding. Electron owns
 the native picker and supplies a UTF-8 snapshot; the runtime never opens a
 caller-supplied source directory. The selected originals receive no writes or
 new access grants. `bootstrap.backend.companyName` exposes the current known

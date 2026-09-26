@@ -101,6 +101,9 @@ describe.skipIf(!built)("Imported context HTTP boundary", () => {
     const applied = await api("POST", "/api/local/brain/templates/apply", request);
     expect(applied.status).toBe(200);
     expect(applied.body).toMatchObject({ id: "company-os", rootId: "vault:company-os", created: true, bots: { ceo: expect.any(String) } });
+    const binding = await api("GET", "/api/local/workspace-template");
+    expect(binding.status).toBe(200);
+    expect(binding.body.binding).toMatchObject({ templateId: "company-os", rootId: "vault:company-os" });
     const imported = join(temp, "state/runtime/vaults/company-os/Knowledge/Imported Context/files/Company.md");
     expect(readFileSync(imported, "utf8")).toBe(content);
     writeFileSync(imported, "Owner correction");

@@ -1825,6 +1825,9 @@ export class LocalBizosHarness {
     const registry = readTemplateRegistry(this.storage);
     const existing = this.installationOf(registry, id);
     const priorPending = registry.pending[id];
+    if (options.context && ((existing && !existing.contextImported) || (priorPending && !priorPending.creationOptions?.context))) {
+      throw new BrainError("Business context must be supplied in the first template apply. This workspace was already installed without it; create a new workspace and apply the template with its context directly.", "exists");
+    }
     // A proven pre-registry Agency install is legacy state, not a new clone:
     // adopt its six bots exactly and never add a seventh CEO. Early 0.2
     // installs did not all write install.json, so six live roster rows on the
@@ -2058,6 +2061,7 @@ export class LocalBizosHarness {
       routineIds: [],
       ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
       ...(pending.onboardingVersion === 1 ? { onboardingVersion: 1 as const } : {}),
+      ...(creationOptions.context ? { contextImported: true as const } : {}),
     };
     this.updateRegistry((current) => {
       current.installations[id] = installation;

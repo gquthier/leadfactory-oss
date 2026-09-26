@@ -59,6 +59,15 @@ describe("Autonomous Company from context", () => {
     expect(readFileSync(join(vault, "Knowledge/Imported Context/files/Company.md"), "utf8")).toBe("Owner correction");
     expect((await harness.threads.get({ botId: result.bots.ceo })).messages).toHaveLength(1);
   });
+  it("rejects bind-then-apply when the binding already installed without the context", async () => {
+    const { harness, facade } = setup();
+    await facade.bindWorkspaceTemplate({ templateId: "company-os", rootId: "new" });
+    const vault = harness.workspaceTemplate.current()!.path;
+    const originalCompany = readFileSync(join(vault, "Company.md"), "utf8");
+    await expect(facade.applyBrainTemplate({ id: "company-os", rootId: "new", owner: { name: "Ada" }, context: snapshot })).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/first template apply/i) });
+    expect(readFileSync(join(vault, "Company.md"), "utf8")).toBe(originalCompany);
+    expect((await harness.bots.list()).map(row => row.name)).toEqual(["CEO"]);
+  });
   it("resumes the exact context after a crash between binding and vault creation", async () => {
     const stateRoot = join(root, "crash-state");
     const { harness } = setup(stateRoot);

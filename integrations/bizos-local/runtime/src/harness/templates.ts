@@ -362,6 +362,8 @@ export interface TemplateInstallation {
   creationMode?: TemplateCreationMode;
   onboardingVersion?: 1;
   onboardingCompletedAt?: string;
+  /** Import was part of the first creation, never a late mutation. */
+  contextImported?: true;
 }
 
 /** One agent in the journal: its id, written before it exists. */
@@ -482,6 +484,7 @@ function installationOf(raw: unknown, id: TemplateId, binding: WorkspaceBinding 
     routineIds,
     ...(raw.creationMode === CEO_ON_DEMAND_CREATION ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
     ...(raw.onboardingVersion === 1 ? { onboardingVersion: 1 as const } : {}),
+    ...(raw.contextImported === true ? { contextImported: true as const } : {}),
     ...(typeof raw.onboardingCompletedAt === "string" && Number.isFinite(Date.parse(raw.onboardingCompletedAt)) ? { onboardingCompletedAt: raw.onboardingCompletedAt } : {}),
   };
 }
