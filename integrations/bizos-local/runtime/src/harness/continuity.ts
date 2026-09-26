@@ -74,6 +74,8 @@ interface Conversation {
   captured: Record<string, string>;
   artifacts: ArtifactVersion[];
   effects: EffectRecord[];
+  /** Local presentation only; never included in provider or server events. */
+  projectionAnchors?: Record<string, string | null>;
   error?: string;
 }
 interface Ledger {
@@ -157,6 +159,28 @@ export class ContinuityStore {
       threadId,
       link: structuredClone(c.link),
     }));
+  }
+  projectionAnchor(
+    threadId: string,
+    messageId: string,
+  ): string | null | undefined {
+    return this.state.conversations[threadId]?.projectionAnchors?.[messageId];
+  }
+  anchorProjection(
+    threadId: string,
+    messageId: string,
+    after: string | null,
+  ): void {
+    const conversation = this.state.conversations[threadId];
+    if (
+      !conversation ||
+      conversation.projectionAnchors?.[messageId] !== undefined
+    )
+      return;
+    this.commit((state) => {
+      (state.conversations[threadId]!.projectionAnchors ??= {})[messageId] =
+        after;
+    });
   }
   status(threadId: string) {
     const c = this.state.conversations[threadId];

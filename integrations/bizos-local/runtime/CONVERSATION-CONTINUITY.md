@@ -20,6 +20,10 @@ Projection keeps pre-link local history before the shared archive. Matching loca
 messages retain attachments, reply metadata and timestamps while canonical text
 is refreshed. Polling forward from the last pre-link message reaches new shared
 messages. Upload batches obey both the 100-event and 256 KiB UTF-8 request limits.
+New local-only messages record the last visible message as a durable presentation
+anchor, so attachment-only replies and control messages stay after an imported
+archive even when that archive contains no matching local message IDs. These
+anchors stay in the local ledger and are not uploaded.
 
 The first explicit link starts from that boundary; it does not import old native
 CLI chats. A second installation discovers an authorized BizOS conversation and
@@ -154,3 +158,6 @@ and 294 packaged kit files); `npm test -- --maxWorkers=4` passed all **462 tests
 in 51 files**, with no skipped tests. `git diff --check` passed. Test providers,
 network services and writable workspaces are fixtures; this is not a claim of
 real-provider execution or installed desktop validation.
+
+The subsequent local-only projection regression was reproduced and corrected;
+the targeted continuity, dispatch and bot-harness suites passed **42 tests**.

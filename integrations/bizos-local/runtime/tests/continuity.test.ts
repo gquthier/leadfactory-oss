@@ -328,6 +328,89 @@ it("linked projections keep pre-link history before new messages and preserve lo
   continuity.close();
 });
 
+it("local attachment-only and control messages stay after an imported remote archive across restart", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } =
+    await import("../src/harness/continuity-sync.js");
+  const { ThreadStore } = await import("../src/harness/threads.js");
+  const { systemClock } = await import("../src/harness/clock.js");
+  const continuity = new ConversationContinuity(storage);
+  const threads = new ThreadStore(storage, systemClock, continuity);
+  const greeting = threads.append("bot:a", {
+    role: "bot",
+    blocks: [{ kind: "text", text: "Local greeting before attach" }],
+  });
+  continuity.store.link("bot:a", binding);
+  continuity.store.accept(
+    "bot:a",
+    Array.from({ length: 75 }, (_, i) => ({
+      eventId: `remote-${i + 1}`,
+      schemaVersion: 1,
+      localSequence: i + 1,
+      baseRevision: "0",
+      kind: "message",
+      content: `Remote ${i + 1}`,
+      author: "human",
+      hash: payloadHash(`Remote ${i + 1}`),
+      seq: i + 1,
+      createdAt: "2026-09-25T00:00:00Z",
+    })),
+  );
+  const file = {
+    kind: "file" as const,
+    name: "Brief.md",
+    path: "/fixture/Brief.md",
+    id: "fixture-file",
+    mimeType: "text/markdown",
+    size: 4,
+  };
+  const attached = threads.append("bot:a", {
+    role: "user",
+    blocks: [file],
+    replyToMessageId: "remote-75",
+  });
+  expect(attached.seq).toBeGreaterThan(75);
+  const control = threads.append("bot:a", {
+    role: "bot",
+    deliveryState: "control",
+    blocks: [{ kind: "meta", text: "Local control after attachment" }],
+  });
+  // A subsequent remote update must not move either local-only row back to
+  // the pre-link greeting; the original chronology survives reconstruction.
+  continuity.store.accept("bot:a", [
+    {
+      eventId: "remote-76",
+      schemaVersion: 1,
+      localSequence: 76,
+      baseRevision: "75",
+      kind: "message",
+      content: "Remote 76",
+      author: "human",
+      hash: payloadHash("Remote 76"),
+      seq: 76,
+    },
+  ]);
+  const recovered = new ConversationContinuity(storage);
+  const reopened = new ThreadStore(storage, systemClock, recovered);
+  expect(
+    reopened.pageAfter({ botId: "a" }, "remote-75")!.messages.map((m) => m.id),
+  ).toEqual([attached.id, control.id, "remote-76"]);
+  expect(reopened.pageAfter({ botId: "a" }, greeting.id)!.messages[0]?.id).toBe(
+    "remote-1",
+  );
+  expect(reopened.snapshot({ botId: "a" }).messages.map((m) => m.id)).toEqual(
+    expect.arrayContaining([attached.id, control.id]),
+  );
+  expect(reopened.get("bot:a", attached.id)).toMatchObject({
+    replyToMessageId: "remote-75",
+    blocks: [file],
+  });
+  expect(reopened.get("bot:a", attached.id)!.seq).toBeGreaterThan(75);
+  expect(continuity.store.pending("bot:a")).toHaveLength(0);
+  continuity.close();
+  recovered.close();
+});
+
 it.each(["immediate", "already-terminal"])(
   "routine recovery releases its lock for %s settlement",
   async (mode) => {

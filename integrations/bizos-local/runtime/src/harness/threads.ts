@@ -63,22 +63,38 @@ export class ThreadStore {
     for (const row of collapseMessages(rows)) {
       local.set(row.id, row);
       if (ids.has(row.id)) anchor = row.id;
-      else after.set(anchor, [...(after.get(anchor) ?? []), row]);
+      else {
+        const recorded = this.continuity!.store.projectionAnchor(threadId, row.id);
+        const position = recorded === undefined ? anchor : recorded;
+        after.set(position, [...(after.get(position) ?? []), row]);
+      }
     }
     // Pre-link history precedes the linked archive. Local-only draft/control
     // rows keep their position after the preceding shared message. Canonical
     // ordering applies inside the archive; UI seq covers the whole projection.
-    const merged = [...(after.get(null) ?? [])];
+    const merged: ThreadMessage[] = [];
+    const seen = new Set<string>();
+    const append = (row: ThreadMessage): void => {
+      const stack = [row];
+      while (stack.length) {
+        const next = stack.pop()!;
+        if (seen.has(next.id)) continue;
+        seen.add(next.id);
+        merged.push(next);
+        const children = after.get(next.id) ?? [];
+        for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]!);
+      }
+    };
+    for (const row of after.get(null) ?? []) append(row);
     for (const row of canonical) {
       const original = local.get(row.id);
-      merged.push(original ? {
+      append(original ? {
         ...original,
         ...row,
         createdAt: original.createdAt,
         blocks: [...row.blocks, ...original.blocks.filter(block => block.kind !== "text"
           && !(block.kind === "meta" && block.text === "Saved on this computer; awaiting synchronization."))],
       } : row);
-      merged.push(...(after.get(row.id) ?? []));
     }
     return merged.map((row, index) => ({ ...row, seq: index + 1 }));
   }
@@ -92,9 +108,9 @@ export class ThreadStore {
     return highest;
   }
 
-  private nextSeq(threadId: string): number {
+  private nextSeq(threadId: string, projectedHead = 0): number {
     const cached = this.sequences.get(threadId);
-    const next = (cached ?? this.highestOnDisk(threadId)) + 1;
+    const next = Math.max(cached ?? this.highestOnDisk(threadId), projectedHead) + 1;
     this.sequences.set(threadId, next);
     return next;
   }
@@ -161,10 +177,11 @@ export class ThreadStore {
       links?: ThreadMessage["links"];
     },
   ): ThreadMessage {
+    const tail = this.continuity?.linked(threadId) ? this.rows(threadId).at(-1) : undefined;
     const message: ThreadMessage = {
       id: input.id ?? newMessageId(),
       threadId,
-      seq: this.nextSeq(threadId),
+      seq: this.nextSeq(threadId, tail?.seq),
       role: input.role,
       ...(input.deliveryState ? { deliveryState: input.deliveryState } : {}),
       blocks: input.blocks,
@@ -174,6 +191,7 @@ export class ThreadStore {
       ...(input.links?.length ? { links: input.links } : {}),
       createdAt: this.clock.nowIso(),
     };
+    this.continuity?.store.anchorProjection(threadId, message.id, tail?.id ?? null);
     this.continuity?.capture(message);
     this.storage.appendNdjson(this.storage.threadPath(threadId), message);
     return message;
