@@ -21,13 +21,14 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  readdirSync,
   renameSync,
   realpathSync,
   rmSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 export const FILE_MODE = 0o600;
 export const DIRECTORY_MODE = 0o700;
@@ -61,6 +62,13 @@ export function storageLayout(root: string): StorageLayout {
 
 export class Storage {
   readonly layout: StorageLayout;
+  private readonly blockedThreadPaths = new Set<string>();
+
+  /** A revoked QuickChat must stay deleted even if a provider writes after abort. */
+  blockThread(threadId: string): void {
+    this.blockedThreadPaths.add(this.threadPath(threadId));
+    this.blockedThreadPaths.add(this.nativePath(threadId));
+  }
 
   constructor(root: string) {
     this.layout = storageLayout(root);
@@ -126,6 +134,7 @@ export class Storage {
   }
 
   appendNdjson(path: string, entry: unknown): void {
+    if (this.blockedThreadPaths.has(path)) return;
     try {
       appendFileSync(path, `${JSON.stringify(entry)}\n`, { mode: FILE_MODE });
     } catch {
@@ -153,12 +162,44 @@ export class Storage {
     return rows;
   }
 
+  /** Preview bytes belong to runtime state, while agent attachments are
+   * business files. Reclaim only direct, unshared files in our preview cache. */
+  purgeThreadPreviews(threadId: string): void {
+    const directory = join(this.layout.root, "previews");
+    if (!existsSync(directory)) return;
+    if (lstatSync(directory).isSymbolicLink() || !lstatSync(directory).isDirectory()
+      || realpathSync(directory) !== join(realpathSync(this.layout.root), "previews")) return;
+    const log = this.threadPath(threadId);
+    type PreviewRecord = { preview?: { image?: { path?: string } } };
+    const candidates = new Set<string>();
+    for (const row of this.readNdjson<PreviewRecord>(log)) {
+      const path = row?.preview?.image?.path;
+      if (typeof path === "string" && dirname(path) === directory && /^prv_[a-f0-9]{24}\.(?:png|jpg|gif|webp)$/.test(basename(path))) candidates.add(path);
+    }
+    if (!candidates.size) return;
+    // Cache images are content-addressed and can belong to several threads.
+    for (const name of readdirSync(this.layout.threadsDir)) {
+      const path = join(this.layout.threadsDir, name);
+      if (path === log || !name.endsWith(".ndjson") || lstatSync(path).isSymbolicLink()) continue;
+      for (const row of this.readNdjson<PreviewRecord>(path)) {
+        const preview = row?.preview?.image?.path;
+        if (typeof preview === "string") candidates.delete(preview);
+      }
+    }
+    for (const path of candidates) this.removeFile(path, true);
+  }
+
   /** Replace a thread log wholesale — used by `threads.clear`. */
   rewriteNdjson(path: string, rows: unknown[]): void {
+    if (this.blockedThreadPaths.has(path)) return;
     writeFileAtomic(path, rows.map((row) => `${JSON.stringify(row)}\n`).join(""));
   }
 
-  removeFile(path: string): void {
+  removeFile(path: string, strict = false): void {
+    if (strict) {
+      try { unlinkSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      return;
+    }
     try {
       if (existsSync(path)) unlinkSync(path);
     } catch {

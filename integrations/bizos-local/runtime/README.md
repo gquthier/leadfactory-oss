@@ -97,3 +97,37 @@ verify live Kie billing, native Jev permissions or a signed desktop installer.
 
 See [the runtime changelog](../CHANGELOG.md) and the desktop
 `docs/bizos-local/README.md` for the consolidated release and package steps.
+
+
+## Workspace QuickChat retention (2026-09-26)
+
+QuickChat is a workspace conversation, not an agent. Its display name is
+always **QuickChat**, including historical auto-titles. It shares the selected
+company workspace but never owns that workspace or its business deliverables.
+
+A QuickChat expires at `lastMessageAt + 24 hours`, including the exact boundary.
+A new user message or published assistant message moves that deadline. Legacy
+streaming assistant text also counts while it is displayed. Reads, retries of
+an identical send, progress/approval/control messages, system activity and
+preview updates do not. An empty QuickChat uses `createdAt`. Timers run while the
+runtime is active; startup, reads, sends and provider callbacks also check the
+wall clock, so sleep or downtime cannot extend retention.
+
+`runtime/quick-chats.json` stores `lastMessageAt` and derived `expiresAt`. Legacy
+rows recover activity from user/assistant content timestamps and the associated
+assistant run’s end/update timestamp (old streamed rows kept turn-start time).
+Where historical evidence is missing, only the retained timestamps are known.
+`runtime/expired-quick-chats.json` retains opaque IDs only: retries cannot recreate
+a deleted chat, and cleanup can resume after a crash. Transcript/native logs,
+runs, native resume cursors, plan pins, approvals, exclusively referenced runtime
+preview images and sidecar idempotency metadata are removed. Active turns are
+aborted and late writes are blocked. A failed unlink leaves the chat revoked and
+retries on reads, restart and a one-minute timer without blocking other chats.
+Shared workspace files, shared previews and provider-managed histories outside
+BizOS runtime state are not deleted by this policy.
+
+The sidecar sends `event: thread` with
+`{ threadId, change: "deleted", reason: "expired" }`; bootstrap omission remains
+the source of truth. The desktop owns its cache deletion and retention notice.
+Tests use temporary directories, injected clocks and scripted providers; they do
+not prove a native desktop build or deletion inside an external CLI provider.

@@ -3,7 +3,7 @@
 // this Mac is read, and no CLI on PATH. Skipped when `dist/` is not built
 // (`npm run build` first).
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -20,6 +20,7 @@ let temp: string;
 let child: ChildProcess | null = null;
 let descriptor: Descriptor;
 let logs = "";
+const expiredId = `qchat_${"a".repeat(32)}`;
 
 async function waitFor<T>(probe: () => T | null | undefined, timeoutMs: number, what: string): Promise<T> {
   const until = Date.now() + timeoutMs;
@@ -48,6 +49,11 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
     temp = mkdtempSync(join(tmpdir(), "lbz-sidecar-quick-"));
     const home = join(temp, "home");
     mkdirSync(home, { recursive: true });
+    const runtimeState = join(temp, "state", "runtime");
+    mkdirSync(join(runtimeState, "threads"), { recursive: true });
+    const past = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    writeFileSync(join(runtimeState, "quick-chats.json"), JSON.stringify([{ id: expiredId, title: "New chat", createdAt: past, updatedAt: past }]));
+    writeFileSync(join(runtimeState, "threads", `chat-${expiredId}.ndjson`), JSON.stringify({ id: "old", threadId: `chat:${expiredId}`, role: "user", seq: 1, blocks: [{ kind: "text", text: "Expired private message" }], createdAt: past }) + "\n");
     const descriptorPath = join(temp, "desktop", "local-harness.json");
     child = spawn(process.execPath, [sidecarScript, "serve"], {
       cwd: runtimeRoot,
@@ -86,6 +92,15 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
     await rm(temp, { recursive: true, force: true });
   }, 60_000);
 
+  it("removes expired chats and persisted transcripts before serving bootstrap", async () => {
+    const snapshot = await api("GET", "/api/collaboration/bootstrap");
+    expect(snapshot.status).toBe(200);
+    expect(JSON.stringify(snapshot.body)).not.toContain(expiredId);
+    expect((await api("GET", `/api/local/quick-chats/${expiredId}`)).status).not.toBe(200);
+    expect(existsSync(join(temp, "state", "runtime", "threads", `chat-${expiredId}.ndjson`))).toBe(false);
+    expect(readFileSync(join(temp, "state", "runtime", "expired-quick-chats.json"), "utf8")).toContain(expiredId);
+  });
+
   it("requires the workspace bearer, creates chats without bots and keeps requests idempotent", async () => {
     expect((await api("GET", "/api/local/quick-chats", undefined, "")).status).toBe(401);
     const before = await api("GET", "/api/collaboration/bootstrap");
@@ -93,7 +108,8 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
     expect(created.status).toBe(201);
     const id = created.body.id;
     const thread = created.body.thread;
-    expect(thread).toMatchObject({ kind: "chat", agentIds: [], canManage: false });
+    expect(created.body.title).toBe("QuickChat");
+    expect(thread).toMatchObject({ name: "QuickChat", kind: "chat", agentIds: [], canManage: false });
     expect((await api("GET", "/api/collaboration/bootstrap")).body.threads).toContainEqual(thread);
     expect((await api("POST", "/api/local/quick-chats", { requestId: "quick-http-create" })).body.id).toBe(id);
     expect((await api("GET", "/api/local/quick-chats")).body.chats).toHaveLength(1);

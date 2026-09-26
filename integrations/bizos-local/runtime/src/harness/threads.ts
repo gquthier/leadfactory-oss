@@ -48,9 +48,11 @@ export class ThreadStore {
   constructor(
     private readonly storage: Storage,
     private readonly clock: Clock,
+    private readonly hooks?: { assertAccessible(threadId: string): void; onWrite(message: ThreadMessage): void },
   ) {}
 
   private rows(threadId: string): ThreadMessage[] {
+    this.hooks?.assertAccessible(threadId);
     return collapseMessages(
       this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage),
     );
@@ -134,6 +136,7 @@ export class ThreadStore {
       links?: ThreadMessage["links"];
     },
   ): ThreadMessage {
+    this.hooks?.assertAccessible(threadId);
     const message: ThreadMessage = {
       id: input.id ?? newMessageId(),
       threadId,
@@ -148,13 +151,16 @@ export class ThreadStore {
       createdAt: this.clock.nowIso(),
     };
     this.storage.appendNdjson(this.storage.threadPath(threadId), message);
+    this.hooks?.onWrite(message);
     return message;
   }
 
   /** A streaming bot message is rewritten as it grows. The log stays
    * append-only — a later line for the same id wins on read. */
   replace(message: ThreadMessage): ThreadMessage {
+    this.hooks?.assertAccessible(message.threadId);
     this.storage.appendNdjson(this.storage.threadPath(message.threadId), message);
+    this.hooks?.onWrite(message);
     return message;
   }
 
@@ -166,10 +172,11 @@ export class ThreadStore {
    * leaving `native/<threadId>.ndjson` behind kept a redacted copy of the
    * whole conversation the user just asked to be rid of. Forgetting the
    * codex resume cursor is the dispatcher's half of the same promise. */
-  clear(target: ThreadTarget): void {
+  clear(target: ThreadTarget, strict = false): void {
     const threadId = threadIdForTarget(target);
-    this.storage.removeFile(this.storage.threadPath(threadId));
-    this.storage.removeFile(this.storage.nativePath(threadId));
+    if (strict) this.storage.purgeThreadPreviews(threadId);
+    this.storage.removeFile(this.storage.threadPath(threadId), strict);
+    this.storage.removeFile(this.storage.nativePath(threadId), strict);
     this.sequences.delete(threadId);
     this.unread.delete(threadId);
   }

@@ -198,6 +198,7 @@ export interface ChildDispatchResult {
 export interface DispatchDependencies {
   bots: BotStore;
   chatExecutor?(chatId: string): Bot | undefined;
+  onConversationMessage?(message: ThreadMessage): void;
   groups: GroupStore;
   threads: ThreadStore;
   runs: RunStore;
@@ -847,6 +848,29 @@ export class Dispatcher {
     this.deps.storage.writeJson(CURSORS_FILE, this.cursors);
   }
 
+  /** Expiry revokes the chat before STOP can synchronously call back. A
+   * driver that never acknowledges abort is detached, with every late write
+   * guarded independently by its tombstone in Storage. */
+  expireQuickChat(chatId: string): void {
+    const threadId = `chat:${chatId}`;
+    const running = this.active.get(threadId);
+    if (running) running.discarded = true;
+    this.clearThread({ chatId });
+    if (running) {
+      this.active.delete(threadId);
+      for (const local of running.localAsks.values()) local.settle("cancelled");
+      running.localAsks.clear();
+      running.asks.clear();
+      this.drainOutputs(running);
+      this.deps.onRunSettled?.(running.runId);
+      this.releaseChain(running.chainId);
+    }
+    this.queues.delete(threadId);
+    for (const [id, ask] of this.expiredAsks) if (ask.threadId === threadId) this.expiredAsks.delete(id);
+    for (const key of this.oneShotApprovals.keys()) if (key.startsWith(`${chatId}|`)) this.oneShotApprovals.delete(key);
+    this.clearApprovals(chatId);
+  }
+
   /** A standing "always allow", or a one-time grant from a late "allow once". */
   private isPreApproved(key: string): boolean {
     if (this.approvals[key] === true) return true;
@@ -1263,7 +1287,7 @@ export class Dispatcher {
     if (!url || this.deps.linkPreviews === false) return;
     const fetchPreview = this.deps.fetchLinkPreview ?? ((target: string) => defaultFetchLinkPreview(target));
     void fetchPreview(url).then((preview) => {
-      if (!preview || turn.discarded) return;
+      if (!preview || turn.discarded || (turn.threadId.startsWith("chat:") && !this.deps.chatExecutor?.(turn.botId))) return;
       // The thread may have been cleared meanwhile: never resurrect a message.
       const current = this.deps.threads.get(message.threadId, message.id);
       if (!current) return;
@@ -1868,7 +1892,10 @@ export class Dispatcher {
         mcpServers: mountedServers,
         ...(Object.keys(environment).length ? { environment } : {}),
         onEvent: (event: RuntimeEvent) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
-        tee: (entry) => this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry),
+        tee: (entry) => {
+          if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
+          this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
+        },
       });
     } else if (provider === "claude") {
       const start = this.deps.startClaudeTurn ?? defaultStartClaudeTurn;
@@ -1886,7 +1913,10 @@ export class Dispatcher {
         isAlwaysAllowed: skipPermissions
           ? () => true
           : (request) => this.isPreApproved(approvalKey(bot.id, request.requestType, request.tool, approvalDetailFor(request.tool, request.detail))),
-        tee: (entry) => this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry),
+        tee: (entry) => {
+          if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
+          this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
+        },
       });
     } else {
       const start = this.deps.startTurn ?? defaultStartCodexTurn;
@@ -1912,10 +1942,14 @@ export class Dispatcher {
                   approvalDetailFor(request.tool, request.detail),
                 ),
               ),
-        tee: (entry) => this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry),
+        tee: (entry) => {
+          if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
+          this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
+        },
       });
     }
     turn.handle = handle;
+    if (turn.discarded) { handle.stop(); return; }
     if (plan) {
       this.deps.pinPlan?.(cursorKey, plan.id);
       this.deps.touchPlan?.(plan.id);
@@ -2257,6 +2291,7 @@ export class Dispatcher {
   ): void {
     // A prior provider attempt can emit late frames after continuation/failover.
     if (this.active.get(turn.threadId) !== turn || turn.discarded) return;
+    if (turn.threadId.startsWith("chat:") && !this.deps.chatExecutor?.(turn.botId)) return;
     const upsertSteps = (): void => {
       const index = turn.message.blocks.findIndex((block) => block.kind === "steps");
       const block: MessageBlock = { kind: "steps", items: [...state.steps] };
@@ -2298,6 +2333,7 @@ export class Dispatcher {
         if (!turn.publicMessagesEnabled && event.streamKind === "assistant_text") {
           state.text += event.delta;
           upsertLegacyText();
+          this.deps.onConversationMessage?.(turn.message);
           this.deps.events.publish({ type: "thread.message.updated", threadId: turn.threadId, message: turn.message });
         }
         break;

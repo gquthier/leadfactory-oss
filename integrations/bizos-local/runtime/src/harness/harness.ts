@@ -557,7 +557,10 @@ export class LocalBizosHarness {
     this.botStore = new BotStore(this.storage, this.clock);
     this.botStore.resetTransient();
     this.groupStore = new GroupStore(this.storage, this.clock);
-    this.threadStore = new ThreadStore(this.storage, this.clock);
+    this.threadStore = new ThreadStore(this.storage, this.clock, {
+      assertAccessible: threadId => { if (threadId.startsWith("chat:")) this.quickChatStore.get(threadId.slice(5)); },
+      onWrite: message => this.quickChatStore.recordMessage(message),
+    });
     this.routineStore = new RoutineStore(this.storage, this.clock);
     this.runStore = new RunStore(this.storage, this.clock);
     this.planRegistry = new PlanRegistry(this.storage);
@@ -586,6 +589,7 @@ export class LocalBizosHarness {
     this.dispatcher = new Dispatcher({
       bots: this.botStore,
       chatExecutor: id => this.quickChatStore.executor(id),
+      onConversationMessage: message => this.quickChatStore.recordMessage(message),
       groups: this.groupStore,
       threads: this.threadStore,
       runs: this.runStore,
@@ -867,6 +871,15 @@ export class LocalBizosHarness {
       capabilities: () => this.deviceCapabilities(),
       runTask: (prompt) => this.runRemoteTask(prompt),
     });
+    this.quickChatStore.start(id => {
+      const threadId = `chat:${id}`;
+      this.dispatcher.expireQuickChat(id);
+      this.runStore.removeThread(threadId);
+      for (const key of Object.keys(this.planRegistry.routing().pins)) {
+        if (key.startsWith(`${threadId}|`)) this.planRegistry.clearPin(key);
+      }
+      this.threadStore.clear({ chatId: id }, true);
+    }, id => this.events.publish({ type: "quick-chat.expired", threadId: `chat:${id}`, chatId: id }));
   }
 
   private environment(): NodeJS.ProcessEnv {
@@ -985,6 +998,7 @@ export class LocalBizosHarness {
   }
 
   async start(): Promise<void> {
+    this.quickChatStore.start();
     // Before anything else: the window is about to be created, and it should be
     // created in the theme this machine last chose.
     this.options.onSettingsChanged?.(this.settingsStore.get());
@@ -1075,6 +1089,7 @@ export class LocalBizosHarness {
   }
 
   stop(): void {
+    this.quickChatStore.stop();
     // Awaited nowhere: `stop()` is called from `before-quit`, and a last
     // heartbeat that cannot reach the server must not delay a quit.
     void this.deviceAgent.stop();
@@ -3218,6 +3233,7 @@ export class LocalBizosHarness {
   };
 
   readonly quickChats = {
+    expiredIds: () => this.quickChatStore.expiredIds(),
     list: async () => ({ chats: this.quickChatStore.list(), workspace: this.bindingOf()?.label ?? this.options.orgName() }),
     create: async (requestId: string) => {
       const chat = this.quickChatStore.create(requestId);
@@ -3235,6 +3251,7 @@ export class LocalBizosHarness {
       this.quickChatStore.get(id);
       this.workspaceFor(this.quickChatStore.executor(id)!);
       await this.refreshSessionCookie();
+      this.quickChatStore.get(id); // The cookie/broker await may have crossed expiry.
       const threadId = `chat:${id}`;
       const messageId = quickMessageId(requestId);
       const previous = this.threadStore.get(threadId, messageId);
@@ -3242,7 +3259,6 @@ export class LocalBizosHarness {
         if (previous.blocks.length !== 1 || previous.blocks[0]?.kind !== "text" || previous.blocks[0].text !== text.trim()) throw new Error("This request id was already used for a different message");
         return { messageId, runIds: [], replayed: true };
       }
-      this.quickChatStore.touch(id, text);
       return { messageId, ...this.dispatcher.send({ chatId: id }, { text, messageId }), replayed: false };
     },
     stop: async (id: string) => { this.quickChatStore.get(id); this.dispatcher.stop({ chatId: id }); return { stopped: true }; },

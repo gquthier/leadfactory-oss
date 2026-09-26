@@ -599,15 +599,25 @@ function previewOfMessage(message: ThreadMessage): CollaborationPreview | undefi
  * the same regular file (no symlink swapped in since) before a byte leaves.
  */
 class AttachmentRegistry {
-  private readonly paths = new Map<string, string>();
+  private readonly paths = new Map<string, { path: string; threads: Set<string> }>();
 
-  remember(id: string, path: string): void {
-    if (/^(?:att|prv)_[A-Za-z0-9]+$/.test(id) && path) this.paths.set(id, path);
+  remember(id: string, path: string, threadId: string): void {
+    if (!/^(?:att|prv)_[A-Za-z0-9]+$/.test(id) || !path) return;
+    const record = this.paths.get(id) ?? { path, threads: new Set<string>() };
+    record.threads.add(threadId);
+    this.paths.set(id, record);
+  }
+
+  forgetThread(threadId: string): void {
+    for (const [id, record] of this.paths) {
+      record.threads.delete(threadId);
+      if (!record.threads.size) this.paths.delete(id);
+    }
   }
 
   /** The path, or null when unknown or no longer a plain file at that path. */
   resolve(id: string): string | null {
-    const path = this.paths.get(id);
+    const path = this.paths.get(id)?.path;
     if (!path) return null;
     try {
       const stat = lstatSync(path);
@@ -698,6 +708,7 @@ export class LocalTeamBroker {
 export class CollaborationFacade {
   private readonly handlers;
   private mutationTail: Promise<unknown> = Promise.resolve();
+  private quickChatIndexDirty = false;
   readonly userId: string;
   readonly workspaceId: string;
 
@@ -715,6 +726,9 @@ export class CollaborationFacade {
     // Routine events are recorded whether or not a desktop is listening; the
     // bus is cleared (and this listener with it) when the harness stops.
     harness.events?.subscribe((event) => this.onHarnessEvent(event));
+    // Startup expiry runs before a facade exists. Replay opaque tombstones to
+    // erase its separate idempotency journal after a crash/restart as well.
+    for (const id of harness.quickChats?.expiredIds?.() ?? []) this.purgeQuickChatIndex(`chat:${id}`);
   }
 
   /** Open `GET /api/local/events` streams. */
@@ -723,8 +737,28 @@ export class CollaborationFacade {
   /** Files agents sent, for `GET /api/local/attachments/<id>`. */
   readonly attachments = new AttachmentRegistry();
 
+  private purgeQuickChatIndex(threadId: string): void {
+    let changed = false;
+    for (const [requestId, record] of Object.entries(this.index.messages)) {
+      if (record.threadId !== threadId) continue;
+      if (record.state === "completed") for (const runId of record.runIds) delete this.index.runTriggers[runId];
+      delete this.index.messages[requestId];
+      changed = true;
+    }
+    this.attachments.forgetThread(threadId);
+    this.quickChatIndexDirty ||= changed;
+    if (this.quickChatIndexDirty) { this.persistIndex(this.index); this.quickChatIndexDirty = false; }
+  }
+
   private onHarnessEvent(event: ProductEvent): void {
     try {
+      if (event.type === "quick-chat.expired") {
+        this.purgeQuickChatIndex(event.threadId);
+        this.streams.publish({ event: "thread", data: {
+          threadId: this.publicThreadId({ chatId: event.chatId }), change: "deleted", reason: "expired",
+        } });
+        return;
+      }
       if (event.type === "thread.message.created" || event.type === "thread.message.updated") {
         const target = targetForThreadId(event.threadId);
         // Only what `messagePage` would serve: no system lines, no private
@@ -962,9 +996,9 @@ export class CollaborationFacade {
     const botId = message.botId ?? ("botId" in target ? target.botId : undefined);
     const bot = botId ? bots.find((candidate) => candidate.id === botId) : undefined;
     const attachments = message.role === "bot" ? attachmentsOf(publicBlocks) : [];
-    for (const attachment of attachments) if (attachment.path) this.attachments.remember(attachment.id, attachment.path);
+    for (const attachment of attachments) if (attachment.path) this.attachments.remember(attachment.id, attachment.path, message.threadId);
     const preview = message.role === "bot" ? previewOfMessage(message) : undefined;
-    if (message.preview?.image) this.attachments.remember(message.preview.image.id, message.preview.image.path);
+    if (message.preview?.image) this.attachments.remember(message.preview.image.id, message.preview.image.path, message.threadId);
     const askBlock = [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "ask" }> => block.kind === "ask");
     const quickReplies = message.role === "bot" ? [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "quick_replies" }> => block.kind === "quick_replies")?.choices : undefined;
     const proposal = message.role === "bot" ? [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "proposal" }> => block.kind === "proposal") : undefined;
@@ -994,6 +1028,7 @@ export class CollaborationFacade {
   /** `GET /api/local/attachments/<id>`: the bytes of a file an agent sent,
    * or of a link-preview image, from the transcript's own record. */
   attachment(id: string): { path: string; contentType: string; size: number } | null {
+    this.harness.quickChats?.expiredIds?.();
     const path = this.attachments.resolve(id);
     if (!path) return null;
     const contentType = mimeTypeFor(basename(path));
@@ -1012,7 +1047,7 @@ export class CollaborationFacade {
     if ("chatId" in target) {
       const snapshot = await this.harness.quickChats.get(target.chatId);
       return { id: this.publicThreadId(target), kind: "chat" as const, name: snapshot.chat.title,
-        updatedAt: snapshot.chat.updatedAt, humanUserIds: [this.userId], agentIds: [],
+        updatedAt: snapshot.chat.updatedAt, expiresAt: snapshot.chat.expiresAt, humanUserIds: [this.userId], agentIds: [],
         canPost: true, canManage: false, lastMessage: messages.at(-1) ?? null };
     }
     if ("botId" in target) {
@@ -1038,6 +1073,7 @@ export class CollaborationFacade {
   }
 
   async bootstrap() {
+    for (const id of this.harness.quickChats?.expiredIds?.() ?? []) this.purgeQuickChatIndex(`chat:${id}`);
     const [bots, groups, plans, settings, quickChats, inference] = await Promise.all([
       this.invoke<Bot[]>("lbz:bots:list"),
       this.invoke<Group[]>("lbz:groups:list"),
@@ -1049,11 +1085,18 @@ export class CollaborationFacade {
     const selectedExternal = inference.providers.find(provider => provider.id === settings.local.inferenceProviderId);
     const visibleBots = bots.filter((bot) => !bot.archived);
     const visibleGroups = groups.filter((group) => !group.archived);
-    const threads = await Promise.all([
-      ...quickChats.chats.map(chat => this.thread({ chatId: chat.id }, visibleBots, visibleGroups)),
+    const threads = (await Promise.all([
+      ...quickChats.chats.map(async chat => {
+        try { return await this.thread({ chatId: chat.id }, visibleBots, visibleGroups); }
+        catch (error) {
+          // Expiry can cross the awaits between the list and its snapshots.
+          if (this.harness.quickChats.expiredIds().includes(chat.id)) return null;
+          throw error;
+        }
+      }),
       ...visibleBots.map((bot) => this.thread({ botId: bot.id }, visibleBots, visibleGroups)),
       ...visibleGroups.map((group) => this.thread({ groupId: group.id }, visibleBots, visibleGroups)),
-    ]);
+    ])).filter(thread => thread !== null);
     return {
       contractVersion: 1 as const,
       backend: {
@@ -1195,6 +1238,7 @@ export class CollaborationFacade {
   async postMessage(threadId: string, raw: unknown): Promise<{ status: number; body: unknown }> {
     return this.exclusive(async () => {
       const target = this.target(threadId);
+      if ("chatId" in target) await this.harness.quickChats.get(target.chatId);
       const input = objectBody(raw, ["clientMessageId", "content", "mentionAgentIds"]);
       const clientMessageId = uuid(input.clientMessageId, "clientMessageId");
       const content = requiredString(input.content, "content", 20_000);
@@ -1226,7 +1270,7 @@ export class CollaborationFacade {
       this.index.messages[clientMessageId] = {
         state: "pending", fingerprint, threadId: threadIdForTarget(target), createdAt: new Date().toISOString(),
       };
-      saveIndex(this.index);
+      this.persistIndex(this.index);
       const before = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
       const known = new Set(before.messages.map((message) => message.id));
       const sent = "chatId" in target
@@ -1240,7 +1284,7 @@ export class CollaborationFacade {
         runIds: sent.runIds, createdAt: new Date().toISOString(),
       };
       for (const runId of sent.runIds) this.index.runTriggers[runId] = userMessage.id;
-      saveIndex(this.index);
+      this.persistIndex(this.index);
       const bots = await this.invoke<Bot[]>("lbz:bots:list");
       const message = this.message(userMessage, target, bots);
       const runs = await Promise.all(sent.runIds.map((id) => this.run(id, userMessage.id)));

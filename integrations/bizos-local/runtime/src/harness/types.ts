@@ -508,6 +508,7 @@ export type AskAnswer =
   | { kind: "choice"; value: string };
 
 export type ProductEvent =
+  | { type: "quick-chat.expired"; threadId: string; chatId: string }
   | { type: "thread.message.created"; threadId: string; message: ThreadMessage }
   | { type: "thread.message.updated"; threadId: string; message: ThreadMessage }
   | { type: "thread.progress"; threadId: string; messageId: string; phase: string; detail?: string }

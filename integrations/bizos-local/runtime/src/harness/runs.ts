@@ -68,6 +68,11 @@ export class RunStore {
     return found ? { ...found } : undefined;
   }
 
+  removeThread(threadId: string): void {
+    this.runs = this.runs.filter(run => run.threadId !== threadId);
+    this.persist();
+  }
+
   active(threadId: string): string[] {
     return this.runs.filter((run) => run.threadId === threadId && !TERMINAL.includes(run.state)).map((run) => run.id);
   }
