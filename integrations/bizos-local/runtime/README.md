@@ -53,9 +53,9 @@ descriptors or personal credentials to this repository.
 
 ## Company work
 
-The catalogue contains Lead Gen Agency, Service-based Business and Software
-for new companies; historical General OS and E-commerce bindings remain
-supported. New company templates begin with a CEO and dormant specialist
+The catalogue contains Lead Gen Agency, Service-based Business, Software and
+Autonomous Company (`company-os`) for new companies. Historical Company OS and
+E-commerce bindings remain supported. New company templates begin with a CEO and dormant specialist
 roles, recruited when needed. The vault graph resolves explicit wiki and
 Markdown links plus unambiguous references to existing text notes. It does
 not infer semantic links or index paths outside the bound vault. Finder reveal
@@ -131,3 +131,39 @@ The sidecar sends `event: thread` with
 the source of truth. The desktop owns its cache deletion and retention notice.
 Tests use temporary directories, injected clocks and scripted providers; they do
 not prove a native desktop build or deletion inside an external CLI provider.
+
+
+## Onboarding from business context (2026-09-26)
+
+`POST /api/local/brain/templates/apply` accepts optional `companyName` and
+`context: { sourceLabel, files: [{ path, text }] }`, beside `owner.name` and
+`language`. Context requires `company-os` in a new managed vault. Electron owns
+the native picker and supplies a UTF-8 snapshot; the runtime never opens a
+caller-supplied source directory. The selected originals receive no writes or
+new access grants. `bootstrap.backend.companyName` exposes the current known
+company name when it fits the 64-character workspace title (otherwise null), so Desktop may adopt it for a still-provisional workspace
+title without asking the person to name an existing business again. Limits: 80 files, 256 KiB per file, 512 KiB total, relative
+paths up to 512 characters and individual names up to 255 UTF-8 bytes. Supported
+extensions: Markdown, MDX, text, JSON, CSV and YAML. Hidden/traversal paths,
+secrets, dependencies, instruction files, duplicates and binary text are refused.
+Only this apply route allows a 4 MiB JSON body to account for escaping; other
+routes keep their existing body limit.
+
+The private snapshot lives in `Knowledge/Imported Context/files/`, indexed by
+`Knowledge/Imported Context/README.md`. It is source evidence, not agent
+instructions or authorization. The creation journal records the snapshot before
+binding so startup can resume the same selection after a crash. Once installed,
+retries preserve user edits and do not post another welcome.
+
+Fresh installations opt into onboarding sequencing; historical journals and
+existing teams retain their original behavior. CEO reads supplied context,
+reuses known owner/company names, and asks for only missing information. If the
+company name is missing, a name proposal must receive a user answer before the
+separate priority question. A priority card must receive its own answer before
+recruitment. Tool guards enforce that order, including across restarts and
+continuations. Completion is durable, recovered from paginated history if a
+crash preceded its checkpoint; later operational quick replies, long chats and
+cleared transcripts do not restart completed onboarding. The
+CEO is still responsible for reading and interpreting source documents and for
+keeping prose to one question at a time. Tests use scripted agents and real
+loopback HTTP, not a paid model, so they do not prove model reasoning quality.

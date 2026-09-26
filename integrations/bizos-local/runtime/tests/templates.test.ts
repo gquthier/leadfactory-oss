@@ -104,7 +104,7 @@ function registryOf(): TemplateRegistry {
 describe("the Lead Gen Agency pack", () => {
   it("is in the catalogue as shipped: six agents within the roster's limits, one welcome, no routine, no team", () => {
     expect(TEMPLATE_IDS).toEqual(["company-os", "lead-gen-agency", "ecommerce", "service-based-business", "software"]);
-    expect(CREATION_TEMPLATE_IDS).toEqual(["lead-gen-agency", "service-based-business", "software"]);
+    expect(CREATION_TEMPLATE_IDS).toEqual(["lead-gen-agency", "service-based-business", "software", "company-os"]);
     expect(Object.keys(TEMPLATE_CATALOG)).toEqual(TEMPLATE_IDS);
     expect(TEMPLATE_CATALOG["lead-gen-agency"]).toBe(LEAD_GEN_AGENCY);
     expect(TEMPLATE_CATALOG["service-based-business"]).toBe(SERVICE_BASED_BUSINESS);
@@ -213,7 +213,7 @@ describe("harness.templates.list", () => {
 
     // The CEO deleted: the promise is no longer on this Mac, the row offers to create it.
     await harness.bots.remove(ceo.id);
-    expect((await harness.templates.list()).templates.some((row) => row.id === "company-os")).toBe(false);
+    expect((await harness.templates.list()).templates.find((row) => row.id === "company-os")?.installed).toBeUndefined();
     const storage = new Storage(stateOf());
     expect(legacyCompanyOsInstallation(storage, brainOf(), [])).toBeNull();
     // `template.json` itself was never rewritten.
@@ -230,7 +230,7 @@ describe("harness.templates.list", () => {
     storage.writeJson(TEMPLATE_FILE, { id: "company-os", version: 2, appliedAt: "x", vault: "upgraded", bots: { ceo: "bot_gone" }, routineIds: [] });
     expect(legacyCompanyOsInstallation(storage, brainOf(), [])).toBeNull();
     const harness = harnessFor();
-    expect((await harness.templates.list()).templates.some((row) => row.id === "company-os")).toBe(false);
+    expect((await harness.templates.list()).templates.find((row) => row.id === "company-os")?.installed).toBeUndefined();
   });
 
   it("keeps a legacy ecommerce binding and installation visible without offering it as a new-company choice", async () => {
@@ -318,11 +318,13 @@ describe("harness.templates.apply", () => {
     }
   });
 
-  it("resumes a binding whose process stopped before the first installer journal write", async () => {
+  it("resumes a binding whose process stopped after the creation snapshot but before staging", async () => {
     const write = Storage.prototype.writeJson;
     let injected = false;
+    let journalWrites = 0;
     Storage.prototype.writeJson = function (name, value) {
-      if (!injected && name === TEMPLATES_FILE) {
+      if (name === TEMPLATES_FILE) journalWrites += 1;
+      if (!injected && name === TEMPLATES_FILE && journalWrites === 2) {
         injected = true;
         throw new Error("stopped before journal");
       }
@@ -338,7 +340,7 @@ describe("harness.templates.apply", () => {
       templateId: "service-based-business",
       rootId: "vault:service-based-business",
     });
-    expect(existsSync(join(stateOf(), TEMPLATES_FILE))).toBe(false);
+    expect(registryOf().pending["service-based-business"]?.creationOptions).toEqual({});
 
     const reopened = harnessFor();
     await expect(reopened.templates.ensureDefault()).resolves.toMatchObject({
@@ -434,7 +436,7 @@ describe("harness.templates.apply", () => {
     expect(await harness.templates.ensureDefault()).toMatchObject({ id: "company-os", vault: "kept", bots: 0, applied: true });
     expect(await harness.bots.list()).toEqual([]);
     expect(fingerprint(brainOf())).toBe(before);
-    expect((await harness.templates.list()).templates.some((row) => row.id === "company-os")).toBe(false);
+    expect((await harness.templates.list()).templates.find((row) => row.id === "company-os")?.installed).toBeUndefined();
 
     const result = await harness.templates.apply("company-os");
     expect(result).toMatchObject({ id: "company-os", rootId: "vault:company-os", created: true, vault: "seeded" });
@@ -1004,7 +1006,7 @@ describe("the bridge and the sidecar", () => {
     const handlers = buildHandlers(harness);
     const listed = (await runHandler(handlers["lbz:brain:templates"]!, [])) as IpcEnvelope;
     expect(listed.ok).toBe(true);
-    if (listed.ok) expect((listed.value as { templates: unknown[] }).templates).toHaveLength(3);
+    if (listed.ok) expect((listed.value as { templates: unknown[] }).templates).toHaveLength(4);
     const applied = (await runHandler(handlers["lbz:brain:applyTemplate"]!, ["lead-gen-agency"])) as IpcEnvelope;
     expect(applied.ok).toBe(true);
     if (applied.ok) expect(applied.value).toMatchObject({ rootId: "vault:lead-gen-agency", created: true });

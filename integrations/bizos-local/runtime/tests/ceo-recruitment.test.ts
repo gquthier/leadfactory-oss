@@ -67,8 +67,14 @@ async function fixture(templateId: "lead-gen-agency" | "service-based-business" 
     },
   });
   await harness.runtime.setInference({ source: "plan", planId: plan.id });
-  const installed = await harness.templates.apply(templateId);
+  const installed = await harness.templates.apply(templateId, undefined, { companyName: "Fixture Company" });
   const ceoId = installed.bots.ceo!;
+  const onboarding = await harness.threads.send({ botId: ceoId }, { text: "Fixture Company is already operating." });
+  harness.offerQuickReplies({ botId: ceoId, threadId: `bot:${ceoId}`, runId: onboarding.runIds[0]! }, { choices: ["Run the authorized mission"] });
+  finish(turns[0]!, "Which work should we start with?");
+  // activeCapability supplies the user's separate priority answer. Keep the
+  // existing turn indexes focused on the recruitment operation under test.
+  turns.length = 0;
   const broker = new LocalTeamBroker();
   const index = emptyDurableIndex();
   const facade = new CollaborationFacade(harness, INSTANCE, broker, index, null, () => undefined);

@@ -23,7 +23,7 @@
 import type { LocalBizosHarness } from "./harness/harness.js";
 import { MAX_EXTERNAL_URL_CHARS } from "./policy.js";
 import { PLAN_PROVIDERS } from "./harness/settings.js";
-import { TEMPLATE_IDS } from "./harness/templates.js";
+import { TEMPLATE_IDS, parseCreationOptions } from "./harness/templates.js";
 import { parseAvatarDataUrl } from "./harness/avatar.js";
 import type {
   AccessGrantRequest,
@@ -821,23 +821,24 @@ export function buildHandlers(
       );
     },
     // The template catalogue. An id is one of the built-in ones and nothing
-    // else: there is no path, no pack and no name in the payload, so a
-    // renderer cannot make the harness write anything it does not ship.
+    // else. An optional native-picked text snapshot is separately validated
+    // and can write only inside the new vault’s imported-context namespace.
     "lbz:brain:templates": () => harness.templates.list(),
     // `rootId` is an id the harness resolves (`new`, or one of the vaults it
     // offers) — never a path.
     // `options` (onboarding in the chat): the account's name and the app's
-    // language, for the CEO's welcome and Company.md. Strict here; the
-    // sidecar already dropped anything malformed.
+    // language, known company name and native-picked context snapshot. Strict
+    // here and again at the harness boundary; no caller-selected source path.
     "lbz:brain:applyTemplate": (args) => {
       const raw = at(args, 2);
-      const options = raw === undefined || raw === null ? {} : asStrictRecord(raw, "options", ["owner", "language"]);
+      const options = raw === undefined || raw === null ? {} : asStrictRecord(raw, "options", ["owner", "language", "companyName", "context"]);
       const owner = options.owner === undefined || options.owner === null ? undefined : asStrictRecord(options.owner, "owner", ["name"]);
       const name = owner ? asOptionalString(owner.name, "owner.name", 80) : undefined;
       const language = options.language === undefined || options.language === null ? undefined : asEnum(options.language, "language", ["fr", "en"] as const);
       return harness.templates.apply(asEnum(at(args, 0), "id", TEMPLATE_IDS), asOptionalString(at(args, 1), "rootId", 64), {
         ...(name ? { owner: { name } } : {}),
         ...(language ? { language } : {}),
+        ...parseCreationOptions({ ...(options.companyName !== undefined ? { companyName: options.companyName } : {}), ...(options.context !== undefined ? { context: options.context } : {}) }),
       });
     },
     // The workspace's template and vault: chosen once, then pinned.

@@ -22,6 +22,7 @@
 //     renderer's job (`src/lib/localbizos/bubbles.ts`): this harness used to
 //     do it a second time when the turn ended, which deleted paragraphs the
 //     reader had already read and re-sent them as new messages 400 ms later.
+import { onboardingTurnNote, type OnboardingStatus } from "./onboarding.js";
 import { STATIC_CLAUDE_MODELS } from "./claude-models.js";
 import { STATIC_CODEX_MODELS } from "./codex-models.js";
 import { createHash } from "node:crypto";
@@ -199,6 +200,7 @@ export interface DispatchDependencies {
   bots: BotStore;
   chatExecutor?(chatId: string): Bot | undefined;
   onConversationMessage?(message: ThreadMessage): void;
+  onboardingStatus?(botId: string): OnboardingStatus | null;
   groups: GroupStore;
   threads: ThreadStore;
   runs: RunStore;
@@ -346,6 +348,7 @@ interface QueuedTurn {
 }
 
 interface ActiveTurn extends QueuedTurn {
+  onboardingNameProposed?: boolean;
   /** The API provider and model a native API turn answers with, recorded on
    * the run once the provider really answered. */
   apiBinding?: { providerId: string; model: string };
@@ -1202,6 +1205,11 @@ export class Dispatcher {
   offerQuickReplies(scope: { botId: string; threadId: string; runId: string }, raw: unknown): { choices: string[]; note: string } {
     const turn = this.activeTurnFor(scope, "Offering quick replies");
     const choices = parseQuickReplies(raw);
+    const onboarding = this.deps.onboardingStatus?.(scope.botId);
+    if (onboarding && onboarding.stage !== "ready") {
+      if (turn.onboardingNameProposed) throw new Error("Wait for the person's answer to the company name before asking about priorities.");
+      if (onboarding.stage === "name") throw new Error("Resolve the company name first. Record an already known name in Company.md; otherwise propose only the name and wait for the answer.");
+    }
     turn.pendingOutputs = turn.pendingOutputs.filter((block) => block.kind !== "quick_replies");
     turn.pendingOutputs.push({ kind: "quick_replies", choices });
     return { choices, note: `${choices.length} quick ${choices.length === 1 ? "reply" : "replies"} will appear under your next message in this chat — write that message now; do not list them again in prose.` };
@@ -1210,9 +1218,23 @@ export class Dispatcher {
   proposeCompanyName(scope: { botId: string; threadId: string; runId: string }, raw: unknown): { name: string; note: string } {
     const turn = this.activeTurnFor(scope, "Proposing a company name");
     const name = parseCompanyName(raw);
+    const onboarding = this.deps.onboardingStatus?.(scope.botId);
+    if (onboarding && onboarding.stage !== "ready") {
+      if (onboarding.companyName) throw new Error(`The company name is already known: ${onboarding.companyName}. Keep it and ask only for the next priority.`);
+      if (turn.pendingOutputs.some(block => block.kind === "quick_replies")) throw new Error("The priority question has already been offered. Do not add a company name question to this turn.");
+      turn.onboardingNameProposed = true;
+    }
     turn.pendingOutputs = turn.pendingOutputs.filter((block) => block.kind !== "proposal");
     turn.pendingOutputs.push({ kind: "proposal", proposalKind: "company-name", value: name });
     return { name, note: `The name “${name}” will be proposed under your next message, with a button to accept it — write that message now; the person decides.` };
+  }
+
+  assertOnboardingRecruitment(scope: { botId: string; threadId: string; runId: string }): void {
+    const onboarding = this.deps.onboardingStatus?.(scope.botId);
+    if (!onboarding || onboarding.stage === "ready") return;
+    const turn = this.activeTurnFor(scope, "Recruiting");
+    if (onboarding.stage === "name" || turn.onboardingNameProposed) throw new Error("Resolve the company name and wait for the person's answer before asking for priorities or recruiting.");
+    throw new Error("Ask for the first priority and wait for the person's separate answer before recruiting a specialist.");
   }
 
   private activeTurnFor(scope: { botId: string; threadId: string; runId: string }, what: string): ActiveTurn {
@@ -2136,13 +2158,15 @@ export class Dispatcher {
     });
     const task = this.deps.runs.list(200).find((run) => run.threadId === threadId && run.botId === bot.id && run.task)?.task;
     const nowIso = this.deps.clock.nowIso();
-    const context = (fresh: boolean): string => buildTurnContext({
+    const onboarding = this.deps.onboardingStatus?.(bot.id);
+    const onboardingNote = onboarding ? onboardingTurnNote(onboarding) : "";
+    const context = (fresh: boolean): string => [buildTurnContext({
       since: (fresh || !lastOwn ? all : all.filter((row) => row.seq > lastOwn.seq)).filter(keep),
       roster,
       nowIso,
       ...(task ? { task } : {}),
       fresh,
-    });
+    }), onboardingNote].filter(Boolean).join("\n\n");
 
     const key = runtime.cursorKey;
     const primed = Boolean(runtime.resumeCursor) && this.cursors[`${key}|ctx`] === runtime.resumeCursor;

@@ -120,6 +120,7 @@ import {
   CEO_ON_DEMAND_CREATION,
   CREATION_TEMPLATE_IDS,
   creationTemplateOf,
+  parseCreationOptions,
   templateOf,
   vaultPathOf,
   vaultRootId,
@@ -135,6 +136,7 @@ import {
   type WorkspaceBinding,
   type WorkspaceTemplateProjection,
 } from "./templates.js";
+import { knownCompanyName, onboardingStatus as readOnboardingStatus, type OnboardingStatus } from "./onboarding.js";
 import { AGENCY_TOOLS_INSTRUCTIONS } from "./agency-tools.js";
 import { COMMERCE_TOOLS_INSTRUCTIONS } from "./commerce-tools.js";
 import { LEGACY_AGENCY_DIRECTORY, legacyAgencyVaultPath } from "./agency.js";
@@ -590,6 +592,7 @@ export class LocalBizosHarness {
       bots: this.botStore,
       chatExecutor: id => this.quickChatStore.executor(id),
       onConversationMessage: message => this.quickChatStore.recordMessage(message),
+      onboardingStatus: botId => this.onboardingStatus(botId),
       groups: this.groupStore,
       threads: this.threadStore,
       runs: this.runStore,
@@ -1841,7 +1844,8 @@ export class LocalBizosHarness {
     // A pre-feature pending journal has no creation snapshot. It must finish
     // the old six/eleven-agent install it started; only a newly journalled
     // creation receives the CEO-only derived template.
-    const template = creationMode ? creationTemplateOf(sourceTemplate, options) : sourceTemplate;
+    const creationOptions = existing ? {} : priorPending?.creationOptions ?? options;
+    const template = creationMode ? creationTemplateOf(sourceTemplate, creationOptions) : sourceTemplate;
     validateTemplate(template);
     if (existing) {
       if (existing.rootId !== target.rootId || LocalBizosHarness.comparableVaultPath(installationVaultDir(this.storage, existing)) !== LocalBizosHarness.comparableVaultPath(target.path)) {
@@ -1865,7 +1869,7 @@ export class LocalBizosHarness {
           startedAt: this.clock.nowIso(),
           bots: {},
           welcomes: {},
-          ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
+          ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION, onboardingVersion: 1 as const, creationOptions } : {}),
         };
         current.pending[id] = { ...row, ...patch };
       });
@@ -2053,6 +2057,7 @@ export class LocalBizosHarness {
       ...(groupId ? { groupId } : {}),
       routineIds: [],
       ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
+      ...(pending.onboardingVersion === 1 ? { onboardingVersion: 1 as const } : {}),
     };
     this.updateRegistry((current) => {
       current.installations[id] = installation;
@@ -2123,6 +2128,8 @@ export class LocalBizosHarness {
 
   /** Bind (or confirm the binding) and install (or resume) — the one door. */
   private async bindAndApply(templateId: TemplateId, rootId: string, options: CreationOptions = {}): Promise<TemplateApplyResult> {
+    const checkedOptions = parseCreationOptions(options);
+    if (checkedOptions.context && (templateId !== "company-os" || (rootId !== "new" && rootId !== vaultRootId(templateId)))) throw new BrainError("Imported context requires the Autonomous Company template in a new managed vault", "invalid_payload");
     return this.serialized(async () => {
       // A malformed built-in pack must fail before the durable one-way
       // binding exists. `applyTemplate` validates again at its own boundary.
@@ -2144,6 +2151,19 @@ export class LocalBizosHarness {
           path: target.path,
           boundAt: this.clock.nowIso(),
         };
+        // Save the bounded creation snapshot BEFORE binding. A restart in
+        // the binding→apply window must not silently lose selected context.
+        if (!installed && target.managed && (CREATION_TEMPLATE_IDS as readonly string[]).includes(templateId)) {
+          validateTemplate(creationTemplateOf(templateOf(templateId), checkedOptions));
+          this.updateRegistry(current => {
+            if (!current.pending[templateId]) current.pending[templateId] = {
+              id: templateId, version: templateOf(templateId).version,
+              startedAt: this.clock.nowIso(), bots: {}, welcomes: {},
+              creationMode: CEO_ON_DEMAND_CREATION, onboardingVersion: 1,
+              creationOptions: checkedOptions,
+            };
+          });
+        }
         // Persisted BEFORE the first effect; exclusively, so a binding
         // another process wrote a moment ago is read back and compared.
         if (!writeWorkspaceBinding(this.storage, fresh)) {
@@ -2155,7 +2175,7 @@ export class LocalBizosHarness {
           binding = fresh;
         }
       }
-      return this.applyTemplate(binding.templateId, this.targetOf(binding), options);
+      return this.applyTemplate(binding.templateId, this.targetOf(binding), checkedOptions);
     });
   }
 
@@ -2180,6 +2200,16 @@ export class LocalBizosHarness {
    * person's deliberate act on `workspace-binding.json`.
    */
   readonly workspaceTemplate = {
+    companyName: (): string | null => {
+      const binding = this.bindingOf();
+      if (!binding) return null;
+      try {
+        const vault = this.verifiedBoundVaultPath(undefined, binding);
+        const name = vault ? knownCompanyName(vault) : undefined;
+        return name && name.length <= 64 ? name : null;
+      }
+      catch { return null; }
+    },
     current: (): WorkspaceBinding | null => this.bindingOf(),
     /** A read-only dashboard may use only the current, verified vault. */
     verifiedCurrent: (): WorkspaceBinding | null => {
@@ -3378,6 +3408,35 @@ export class LocalBizosHarness {
    * current reply. See `Dispatcher.sendToChat`. */
   sendToChat(scope: { botId: string; threadId: string; runId: string }, raw: unknown) {
     return this.dispatcher.sendToChat(scope, raw);
+  }
+
+  /** Only fresh onboarding installations opt into sequencing. Legacy company
+   * journals and already active teams retain their original behavior. */
+  onboardingStatus(botId: string): OnboardingStatus | null {
+    const binding = this.bindingOf();
+    if (!binding) return null;
+    const installed = readTemplateRegistry(this.storage).installations[binding.templateId];
+    if (installed?.onboardingVersion !== 1 || installed.bots.ceo !== botId) return null;
+    if (installed.onboardingCompletedAt) return { stage: "ready", contextImported: false, waitingForNameAnswer: false };
+    // The UI snapshot contains only the newest 60 messages. Recover the
+    // complete onboarding evidence even after a restart or a long exchange,
+    // then persist the terminal transition so reads never repeat this scan.
+    let page = this.threadStore.page({ botId });
+    const messages = [...page.messages];
+    while (page.olderCursor) {
+      page = this.threadStore.page({ botId }, page.olderCursor);
+      messages.unshift(...page.messages);
+    }
+    const status = readOnboardingStatus(binding.path, messages);
+    if (status.stage === "ready") this.updateRegistry(current => {
+      const row = current.installations[binding.templateId];
+      if (row?.bots.ceo === botId && !row.onboardingCompletedAt) row.onboardingCompletedAt = this.clock.nowIso();
+    });
+    return status;
+  }
+
+  assertOnboardingRecruitment(scope: { botId: string; threadId: string; runId: string }): void {
+    this.dispatcher.assertOnboardingRecruitment(scope);
   }
 
   /** `offer_quick_replies` / `propose_company_name`: staged on the current

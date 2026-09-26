@@ -223,13 +223,13 @@ describe("the CEO's welcome in a new company", () => {
       expect(ceo.instructions).toContain(expected);
     }
     const companyOf = (template: typeof plain) => template.notes.find((note) => note.path === "Company.md")!.text;
-    expect(companyOf(plain)).toMatch(/^- Owner[^:\n]*: TODO$/m);
+    expect(companyOf(plain)).toMatch(/^- (?:Owner[^:\n]*:|\*\*Name, and how to address them:\*\*) TODO$/m);
 
     const personal = creationTemplateOf(source, { owner: { name: "Gauthier Thiry" }, language: "en" });
     expect(personal.bots[0]!.welcome).toBe(creationWelcome(id, { owner: { name: "Gauthier Thiry" }, language: "en" }));
-    expect(companyOf(personal)).toMatch(/^- Owner[^:\n]*: Gauthier Thiry$/m);
-    expect(companyOf(personal)).not.toMatch(/^- Owner[^:\n]*: TODO$/m);
-    expect(companyOf(personal)).toMatch(/^- (?:Working language[^:\n]*|Language and tone|Markets and languages): English$/m);
+    expect(companyOf(personal)).toMatch(/^- (?:Owner[^:\n]*:|\*\*Name, and how to address them:\*\*) Gauthier Thiry$/m);
+    expect(companyOf(personal)).not.toMatch(/^- (?:Owner[^:\n]*:|\*\*Name, and how to address them:\*\*) TODO$/m);
+    expect(companyOf(personal)).toMatch(/^- (?:(?:Working language[^:\n]*|Language and tone|Markets and languages):|\*\*Language they work in:\*\*) English$/m);
     expect(personal.notes.length).toBe(plain.notes.length);
     expect(JSON.stringify(source)).toBe(before);
   });

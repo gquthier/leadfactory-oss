@@ -21,7 +21,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
 import { ProRequiredError, type ProFeature } from "./harness/entitlement.js";
-import { isTemplateId } from "./harness/templates.js";
+import { isTemplateId, parseCreationOptions } from "./harness/templates.js";
 import {
   targetForThreadId,
   threadIdForTarget,
@@ -337,13 +337,13 @@ function uuid(value: unknown, field: string): string {
   return text;
 }
 
-async function bodyOf(request: IncomingMessage): Promise<unknown> {
+async function bodyOf(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, "payload_too_large", "Request body is too large.");
+    if (size > maxBytes) throw new HttpError(413, "payload_too_large", "Request body is too large.");
     chunks.push(bytes);
   }
   if (size === 0) return {};
@@ -1103,6 +1103,7 @@ export class CollaborationFacade {
         mode: "local" as const,
         instanceId: this.instanceId,
         workspaceId: this.workspaceId,
+        companyName: this.harness.workspaceTemplate.companyName(),
         persistence: "device" as const,
         runtime: "byo-cli-and-ollama" as const,
         cloudOrgId: null,
@@ -2105,7 +2106,7 @@ export class CollaborationFacade {
   // half-written roster.
   brainTemplates() { return this.brainCall("lbz:brain:templates", []); }
   async applyBrainTemplate(raw: unknown) {
-    const input = objectBody(raw, ["id", "rootId", "owner", "language"]);
+    const input = objectBody(raw, ["id", "rootId", "owner", "language", "companyName", "context"]);
     const id = requiredString(input.id, "id", 64);
     if (!isTemplateId(id)) throw new HttpError(404, "not_found", "That template is not in the catalogue.");
     const rootId = input.rootId === undefined || input.rootId === null ? undefined : requiredString(input.rootId, "rootId", 64);
@@ -2115,7 +2116,9 @@ export class CollaborationFacade {
     const owner = input.owner && typeof input.owner === "object" && !Array.isArray(input.owner) ? input.owner as Record<string, unknown> : {};
     const name = typeof owner.name === "string" && owner.name.trim() && owner.name.trim().length <= 80 ? owner.name.trim() : undefined;
     const language = input.language === "fr" || input.language === "en" ? input.language : undefined;
-    const options = { ...(name ? { owner: { name } } : {}), ...(language ? { language } : {}) };
+    let options: ReturnType<typeof parseCreationOptions>;
+    try { options = parseCreationOptions({ ...(name ? { owner: { name } } : {}), ...(language ? { language } : {}), ...(input.companyName !== undefined ? { companyName: input.companyName } : {}), ...(input.context !== undefined ? { context: input.context } : {}) }); }
+    catch (error) { throw new HttpError(400, "invalid_payload", error instanceof Error ? error.message : String(error)); }
     const args: unknown[] = Object.keys(options).length ? [id, rootId ?? null, options] : rootId ? [id, rootId] : [id];
     return this.exclusive(() => this.brainCall("lbz:brain:applyTemplate", args));
   }
@@ -2279,6 +2282,8 @@ export class CollaborationFacade {
 
   async recruit(capability: TeamCapability, raw: unknown): Promise<RecruitmentResult> {
     return this.exclusive(async () => {
+      try { this.harness.assertOnboardingRecruitment(capability); }
+      catch (error) { throw new HttpError(409, "onboarding_sequence", error instanceof Error ? error.message : String(error)); }
       const input = objectBody(raw, ["role_slug", "name", "title", "description", "instructions", "context", "mission", "initial_task", "avatar_data_url", "avatar_prompt"]);
       const roleSlug = optionalString(input.role_slug, "role_slug", 80);
       const blueprint = roleSlug ? this.roleBlueprint(roleSlug) : undefined;
@@ -3008,7 +3013,7 @@ async function serve(): Promise<void> {
         return sendJson(response, 200, await facade.brainTemplates());
       }
       if (method === "POST" && url.pathname === "/api/local/brain/templates/apply") {
-        return sendJson(response, 200, await facade.applyBrainTemplate(await bodyOf(request)));
+        return sendJson(response, 200, await facade.applyBrainTemplate(await bodyOf(request, 4 * 1024 * 1024)));
       }
       if (method === "GET" && url.pathname === "/api/local/brain/note") {
         const rootId = url.searchParams.get("root") ?? "";
