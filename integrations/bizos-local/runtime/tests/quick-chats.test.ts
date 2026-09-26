@@ -189,6 +189,47 @@ describe('QuickChat expiry', () => {
     await expect(f.harness.threads.get({ chatId: a.id })).rejects.toThrow();
   });
 
+  it('removes a legacy continuity mapping on expiry without recovering its archive or affecting a linked bot', async () => {
+    const clock = fixedClock(epoch); const f = fixture(undefined, clock);
+    const other = fixture(undefined, fixedClock(epoch));
+    const otherChat = await other.harness.quickChats.create('legacy-linked');
+    const chat = await f.harness.quickChats.create('legacy-linked');
+    await f.harness.quickChats.send(chat.id, 'Ephemeral secret', 'legacy-linked-send');
+    const threadId = `chat:${chat.id}`;
+    f.harness.continuity.store.link(threadId, { conversationId: 'legacy-cloud-chat', installationId: 'device', accountId: 'owner', orgId: 'org' });
+    f.harness.continuity.store.capture({ id: 'legacy-event', threadId, seq: 2, role: 'user', blocks: [{ kind: 'text', text: 'Legacy archive secret' }], createdAt: clock.nowIso() });
+    f.harness.continuity.store.queue('legacy-queued', { runId: 'legacy-queued', threadId, text: 'Legacy queued secret' });
+    f.harness.continuity.store.link('bot:keep', { conversationId: 'bot-cloud-chat', installationId: 'device', accountId: 'owner', orgId: 'org' });
+    f.harness.continuity.store.capture({ id: 'bot-event', threadId: 'bot:keep', seq: 1, role: 'user', blocks: [{ kind: 'text', text: 'Persistent bot message' }], createdAt: clock.nowIso() });
+    f.harness.stop();
+    clock.advance(DAY);
+    const calls: string[] = [];
+    const restored = fixture(f.root, clock, async () => '', { continuityTransport: async operation => { calls.push(operation); throw new Error('No fixture bridge'); } });
+    expect((await restored.harness.quickChats.list()).chats).toEqual([]);
+    expect(restored.harness.continuity.store.status(threadId)).toBeNull();
+    expect(restored.harness.continuity.projection(threadId)).toEqual([]);
+    expect(restored.harness.continuity.store.status('bot:keep')?.conversationId).toBe('bot-cloud-chat');
+    expect(restored.harness.continuity.store.pending('bot:keep')).toHaveLength(1);
+    await restored.harness.continuity.sync(threadId);
+    expect(calls).toEqual([]);
+    expect(readFileSync(join(f.root, 'continuity.json'), 'utf8')).not.toContain('Legacy archive secret');
+    expect(readFileSync(join(f.root, 'continuity.json'), 'utf8')).not.toContain('Legacy queued secret');
+    expect(readFileSync(join(f.root, 'continuity.json'), 'utf8')).toContain('Persistent bot message');
+    expect(existsSync(join(f.root, 'threads', `chat-${chat.id}.ndjson`))).toBe(false);
+    expect((await other.harness.quickChats.list()).chats.map(row => row.id)).toEqual([otherChat.id]);
+  });
+
+  it('detaches a legacy QuickChat mapping during an in-process expiry', async () => {
+    const clock = fixedClock(epoch); const f = fixture(undefined, clock);
+    const chat = await f.harness.quickChats.create('live-legacy-link');
+    const threadId = `chat:${chat.id}`;
+    f.harness.continuity.store.link(threadId, { conversationId: 'legacy-live', installationId: 'device', accountId: 'owner', orgId: 'org' });
+    clock.advance(DAY);
+    expect(f.harness.continuity.store.status(threadId)).toBeNull();
+    expect(f.harness.continuity.projection(threadId)).toEqual([]);
+    expect((await f.harness.quickChats.list()).chats).toEqual([]);
+  });
+
   it('recovers legacy assistant activity and titles, then expires after restart with no timer or reads', async () => {
     const clock = fixedClock(epoch); const f = fixture(undefined, clock);
     const chat = await f.harness.quickChats.create('legacy');

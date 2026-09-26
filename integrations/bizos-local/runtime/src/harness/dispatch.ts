@@ -1,3 +1,5 @@
+import type { ConversationContinuity } from "./continuity-sync.js";
+import { payloadHash } from "./continuity.js";
 // Turn dispatch — who answers, in what order, and what the thread shows
 // while they do.
 //
@@ -197,6 +199,7 @@ export interface ChildDispatchResult {
 }
 
 export interface DispatchDependencies {
+  continuity?: ConversationContinuity;
   bots: BotStore;
   chatExecutor?(chatId: string): Bot | undefined;
   onConversationMessage?(message: ThreadMessage): void;
@@ -311,6 +314,7 @@ export interface SharedAccess {
 const NO_ACCESS: SharedAccess = { folders: [], fullDiskRead: false };
 
 interface QueuedTurn {
+  dispatchState?: "queued" | "started";
   continuationCount?: number;
   previousCheckpoint?: string;
   /** When the task this turn continues began: the autonomy budget is wall
@@ -349,6 +353,7 @@ interface QueuedTurn {
 
 interface ActiveTurn extends QueuedTurn {
   onboardingNameProposed?: boolean;
+  continuityBinding?: string;
   /** The API provider and model a native API turn answers with, recorded on
    * the run once the provider really answered. */
   apiBinding?: { providerId: string; model: string };
@@ -548,6 +553,8 @@ function extensionFor(attachment: Attachment): string {
 
 export class Dispatcher {
   private readonly queues = new Map<string, QueuedTurn[]>();
+  private readonly preparing = new Map<string, QueuedTurn>();
+  private readonly completing = new Set<string>();
   private readonly active = new Map<string, ActiveTurn>();
   private readonly chains = new Map<string, Chain>();
   /** Source threads that own cross-thread child chains. This lets STOP on a
@@ -653,10 +660,17 @@ export class Dispatcher {
     botId: string;
     prompt: string;
     routineId: string;
+    occurrenceId?: string;
     routine?: { name: string; trigger: RoutineTrigger; endsAt?: string };
   }): { runId: string } {
     const threadId = threadIdForTarget({ botId: input.botId });
+    const stableRunId=input.occurrenceId ? `run_${payloadHash(input.occurrenceId).slice(0,20)}` : undefined;
+    if(stableRunId) {
+      const existing=this.deps.runs.get(stableRunId);
+      if(existing && (this.deps.continuity?.store.queued()[stableRunId] || existing.state!=="queued"))return {runId:stableRunId};
+    }
     const runId = this.enqueue({
+      ...(stableRunId ? {runId:stableRunId} : {}),
       threadId,
       botId: input.botId,
       text: input.prompt,
@@ -742,6 +756,8 @@ export class Dispatcher {
   stop(target: ThreadTarget): void {
     const threadId = threadIdForTarget(target);
     const chainIds = new Set<string>();
+    const preparing = this.preparing.get(threadId);
+    if (preparing) chainIds.add(preparing.chainId);
     const running = this.active.get(threadId);
     if (running) chainIds.add(running.chainId);
     for (const queued of this.queues.get(threadId) ?? []) chainIds.add(queued.chainId);
@@ -753,9 +769,17 @@ export class Dispatcher {
   /** Cancel one run without stopping unrelated work queued on the same
    * thread. Voice STOP uses this exact ownership boundary. */
   cancelRun(runId: string): boolean {
+    for (const [threadId, queued] of this.preparing) {
+      if (queued.runId !== runId) continue;
+      this.preparing.delete(threadId);
+      this.cancelBeforeLaunch(queued);
+      this.pump(threadId);
+      return true;
+    }
     for (const running of this.active.values()) {
       if (running.runId !== runId) continue;
       running.cancelled = true;
+      this.deps.continuity?.stop(running.threadId, running.runId);
       this.deps.onRunStopped?.(running.runId);
       running.handle.stop();
       return true;
@@ -766,12 +790,7 @@ export class Dispatcher {
       const [queued] = queue.splice(index, 1);
       if (!queued) return false;
       this.queues.set(threadId, queue);
-      this.releaseChain(queued.chainId);
-      this.deps.runs.update(runId, { state: "cancelled" });
-      this.deps.events.publish({ type: "run.cancelled", runId, threadId, botId: queued.botId });
-      if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, runId);
-      this.deps.onRunStopped?.(runId);
-      this.deps.onRunSettled?.(runId);
+      this.cancelBeforeLaunch(queued);
       if (!this.active.has(threadId)) this.pump(threadId);
       return true;
     }
@@ -787,8 +806,10 @@ export class Dispatcher {
 
   private cancelQueued(threadId: string): void {
     for (const queued of this.queues.get(threadId) ?? []) {
-      this.releaseChain(queued.chainId);
+      // The terminal run is durable before its queue projection disappears.
       this.deps.runs.update(queued.runId, { state: "cancelled" });
+      this.deps.continuity?.store.dequeue(queued.runId);
+      this.releaseChain(queued.chainId);
       this.deps.events.publish({
         type: "run.cancelled",
         runId: queued.runId,
@@ -803,10 +824,27 @@ export class Dispatcher {
     this.queues.set(threadId, []);
   }
 
+  private cancelBeforeLaunch(queued: QueuedTurn): void {
+    this.deps.runs.update(queued.runId, { state: "cancelled" });
+    this.deps.continuity?.store.dequeue(queued.runId);
+    this.deps.continuity?.stop(queued.threadId, queued.runId);
+    this.releaseChain(queued.chainId);
+    this.deps.events.publish({ type: "run.cancelled", runId: queued.runId, threadId: queued.threadId, botId: queued.botId });
+    if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
+    this.deps.onRunStopped?.(queued.runId);
+    this.deps.onRunSettled?.(queued.runId);
+  }
+
   /** STOP follows a mission across DM child dispatches, not merely across
    * one transcript. All queued and active descendants share `chainId`. */
   private cancelChain(chainId: string): void {
     const pump = new Set<string>();
+    for (const [threadId, queued] of this.preparing) {
+      if (queued.chainId !== chainId) continue;
+      this.preparing.delete(threadId);
+      this.cancelBeforeLaunch(queued);
+      pump.add(threadId);
+    }
     for (const [threadId, queue] of this.queues) {
       const kept: QueuedTurn[] = [];
       for (const queued of queue) {
@@ -814,12 +852,7 @@ export class Dispatcher {
           kept.push(queued);
           continue;
         }
-        this.releaseChain(queued.chainId);
-        this.deps.runs.update(queued.runId, { state: "cancelled" });
-        this.deps.events.publish({ type: "run.cancelled", runId: queued.runId, threadId, botId: queued.botId });
-        if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
-        this.deps.onRunStopped?.(queued.runId);
-        this.deps.onRunSettled?.(queued.runId);
+        this.cancelBeforeLaunch(queued);
         pump.add(threadId);
       }
       this.queues.set(threadId, kept);
@@ -827,6 +860,7 @@ export class Dispatcher {
     for (const turn of [...this.active.values()]) {
       if (turn.chainId !== chainId || turn.cancelled) continue;
       turn.cancelled = true;
+      this.deps.continuity?.stop(turn.threadId, turn.runId);
       this.deps.onRunStopped?.(turn.runId);
       turn.handle.stop();
       pump.add(turn.threadId);
@@ -843,6 +877,13 @@ export class Dispatcher {
   clearThread(target: ThreadTarget): void {
     const threadId = threadIdForTarget(target);
     this.stop(target);
+    const preparing = this.preparing.get(threadId);
+    if (preparing) {
+      this.preparing.delete(threadId);
+      this.deps.continuity?.stop(threadId, preparing.runId);
+      this.deps.continuity?.store.dequeue(preparing.runId);
+      this.deps.runs.update(preparing.runId, { state: "cancelled" });
+    }
     const running = this.active.get(threadId);
     if (running) running.discarded = true;
     for (const key of Object.keys(this.cursors)) {
@@ -985,6 +1026,9 @@ export class Dispatcher {
       if (turn.botId !== scope.botId || turn.cancelled || turn.discarded) continue;
       if (scope.threadId !== undefined && turn.threadId !== scope.threadId) continue;
       if (scope.runId !== undefined && turn.runId !== scope.runId) continue;
+      if (this.deps.continuity?.linked(turn.threadId)) {
+        try { this.deps.continuity.guard.assert(turn.threadId); } catch { return undefined; }
+      }
       return turn;
     }
     return undefined;
@@ -1358,6 +1402,25 @@ export class Dispatcher {
   resumeInterruptedTasks(): string[] {
     if (this.restartResumeDone || !this.deps.localArchitecture) return [];
     this.restartResumeDone = true;
+    for (const raw of Object.values(this.deps.continuity?.store.queued() ?? {})) {
+      const turn = raw as QueuedTurn;
+      if (!turn || typeof turn.runId !== "string" || typeof turn.text !== "string" || !this.deps.runs.get(turn.runId)) continue;
+      if (["cancelled", "completed", "failed"].includes(this.deps.runs.get(turn.runId)!.state)) {
+        // Started commands may contain unknown effects and remain available
+        // for reconciliation, but no terminal command is ever re-enqueued.
+        if (turn.dispatchState !== "started") this.deps.continuity?.store.dequeue(turn.runId);
+        continue;
+      }
+      if (turn.dispatchState === "started") {
+        this.deps.runs.update(turn.runId,{state:"failed",error:"Execution was interrupted after admission; the durable command is retained for reconciliation."});
+        continue;
+      }
+      this.deps.runs.update(turn.runId, {state:"queued"});
+      this.queues.set(turn.threadId, [...(this.queues.get(turn.threadId) ?? []), turn]);
+      this.chains.set(turn.chainId, {turns:1,outstanding:1,visited:new Set([turn.botId])});
+      this.runChains.set(turn.runId,turn.chainId);
+    }
+    for (const threadId of this.queues.keys()) this.pump(threadId);
     const now = this.deps.clock.now().getTime();
     const seen = new Set<string>();
     const runIds: string[] = [];
@@ -1365,6 +1428,7 @@ export class Dispatcher {
       const key = `${run.threadId}|${run.botId}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      if (this.deps.continuity?.linked(run.threadId)) continue;
       if (run.interruption !== "shutdown" || !run.task || run.threadId.startsWith("chat:")) continue;
       this.deps.runs.update(run.id, { interruption: "resumed" });
       const touched = Date.parse(run.updatedAt ?? run.endedAt ?? run.startedAt);
@@ -1403,7 +1467,13 @@ export class Dispatcher {
         }
       }
     }
+    const retained=[...this.queues.values()].flat();
     for (const threadId of this.queues.keys()) this.cancelQueued(threadId);
+    // A graceful app close parks queued commands; STOP remains the explicit
+    // cancellation path. Payloads were durable before schedule advancement.
+    for(const queued of retained){this.deps.continuity?.store.queue(queued.runId,queued);this.deps.runs.update(queued.runId,{state:"queued"});}
+    for(const [threadId,queued] of this.preparing){this.deps.continuity?.stop(threadId,queued.runId);this.deps.continuity?.store.queue(queued.runId,queued);this.deps.runs.update(queued.runId,{state:"queued"});}
+    this.preparing.clear();
     for (const turn of this.active.values()) {
       // A task cut mid-flight by the app going away is resumed once at the
       // next start (`resumeInterruptedTasks`); a STOP never is.
@@ -1411,6 +1481,7 @@ export class Dispatcher {
         this.deps.runs.update(turn.runId, { interruption: "shutdown" });
       }
       turn.cancelled = true;
+      this.deps.continuity?.stop(turn.threadId, turn.runId);
       this.deps.onRunStopped?.(turn.runId);
       // The window is going away, so no card will ever be answered: everything
       // waiting on one is refused now rather than left hanging on a promise
@@ -1499,6 +1570,7 @@ export class Dispatcher {
   /** `null` when the turn was refused: the chain budget, the thread queue
    * cap, or a bot already answering this same message. */
   private enqueue(input: {
+    runId?: string;
     threadId: string;
     botId: string;
     text: string;
@@ -1532,6 +1604,7 @@ export class Dispatcher {
     }
 
     const run = this.deps.runs.start({
+      ...(input.runId ? {id:input.runId} : {}),
       threadId: input.threadId,
       botId: input.botId,
       state: "queued",
@@ -1548,7 +1621,7 @@ export class Dispatcher {
     chain.turns += 1;
     chain.outstanding += 1;
     chain.visited.add(input.botId);
-    queue.push({
+    const durableTurn: QueuedTurn = {
       runId: run.id,
       threadId: input.threadId,
       botId: input.botId,
@@ -1567,14 +1640,16 @@ export class Dispatcher {
         previousCheckpoint: input.resume.previousCheckpoint,
         ...(input.resume.restartResumes ? { restartResumes: input.resume.restartResumes } : {}),
       } : {}),
-    });
+    };
+    this.deps.continuity?.store.queue(run.id, durableTurn);
+    queue.push(durableTurn);
     this.queues.set(input.threadId, queue);
     this.pump(input.threadId);
     return run.id;
   }
 
   private pump(threadId: string): void {
-    if (this.active.has(threadId)) return;
+    if (this.active.has(threadId) || this.preparing.has(threadId) || this.completing.has(threadId)) return;
     const queue = this.queues.get(threadId) ?? [];
     const next = queue.shift();
     this.queues.set(threadId, queue);
@@ -1600,7 +1675,8 @@ export class Dispatcher {
       this.abandon(next, bot.id, "Routine owner is archived; the routine was paused.");
       return;
     }
-    this.launch(next, bot);
+    try { this.launch(next, bot); }
+    catch (error) { this.abandon(next, bot.id, error instanceof Error ? error.message : String(error)); }
   }
 
   /** Write the user's attachments into the bot's own workspace so the model
@@ -1651,6 +1727,7 @@ export class Dispatcher {
    * `send()` down and leave the run pinned to `working` forever. */
   private abandon(queued: QueuedTurn, botId: string, reason: string): void {
     const { threadId } = queued;
+    this.deps.continuity?.store.dequeue(queued.runId);
     this.releaseChain(queued.chainId);
     this.deps.runs.update(queued.runId, { state: "failed", error: reason });
     const note = this.deps.threads.append(threadId, {
@@ -1663,7 +1740,7 @@ export class Dispatcher {
     this.pump(threadId);
   }
 
-  private launch(queued: QueuedTurn, bot: Bot, options: { failoverUsed?: boolean } = {}): void {
+  private launch(queued: QueuedTurn, bot: Bot, options: { failoverUsed?: boolean; linkedReady?: boolean } = {}): void {
     const { threadId } = queued;
     const settings = this.deps.settings();
     // ONE switch, read once, for whichever CLI answers: Settings → Plans &
@@ -1737,6 +1814,33 @@ export class Dispatcher {
       return;
     }
 
+    const continuity = this.deps.continuity;
+    const linked = continuity?.linked(threadId) === true;
+    if (linked && !options.linkedReady && !continuity!.guard.get(threadId)) {
+      this.preparing.set(threadId, queued);
+      void continuity!.prepare(threadId, queued.runId, provider, () => {
+        const active = this.active.get(threadId);
+        if (active?.runId === queued.runId) { active.cancelled = true; this.deps.onRunStopped?.(queued.runId); active.handle?.stop(); }
+      }).then(() => {
+        if (this.preparing.get(threadId) !== queued) {
+          continuity!.stop(threadId, queued.runId);
+          return;
+        }
+        this.preparing.delete(threadId);
+        this.launch(queued, bot, {...options, linkedReady: true});
+      }).catch(error => {
+        if (this.preparing.get(threadId) !== queued) return;
+        this.preparing.delete(threadId);
+        this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+    if (linked) continuity!.guard.assert(threadId);
+    const portableContext = linked ? continuity!.store.context(threadId, queued.triggerMessageId) : "";
+    // Preserve the full command through the irreversible provider-start
+    // boundary. A crash here becomes an interrupted intention, never replay.
+    this.deps.continuity?.store.queue(queued.runId, {...queued,dispatchState:"started"});
+
     // The persona is built BEFORE this turn's own (empty) message lands in
     // the thread — otherwise "since my last turn" would start at it and the
     // bot would be handed no context at all.
@@ -1786,7 +1890,10 @@ export class Dispatcher {
     // that appeared since the thread began (a new team tool, an app the
     // person added) must start a fresh thread, or a resumed one never sees it.
     const runContext: TurnContext = { threadId, runId: queued.runId, ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}) };
-    const availableServers = native ? {} : this.deps.mcpServers(bot, runContext);
+    const rawServers = native ? {} : this.deps.mcpServers(bot, runContext);
+    // Linked providers only get the host-mediated team bridge. A custom MCP
+    // server is not made transferable merely by calling it a connector.
+    const availableServers = linked ? Object.fromEntries(Object.entries(rawServers).filter(([name]) => name === "local_team_actions")) : rawServers;
     // Cursor print mode has no BizOS approval channel. Its disposable plugin
     // therefore mounts only servers whose host policy already allows calls;
     // anything that needs a permission card remains absent and is not named
@@ -1794,7 +1901,11 @@ export class Dispatcher {
     const mountedServers = provider === "cursor"
       ? cursorPreapprovedServers(availableServers)
       : availableServers;
-    const dynamicTools = provider === "cursor" ? undefined : this.deps.dynamicTools?.(bot, runContext);
+    const hostTools = provider === "cursor" ? undefined : [
+      ...(this.deps.dynamicTools?.(bot, runContext) ?? []),
+      ...(linked ? continuity!.portableTools(threadId, queued.runId) : []),
+    ];
+    const dynamicTools = hostTools && linked ? continuity!.tools(threadId, queued.runId, hostTools) : hostTools;
     const toolSurface = [
       ...Object.keys(mountedServers).map((name) => `mcp:${name}`),
       ...(dynamicTools ?? []).map((tool) => `tool:${tool.name}`),
@@ -1816,19 +1927,24 @@ export class Dispatcher {
       ...(external?.kind === "ollama" ? { baseUrl: external.baseUrl } : {}),
       tools: toolSurface,
     });
-    const resumeCursor = native || (provider === "cursor" && Object.keys(mountedServers).length > 0) ? null :
+    const resumeCursor = linked || native || (provider === "cursor" && Object.keys(mountedServers).length > 0) ? null :
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
     // Local Codex / Claude / Cursor agents get the slim brief once per
     // provider session and only what is new on every turn after it; the
     // cloud path, quick chats and native Ollama keep their prompts.
-    const local = native || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
+    const local = linked || native || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
       provider, tools: toolSurface, excludeMessageId: message.id, resumeCursor, cursorKey, writableRoots, skipPermissions,
     });
-    const persona = local ? local.system : this.personaFor(bot, threadId, {
-      replayHistory: !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
+    const basePersona = local ? local.system : this.personaFor(bot, threadId, {
+      replayHistory: !linked && !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
       ...(external?.kind === "api" ? { apiLabel: external.label } : {}),
       ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}),
     });
+
+    const persona = [basePersona, portableContext].filter(Boolean).join("\n\n");
+    const continuityBinding = linked ? continuity!.store.prepareBinding(threadId, {
+      provider, accountId: plan?.id ?? (external && "providerId" in external ? external.providerId : external && "id" in external ? external.id : "default"), runtime: `${provider}:payload-v1`, policy: policyFingerprint,
+    }, continuity!.store.status(threadId)!.head, payloadHash(persona)) : undefined;
 
     // A new turn here supersedes a paused request: its checkpoint is in the
     // context, and the agent asks again if it still needs to.
@@ -1840,6 +1956,7 @@ export class Dispatcher {
       ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
       ...(external?.kind === "api" ? { apiBinding: { providerId: external.providerId, model: model! } } : {}),
       policyFingerprint,
+      ...(continuityBinding ? { continuityBinding } : {}),
       handle: undefined as unknown as CodexTurnHandle,
       message,
       asks: new Map(),
@@ -1879,23 +1996,24 @@ export class Dispatcher {
       resumeCursor,
       ...(Object.keys(environment).length ? { environment } : {}),
       ...(this.deps.retryScale ? { retryScale: this.deps.retryScale } : {}),
-      onEvent: (event: RuntimeEvent) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
+      onEvent: (event: RuntimeEvent) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
     };
 
     let handle: CodexTurnHandle;
+    if (linked && provider !== "claude") continuity!.markNativeUncontrolled(threadId);
     if (provider === "api" && external?.kind === "api") {
       handle = (this.deps.startOpenAiTurn ?? defaultStartOpenAiTurn)({
         baseUrl: external.baseUrl, apiKey: external.apiKey, model: model!, label: external.label,
         system: persona, text: turnText, threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
         dynamicTools: dynamicTools ?? [],
-        onEvent: (event) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
+        onEvent: (event) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
       });
     } else if (provider === "ollama" && external?.kind === "ollama") {
       handle = (this.deps.startOllamaTurn ?? defaultStartOllamaTurn)({
         baseUrl: external.baseUrl, model: model!, system: persona, text: turnText,
         threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
         dynamicTools: dynamicTools ?? [],
-        onEvent: (event) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
+        onEvent: (event) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
       });
     } else if (provider === "cursor") {
       const start = this.deps.startCursorTurn ?? defaultStartCursorTurn;
@@ -1913,7 +2031,7 @@ export class Dispatcher {
         resumeCursor,
         mcpServers: mountedServers,
         ...(Object.keys(environment).length ? { environment } : {}),
-        onEvent: (event: RuntimeEvent) => this.onRuntimeEvent(turn, bot, cursorKey, state, event),
+        onEvent: (event: RuntimeEvent) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
         tee: (entry) => {
           if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
           this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
@@ -1923,6 +2041,7 @@ export class Dispatcher {
       const start = this.deps.startClaudeTurn ?? defaultStartClaudeTurn;
       handle = start({
         ...common,
+        ...(linked ? {boundedTools:true,skipPermissions:false,sandbox:"read-only" as const} : {}),
         ...(writableRoots.length ? { additionalDirectories: writableRoots } : {}),
         ...(plan?.configDir ? { configDir: plan.configDir } : {}),
         // Same servers and exact stored approvals as Codex; any unmatched
@@ -1972,6 +2091,7 @@ export class Dispatcher {
     }
     turn.handle = handle;
     if (turn.discarded) { handle.stop(); return; }
+    if (turn.cancelled) handle.stop();
     if (plan) {
       this.deps.pinPlan?.(cursorKey, plan.id);
       this.deps.touchPlan?.(plan.id);
@@ -1995,6 +2115,7 @@ export class Dispatcher {
     bot: Bot,
     failure: string | null,
   ): boolean {
+    if(this.deps.continuity?.linked(turn.threadId))return false;
     if (turn.executionPolicy?.source === "voice" || turn.failoverUsed || turn.cancelled || turn.discarded) return false;
     if (!turn.planId || !this.deps.failoverPlan) return false;
     if (!this.isPlanFailoverReason(failure)) return false;
@@ -2306,6 +2427,26 @@ export class Dispatcher {
     });
   }
 
+  /** A storage failure must revoke the running provider, not merely escape
+   * a protocol callback while the model continues to issue effects. */
+  private dispatchRuntimeEvent(
+    turn: ActiveTurn, bot: Bot, cursorKey: string,
+    state: { text: string; steps: StepItem[]; failure: string | null }, event: RuntimeEvent,
+  ): void {
+    try { this.onRuntimeEvent(turn, bot, cursorKey, state, event); }
+    catch (error) {
+      turn.cancelled = true;
+      this.active.delete(turn.threadId);
+      this.deps.onRunStopped?.(turn.runId);
+      try { this.deps.continuity?.guard.stop(turn.threadId); }
+      catch { /* Revocation still has to stop the provider if the effect journal cannot be written. */ }
+      finally { turn.handle?.stop(); }
+      const reason = `Persistence failed; execution stopped: ${error instanceof Error ? error.message : String(error)}`;
+      try { this.deps.runs.update(turn.runId,{state:"failed",error:reason}); } catch { /* The error event remains visible when the disk itself is unavailable. */ }
+      this.deps.events.publish({type:"run.failed",runId:turn.runId,threadId:turn.threadId,botId:bot.id,error:reason});
+    }
+  }
+
   private onRuntimeEvent(
     turn: ActiveTurn,
     bot: Bot,
@@ -2331,7 +2472,13 @@ export class Dispatcher {
     };
 
 
+    if (turn.continuityBinding && ["session.started", "context.sent", "context.confirmed"].includes(event.type)) {
+      this.deps.continuity!.store.bindingEvent(turn.continuityBinding, event);
+    }
     switch (event.type) {
+      case "capabilities.verified":
+        this.deps.continuity?.verified(turn.runId, event.supervised);
+        break;
       case "external.model.verified":
         if (turn.apiBinding) this.deps.runs.update(turn.runId, { inference: {
           kind: "api", providerId: turn.apiBinding.providerId, model: turn.apiBinding.model, locality: "remote",
@@ -2599,6 +2746,8 @@ export class Dispatcher {
     stopReason: string | null,
   ): void {
     if (!this.active.has(turn.threadId) || this.active.get(turn.threadId) !== turn) return;
+    const linked = this.deps.continuity?.linked(turn.threadId) === true;
+    if (linked) this.completing.add(turn.threadId);
     const task = this.deps.runs.get(turn.runId)?.task;
     if (task && !turn.cancelled && !turn.discarded && ok && turn.expiredInput && !turn.blockedOnInput &&
       (task.status === "in_progress" || task.status === "blocked")) {
@@ -2631,7 +2780,7 @@ export class Dispatcher {
               ? "No new checkpoint progress; automatic continuation stopped."
               : null;
         // Never abandon a pending approval or question to start a fresh turn.
-        if (!reason && !turn.asks.size && !turn.localAsks.size) {
+        if (!linked && !reason && !turn.asks.size && !turn.localAsks.size) {
           this.persist(turn);
           this.active.delete(turn.threadId);
           this.deps.onRunSettled?.(turn.runId);
@@ -2654,6 +2803,7 @@ export class Dispatcher {
       this.deps.runs.update(turn.runId, { task: { ...task, status: "interrupted" } });
     }
     this.active.delete(turn.threadId);
+    if (!turn.publicMessagesEnabled && ok && !turn.cancelled) turn.message.deliveryState = "complete";
     // Any card still open belongs to a turn that no longer exists. Nobody
     // denied these: the window closed on them.
     for (const askId of [...turn.asks.keys()]) this.markAskAnswered(turn, askId, "expired");
@@ -2719,7 +2869,12 @@ export class Dispatcher {
     // first would drop the chain's budget and its `visited` set the moment
     // the parent turn ended, which is exactly when the fan-out starts.
     this.releaseChain(turn.chainId);
-    this.pump(turn.threadId);
+    this.deps.continuity?.store.dequeue(turn.runId);
+    if (linked) {
+      void this.deps.continuity!.finish(turn.threadId, turn.runId, ok && !turn.cancelled, turn.cancelled ? "cancelled" : state.failure ?? stopReason)
+        .catch(error => { if (!this.deps.continuity!.isClosed()) { this.deps.continuity!.store.error(turn.threadId, String(error)); this.note(turn.threadId, "Result saved locally; synchronization is waiting for reconciliation."); } })
+        .finally(() => { this.completing.delete(turn.threadId); this.pump(turn.threadId); });
+    } else this.pump(turn.threadId);
   }
 
   /**

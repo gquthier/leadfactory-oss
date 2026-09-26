@@ -1,8 +1,8 @@
 # Templates d’entreprise dans BizOS local
 
-État au **22 septembre 2026** : le runtime source propose exactement trois choix pour une nouvelle entreprise : **Lead Gen Agency** (`lead-gen-agency`), **Service-based Business** (`service-based-business`) et **Software** (`software`). Les identifiants historiques **Company OS** et **E-commerce** restent reconnus uniquement pour rouvrir sans migration les espaces locaux qui y sont déjà liés.
+État au **26 septembre 2026** : le runtime source propose quatre choix pour une nouvelle entreprise : **Lead Gen Agency** (`lead-gen-agency`), **Service-based Business** (`service-based-business`), **Software** (`software`) et **Company OS** (`company-os`). **E-commerce** reste reconnu pour les espaces historiques.
 
-La release publique v0.3.0-preview.2 décrite ci-dessous est plus ancienne : son application empaquetée expose encore Agency et E-commerce. Elle ne prouve pas le parcours empaqueté des trois choix actuels. Le runtime courant possède ses tests TypeScript ; une validation de l’application empaquetée reste une preuve séparée.
+La release publique v0.3.0-preview.2 décrite ci-dessous est plus ancienne : son application empaquetée expose encore Agency et E-commerce. Elle ne prouve pas le parcours empaqueté des quatre choix actuels, de QuickChat ou de la continuité. Le dépôt source courant reste privé pendant cette préversion. Le runtime possède ses tests TypeScript ; une validation de l’application empaquetée reste une preuve séparée.
 
 ## Télécharger BizOS ou compiler ses sources
 
@@ -14,7 +14,7 @@ La [release v0.3.0-preview.2](https://github.com/gquthier/leadfactory-oss/releas
 
 Décompressez l’application, placez-la dans le dossier de votre choix puis ouvrez BizOS. Sélectionnez le **mode local** dans les réglages si l’app démarre en mode cloud. macOS peut demander une autorisation manuelle pour cette preview non notarisée. Les binaires Intel, Windows et Linux ne sont pas fournis ni validés dans cette version. Le cockpit autonome reste utilisable avec Node.js.
 
-Pour reconstruire l’application, extrayez l’archive de sources desktop à côté du clone `leadfactory-oss`, puis suivez son `BUILD-BUSINESS-TEMPLATES.md`. Le runtime et les skills proviennent de ce dépôt public ; aucun accès à un dépôt privé n’est nécessaire.
+Pour reconstruire cette ancienne preview, extrayez l’archive de sources desktop à côté du clone correspondant, puis suivez son `BUILD-BUSINESS-TEMPLATES.md`. Le runtime courant du 26 septembre est dans ce dépôt privé ; l’ancienne archive ne l’inclut pas.
 
 ## Plusieurs entreprises sur le même Mac
 
@@ -28,11 +28,11 @@ Pendant une tâche, **Stop remplace le bouton emoji** dans la zone de message. I
 
 ## Choisir son template et son coffre
 
-Pour une nouvelle entreprise, les sources actuelles proposent, dans cet ordre, **Lead Gen Agency**, **Service-based Business** et **Software**. Dans **Apps**, choisissez le modèle puis un nouveau coffre ou un dossier déjà partagé. La liaison est enregistrée avant le premier effet de l’installation et reste fixe pour cet espace ; un autre modèle ou coffre est refusé, y compris via l’API. Après une interruption entre la liaison et le journal d’installation, le redémarrage reprend le même modèle dans le même coffre. Un coffre déplacé, illisible ou remplacé par un lien symbolique ne provoque ni repli vers un autre dossier ni autorisation plus large.
+Pour une nouvelle entreprise, les sources actuelles proposent **Lead Gen Agency**, **Service-based Business**, **Software** et **Company OS**. Dans **Apps**, choisissez le modèle puis un nouveau coffre ou un dossier déjà partagé. La liaison est enregistrée avant le premier effet de l’installation et reste fixe pour cet espace ; un autre modèle ou coffre est refusé, y compris via l’API. Après une interruption entre la liaison et le journal d’installation, le redémarrage reprend le même modèle dans le même coffre. Un coffre déplacé, illisible ou remplacé par un lien symbolique ne provoque ni repli vers un autre dossier ni autorisation plus large.
 
-Chaque nouveau clone installe **un seul CEO et son DM**, sans autre agent ni groupe. Lead Gen Agency conserve ses 23 skills, Service-based Business ses processus de qualification à facturation, et Software le second cerveau Ops. Les rôles spécialistes sont conservés sous `Roles/<slug>/role.json` et `system.md` ; `source.md` archive les prompts originaux. Le CEO choisit un rôle quand une mission l’exige. Aucun compte, connecteur ou planning ne devient actif par clonage. Les anciennes installations et les journaux d’installation antérieurs conservent leur équipe complète. Les fichiers sont visibles dans **Second cerveau → Dossier**, notamment `Agents/`, `Processes/`, `Clients/`, `Projects/`, `Deliverables/`, `knowledge/`, `scripts/` ou les dossiers propres au modèle. Une reprise ajoute les fichiers manquants et conserve les éditions de l’utilisateur.
+Chaque nouveau clone installe **un seul CEO et son DM**, sans autre agent ni groupe. Lead Gen Agency fournit 26 skills ; Service-based Business, Software et Company OS installent leurs notes et rôles adaptés. Les rôles spécialistes sont conservés sous `Roles/<slug>/role.json` et `system.md` ; `source.md` archive les prompts originaux. Le CEO choisit un rôle quand une mission l’exige. Aucun compte, connecteur ou planning ne devient actif par clonage. Les anciennes installations et les journaux d’installation antérieurs conservent leur équipe complète. Les fichiers sont visibles dans **Second cerveau → Dossier**, notamment `Agents/`, `Processes/`, `Clients/`, `Projects/`, `Deliverables/`, `knowledge/`, `scripts/` ou les dossiers propres au modèle. Une reprise ajoute les fichiers manquants et conserve les éditions de l’utilisateur.
 
-Les anciens espaces liés à Company OS ou E-commerce conservent leur identifiant, leur coffre, leurs agents et leurs données. Ils restent ouvrables mais ne sont ni renommés, ni convertis, ni proposés comme choix de création d’une nouvelle entreprise.
+Les anciens espaces Company OS et E-commerce conservent leur identifiant, leur coffre, leurs agents et leurs données. E-commerce n’est pas proposé comme nouveau choix de création.
 
 ## Dashboard intégré et agents
 

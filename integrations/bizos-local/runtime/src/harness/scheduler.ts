@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import type { Storage } from "./storage.js";
 // Local routines. They only run while Local BizOS is open — this is a
 // desktop app, not a server — so the scheduler says so honestly: a window
 // that passed while the app was closed runs ONCE, late, and the prompt says
@@ -55,6 +57,7 @@ function nextWindow(trigger: RoutineTrigger, from: Date): Date | null {
 }
 
 export interface SchedulerDependencies {
+  storage?: Storage;
   routines: RoutineStore;
   clock: Clock;
   /** Preparation that may yield (session refresh today). Eligibility is
@@ -64,10 +67,12 @@ export interface SchedulerDependencies {
   onExpired?(routine: Routine): void;
   /** A clear refusal when the routine's owner cannot execute. */
   ineligibleReason?(routine: Routine): string | null;
+  /** Durable deduplication can return a run that settled before this boot. */
+  isRunTerminal?(runId: string): boolean;
   /** Start a routine turn. Returns the run it started, so a manual run and
    * a scheduled one are literally the same code path — `runNow` used to
    * bypass every piece of bookkeeping below. */
-  fire(input: { routine: Routine; missed: boolean; final?: boolean }): Promise<{ runId: string } | undefined> | ({ runId: string } | undefined);
+  fire(input: { routine: Routine; missed: boolean; final?: boolean; occurrenceId?: string }): Promise<{ runId: string } | undefined> | ({ runId: string } | undefined);
 }
 
 export class Scheduler {
@@ -108,7 +113,30 @@ export class Scheduler {
     }
   >();
 
-  constructor(private readonly deps: SchedulerDependencies) {}
+  private occurrences: Record<string,{input:{routine:Routine;missed:boolean;final?:boolean;occurrenceId:string};schedule:{lastRunAt:string;nextRunAt:string|null;running:boolean;enabled?:boolean};runId?:string;done?:boolean}>;
+  constructor(private readonly deps: SchedulerDependencies) {this.occurrences=deps.storage?.readJsonStrict("routine-occurrences.json",{})??{};}
+  private writeOccurrence(id:string,record:typeof this.occurrences[string]):void {const next={...this.occurrences,[id]:record};const settled=Object.entries(next).filter(([,row])=>row.done);for(const [key] of settled.slice(0,Math.max(0,settled.length-512)))delete next[key];this.deps.storage?.writeJson("routine-occurrences.json",next);this.occurrences=next;}
+  private async recover():Promise<void>{
+    for(const [id,record] of Object.entries(this.occurrences)){
+      if(record.done||!this.running)continue;
+      const current=this.deps.routines.get(record.input.routine.id);if(!current||this.ineligibleReason(current))continue;
+      if(this.inFlight.has(current.id))continue;
+      const token=Symbol(current.id);
+      this.inFlight.set(current.id,{token});
+      try {
+        const next=computeNextRun(current.trigger,this.deps.clock.now(),current.endsAt);
+        this.deps.routines.setSchedule(current.id,{...record.schedule,nextRunAt:next?.toISOString()??null,...(!next?{enabled:false}:{})});
+        const result=await this.deps.fire(record.input);
+        this.writeOccurrence(id,{...record,...(result?{runId:result.runId}:{}),done:true});
+        const held=this.inFlight.get(current.id);
+        if(!result || held?.settledEarly?.has(result.runId) || this.deps.isRunTerminal?.(result.runId)) this.release(current.id,token);
+        else if(held?.token===token)held.runId=result.runId;
+      } catch(error) {
+        this.release(current.id,token);
+        throw error;
+      }
+    }
+  }
 
   /** Bring every schedule up to date, then start ticking.
    *
@@ -118,8 +146,9 @@ export class Scheduler {
   start(): void {
     if (this.running) return;
     this.running = true;
-    this.catchUp();
-    this.schedule();
+    if(Object.values(this.occurrences).some(row=>!row.done)) {
+      void this.recover().then(()=>{if(this.running){this.catchUp();this.schedule();}}).catch(()=>{if(this.running)this.schedule();});
+    } else {this.catchUp();this.schedule();}
   }
 
   stop(): void {
@@ -281,6 +310,11 @@ export class Scheduler {
       const next = computeNextRun(current.trigger, now, current.endsAt);
       // The end, not the trigger, is why nothing follows: this is the last check.
       const final = Boolean(current.endsAt && !next && computeNextRun(current.trigger, now));
+      const occurrenceId=manual?randomUUID():`${current.id}:${current.nextRunAt??now.toISOString()}`;
+      const occurrence={input:{routine:current,missed,...(final?{final}:{}),occurrenceId},schedule:{lastRunAt:now.toISOString(),nextRunAt:next?next.toISOString():null,running:true,...(next?{}:{enabled:false})}};
+      // Write the full command before moving the schedule. Recovery reuses
+      // the occurrence ID, so a lost enqueue response cannot fire twice.
+      this.writeOccurrence(occurrenceId,occurrence);
       this.deps.routines.setSchedule(current.id, {
         lastRunAt: now.toISOString(),
         nextRunAt: next ? next.toISOString() : null,
@@ -294,7 +328,8 @@ export class Scheduler {
       });
       // Marked expired when this last run SETTLES (see `settle`), so the
       // "routine ended" line follows its final report instead of preceding it.
-      const started = await this.deps.fire({ routine: current, missed, ...(final ? { final } : {}) });
+      const started = await this.deps.fire({ routine: current, missed, ...(final ? { final } : {}), occurrenceId });
+      this.writeOccurrence(occurrenceId,{...occurrence,...(started?{runId:started.runId}:{}),done:true});
       // Nothing started (the bot is gone): the lock goes back immediately, or
       // the routine could never be run again without a restart.
       if (!started) {
@@ -306,7 +341,7 @@ export class Scheduler {
       // returning is the turn being QUEUED, not the turn being over.
       const held = this.inFlight.get(routine.id);
       if (held?.token === token) {
-        if (held.settledEarly?.has(started.runId)) {
+        if (held.settledEarly?.has(started.runId) || this.deps.isRunTerminal?.(started.runId)) {
           // This run was already over before its name got here (the dispatcher
           // refuses a turn — a deleted bot, a Stop — inside the enqueue). The
           // lock it was going to hold is handed back now, or the routine would

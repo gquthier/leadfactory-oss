@@ -2,6 +2,7 @@
 // message per line. A snapshot is the tail of that file; older pages walk
 // backwards from a cursor. Appending never rewrites history, so a crash
 // mid-turn costs at most the line being written.
+import type { ConversationContinuity } from "./continuity-sync.js";
 import type { Clock } from "./clock.js";
 import { newMessageId } from "./ids.js";
 import type { Storage } from "./storage.js";
@@ -48,14 +49,56 @@ export class ThreadStore {
   constructor(
     private readonly storage: Storage,
     private readonly clock: Clock,
+    private readonly continuity?: ConversationContinuity,
     private readonly hooks?: { assertAccessible(threadId: string): void; onWrite(message: ThreadMessage): void },
   ) {}
 
   private rows(threadId: string): ThreadMessage[] {
     this.hooks?.assertAccessible(threadId);
-    return collapseMessages(
-      this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage),
-    );
+    const rows = this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage);
+    const canonical = this.continuity?.projection(threadId) ?? [];
+    if (!canonical.length) return collapseMessages(rows);
+    const ids = new Set(canonical.map(row => row.id));
+    const local = new Map<string, ThreadMessage>();
+    const after = new Map<string | null, ThreadMessage[]>();
+    let anchor: string | null = null;
+    for (const row of collapseMessages(rows)) {
+      local.set(row.id, row);
+      if (ids.has(row.id)) anchor = row.id;
+      else {
+        const recorded = this.continuity!.store.projectionAnchor(threadId, row.id);
+        const position = recorded === undefined ? anchor : recorded;
+        after.set(position, [...(after.get(position) ?? []), row]);
+      }
+    }
+    // Pre-link history precedes the linked archive. Local-only draft/control
+    // rows keep their position after the preceding shared message. Canonical
+    // ordering applies inside the archive; UI seq covers the whole projection.
+    const merged: ThreadMessage[] = [];
+    const seen = new Set<string>();
+    const append = (row: ThreadMessage): void => {
+      const stack = [row];
+      while (stack.length) {
+        const next = stack.pop()!;
+        if (seen.has(next.id)) continue;
+        seen.add(next.id);
+        merged.push(next);
+        const children = after.get(next.id) ?? [];
+        for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]!);
+      }
+    };
+    for (const row of after.get(null) ?? []) append(row);
+    for (const row of canonical) {
+      const original = local.get(row.id);
+      append(original ? {
+        ...original,
+        ...row,
+        createdAt: original.createdAt,
+        blocks: [...row.blocks, ...original.blocks.filter(block => block.kind !== "text"
+          && !(block.kind === "meta" && block.text === "Saved on this computer; awaiting synchronization."))],
+      } : row);
+    }
+    return merged.map((row, index) => ({ ...row, seq: index + 1 }));
   }
 
   /** Highest seq on disk, by a loop — never a spread into `Math.max`. */
@@ -67,9 +110,9 @@ export class ThreadStore {
     return highest;
   }
 
-  private nextSeq(threadId: string): number {
+  private nextSeq(threadId: string, projectedHead = 0): number {
     const cached = this.sequences.get(threadId);
-    const next = (cached ?? this.highestOnDisk(threadId)) + 1;
+    const next = Math.max(cached ?? this.highestOnDisk(threadId), projectedHead) + 1;
     this.sequences.set(threadId, next);
     return next;
   }
@@ -137,10 +180,11 @@ export class ThreadStore {
     },
   ): ThreadMessage {
     this.hooks?.assertAccessible(threadId);
+    const tail = this.continuity?.linked(threadId) ? this.rows(threadId).at(-1) : undefined;
     const message: ThreadMessage = {
       id: input.id ?? newMessageId(),
       threadId,
-      seq: this.nextSeq(threadId),
+      seq: this.nextSeq(threadId, tail?.seq),
       role: input.role,
       ...(input.deliveryState ? { deliveryState: input.deliveryState } : {}),
       blocks: input.blocks,
@@ -150,6 +194,8 @@ export class ThreadStore {
       ...(input.links?.length ? { links: input.links } : {}),
       createdAt: this.clock.nowIso(),
     };
+    this.continuity?.store.anchorProjection(threadId, message.id, tail?.id ?? null);
+    this.continuity?.capture(message);
     this.storage.appendNdjson(this.storage.threadPath(threadId), message);
     this.hooks?.onWrite(message);
     return message;
@@ -159,6 +205,7 @@ export class ThreadStore {
    * append-only — a later line for the same id wins on read. */
   replace(message: ThreadMessage): ThreadMessage {
     this.hooks?.assertAccessible(message.threadId);
+    this.continuity?.capture(message);
     this.storage.appendNdjson(this.storage.threadPath(message.threadId), message);
     this.hooks?.onWrite(message);
     return message;
@@ -174,6 +221,7 @@ export class ThreadStore {
    * codex resume cursor is the dispatcher's half of the same promise. */
   clear(target: ThreadTarget, strict = false): void {
     const threadId = threadIdForTarget(target);
+    if (this.continuity?.linked(threadId)) throw new Error("A linked conversation cannot be cleared locally; its server archive is still retained.");
     if (strict) this.storage.purgeThreadPreviews(threadId);
     this.storage.removeFile(this.storage.threadPath(threadId), strict);
     this.storage.removeFile(this.storage.nativePath(threadId), strict);

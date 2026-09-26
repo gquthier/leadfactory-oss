@@ -101,6 +101,15 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
     expect(readFileSync(join(temp, "state", "runtime", "expired-quick-chats.json"), "utf8")).toContain(expiredId);
   });
 
+  it("rejects continuity link and attach for QuickChat at the HTTP boundary", async () => {
+    for (const operation of ["link", "attach"]) {
+      const result = await api("POST", `/api/local/continuity/${operation}`, {
+        threadId: `chat:${expiredId}`, agentId: "agent", audience: "private", title: "QuickChat", conversationId: "conversation",
+      });
+      expect(result.status).toBe(400);
+    }
+  });
+
   it("requires the workspace bearer, creates chats without bots and keeps requests idempotent", async () => {
     expect((await api("GET", "/api/local/quick-chats", undefined, "")).status).toBe(401);
     const before = await api("GET", "/api/collaboration/bootstrap");

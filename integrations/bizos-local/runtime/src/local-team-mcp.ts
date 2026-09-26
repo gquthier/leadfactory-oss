@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { AGENCY_TOOL_SPECS, isAgencyToolName } from "./harness/agency-tools.js";
 import { COMMERCE_TOOL_SPECS, isCommerceToolName } from "./harness/commerce-tools.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
+import { CONTINUITY_MCP_OPERATIONS, PUBLISH_CONVERSATION_ARTIFACT, READ_CONVERSATION_ARTIFACT, READ_CONVERSATION_ARCHIVE } from "./continuity-tools.js";
 
 type Json = Record<string, unknown>;
 type TeamCall = (input: Json) => Promise<unknown>;
@@ -28,6 +29,9 @@ export function toolsetsFromArgv(argv: readonly string[]): Set<string> {
 const CLOUD_NOTE = "Cloud computer (Linux, shared by the user's agents; your folder and Chrome profile there are yours alone). Wake it when you need it, sleep it when done.";
 const CLOUD_TOOL_NAMES = new Set(["cloud_computer_wake", "cloud_computer_sleep", "cloud_computer_status", "cloud_computer_run", "cloud_browser_fetch"]);
 
+export const CONTINUITY_TOOL_SPECS = [PUBLISH_CONVERSATION_ARTIFACT, {
+  name: "list_accessible_computers", description: "List physical BizOS installations granted to this conversation agent. Presence and runtimes are declarations; an offline machine cannot supply files or CLI.", inputSchema: {type:"object",properties:{},additionalProperties:false},
+}, READ_CONVERSATION_ARCHIVE, READ_CONVERSATION_ARTIFACT];
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
   description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain.",
@@ -271,8 +275,15 @@ function textResult(value: unknown, isError = false, max = MAX_RESULT_CHARS): Js
     ...(isError ? { isError: true } : {}),
   };
 }
+function continuityResult(value: unknown): Json {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (text.length > MAX_PACK_RESULT_CHARS)
+    throw new Error("Conversation tool result exceeds 64,000 characters. Request a smaller page; the result was not truncated or returned as success.");
+  return { content: [{ type: "text", text }] };
+}
 
 export interface LocalTeamMcpOptions {
+  continuity?(tool: string, input: Json): Promise<unknown>;
   /** The pack invoker, when this server was mounted with the `agency` or
    * `commerce` toolset; `null` (the default) lists and routes the team tools only. */
   pack?: TeamCall | null;
@@ -320,7 +331,7 @@ export async function handleLocalTeamMessage(
   if (method === "notifications/initialized" || method === "notifications/cancelled") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") {
-    const teamTools = LOCAL_TEAM_TOOL_SPECS.map((tool) => ({
+    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !toolsets.has("continuity") || !["recruit_agent","cloud_computer_run","schedule_routine"].includes(tool.name)).map((tool) => ({
       ...tool,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: isCloudToolName(tool.name) },
     }));
@@ -339,13 +350,19 @@ export async function handleLocalTeamMessage(
         annotations: { readOnlyHint: tool.name === "computer_observe", destructiveHint: false, idempotentHint: false, openWorldHint: true },
       }))
       : [];
-    return reply({ tools: [...teamTools, ...packTools, ...computerTools] });
+    return reply({ tools: [...teamTools, ...packTools, ...computerTools, ...(toolsets.has("continuity") ? CONTINUITY_TOOL_SPECS : [])] });
   }
   if (method === "tools/call") {
     try {
       if (params.name === "recruit_agent") return reply(textResult(await invokeRecruit((params.arguments ?? {}) as Json)));
       if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
+      if (toolsets.has("continuity")) {
+        const operation = Object.entries(CONTINUITY_MCP_OPERATIONS).find(([,name]) => name === params.name)?.[0];
+        if (operation) return reply(continuityResult(await (options.continuity
+          ? options.continuity(String(params.name), (params.arguments ?? {}) as Json)
+          : callEndpoint(`/api/internal/local-team/${operation}`, (params.arguments ?? {}) as Json))));
+      }
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
       if (params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
       if (params.name === "offer_quick_replies") return reply(textResult(await invokeQuickReplies((params.arguments ?? {}) as Json)));

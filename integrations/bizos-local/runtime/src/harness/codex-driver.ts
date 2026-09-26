@@ -136,6 +136,9 @@ export interface CodexDynamicTool {
 
 export type RuntimeEvent =
   | { type: "turn.started" }
+  | { type: "context.sent" }
+  | { type: "context.confirmed" }
+  | { type: "capabilities.verified"; supervised: boolean; tools: string[] }
   | { type: "session.started"; sessionId: string | null; model: string | null;
       /** Codex only: `thread/resume` succeeded, so `resumedSystem` was sent. */
       resumed?: boolean }
@@ -533,6 +536,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
         pending.set(id, {
           resolve: (value) => {
             clearTimeout(timer);
+            if (method === "turn/start") emit({type:"context.confirmed"});
             resolve(value);
           },
           reject: (error) => {
@@ -990,6 +994,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
               ? await workspaceWritePolicy(request, input.cwd, writableRoots)
               : { type: "readOnly" };
 
+        emit({ type: "context.sent" });
         await request("turn/start", {
           threadId: codexThreadId,
           input: [
