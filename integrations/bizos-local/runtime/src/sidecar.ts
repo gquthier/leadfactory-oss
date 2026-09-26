@@ -70,6 +70,7 @@ import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-sta
 import { LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
+import { RemoteNativeComputerBackend } from "./computer/remote-native.js";
 import { Storage } from "./harness/storage.js";
 import { AgencyService } from "./harness/agency.js";
 import { EcommerceService } from "./harness/ecommerce.js";
@@ -102,6 +103,7 @@ const logPath = join(stateRoot, "sidecar.log");
 const lockPath = join(stateRoot, "sidecar.lock");
 const action = process.argv[2] ?? "status";
 const MAX_BODY_BYTES = 64 * 1024;
+const NATIVE_COMPUTER_DESCRIPTOR_VARIABLE = "LOCALBIZOS_NATIVE_COMPUTER_DESCRIPTOR";
 
 interface Descriptor {
   version: 1;
@@ -3022,9 +3024,18 @@ async function serve(): Promise<void> {
     log: (line) => process.stderr.write(`[localbizos] ${line}\n`),
   });
   cloud = cloudComputer;
+  let computerWorkspaceFor = (botId: string): string => join(harnessRoot, "workspaces", botId);
+  const nativeDescriptorPath = process.env[NATIVE_COMPUTER_DESCRIPTOR_VARIABLE]?.trim();
+  const nativeComputer = nativeDescriptorPath
+    ? new RemoteNativeComputerBackend({
+        descriptorPath: resolve(nativeDescriptorPath),
+        workspaceFor: (botId) => computerWorkspaceFor(botId),
+      })
+    : undefined;
   const harness: LocalBizosHarness = new LocalBizosHarness({
     rootDir: harnessRoot,
     cloudComputer,
+    ...(nativeComputer ? { computerBackend: nativeComputer } : {}),
     baseUrl: origin,
     readSessionCookie: async () => "",
     orgName: () => "Local workspace",
@@ -3130,6 +3141,7 @@ async function serve(): Promise<void> {
         recruitment: "autonomous-local-tools",
       }),
   });
+  computerWorkspaceFor = (botId) => harness.computerWorkspaceFor(botId);
   // The packs share this harness: their agents are roster bots the generic
   // installer made, their cockpits run on demand in the bound vault and
   // close with the sidecar.

@@ -31,7 +31,7 @@ import { richToolResult, type RichToolResult } from "./tool-result.js";
 import type { ComputerHost } from "../computer/host.js";
 import { ComputerManager, type ComputerEvent } from "../computer/manager.js";
 import { NativeComputerBackend } from "../computer/native.js";
-import type { ComputerState } from "../computer/types.js";
+import type { ComputerState, ManagedComputerBackend } from "../computer/types.js";
 import { systemClock, type Clock } from "./clock.js";
 import { DeviceAgent, TASK_TIMEOUT_MS } from "./device-agent.js";
 import { codexCandidates, codexPathForId, probeCodexStatus, requireCodexPath } from "./codex-status.js";
@@ -322,6 +322,10 @@ export interface HarnessOptions {
    * for every unit test, and it is why this is an option rather than an import.
    */
   computerHost?: ComputerHost;
+  /** Native computer implemented by another trusted local process (the
+   * Electron main process in the packaged desktop). The ComputerManager still
+   * owns active-turn and signed-in-host approval policy in this process. */
+  computerBackend?: ManagedComputerBackend;
   /**
    * The workspace's shared cloud computer (`computer/cloud.ts`). When it is
    * given, a configured Boat key and a plan that allows it make each agent's
@@ -654,7 +658,7 @@ export class LocalBizosHarness {
           autoApproveReads: this.settingsStore.get().local.autoApproveReads,
           // One token per spawn, bound to THIS bot. There is nothing in the
           // child's environment that could name another agent's machine.
-          ...(this.computerBroker && options.computerHost && !bot.id.startsWith("qchat_")
+          ...(this.computerBroker && (options.computerHost || options.computerBackend) && !bot.id.startsWith("qchat_")
             ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue(bot.id) } }
             : {}),
         });
@@ -734,7 +738,7 @@ export class LocalBizosHarness {
     // host in the SAME approvals file as every other standing grant, so
     // Settings → Approvals lists it and `bots.clearApprovals` revokes it with
     // no extra code on either side.
-    const nativeComputer = options.computerHost
+    const nativeComputer = options.computerBackend ?? (options.computerHost
       ? new NativeComputerBackend({
           host: options.computerHost,
           workspaceFor: (botId) => {
@@ -746,7 +750,7 @@ export class LocalBizosHarness {
           onFrame: (botId, frame) => this.computerManager.onFrame(botId, frame),
           onStateChanged: (botId) => this.computerManager.publishStatus(botId),
         })
-      : null;
+      : null);
     this.boatComputer = options.cloudComputer
       ? new BoatComputerBackend({
           machine: options.cloudComputer,
@@ -943,7 +947,7 @@ export class LocalBizosHarness {
   /** The loopback broker the `bizos_computer` tools reach the machine through.
    * Started at most once, and only when this build has a machine at all. */
   private async ensureComputerBroker(): Promise<ComputerBroker | null> {
-    if (!this.options.computerHost) return null;
+    if (!this.options.computerHost && !this.options.computerBackend) return null;
     if (this.computerBroker) return this.computerBroker;
     if (!this.computerBrokerStarting) {
       this.computerBrokerStarting = startComputerBroker({ manager: this.computerManager })
@@ -3393,7 +3397,14 @@ export class LocalBizosHarness {
   /** Whether this build can give its agents a computer right now: the
    * native one (Electron), or a configured cloud computer. */
   computerToolsAvailable(): boolean {
-    return Boolean(this.options.computerHost) || Boolean(this.boatComputer?.usable());
+    return Boolean(this.options.computerHost || this.options.computerBackend) || Boolean(this.boatComputer?.usable());
+  }
+
+  /** The verified folder this harness already assigned to the bot. Used by a
+   * native bridge so downloads land under the same agent workspace. */
+  computerWorkspaceFor(botId: string): string {
+    const bot = this.botStore.get(botId);
+    return bot ? this.workspaceFor(bot) : this.storage.workspacePath(botId);
   }
 
   /**
@@ -3403,7 +3414,7 @@ export class LocalBizosHarness {
    */
   async computerTool(botId: string, name: string, args: unknown): Promise<RichToolResult> {
     if (!isComputerToolName(name)) return richToolResult(`Unknown computer tool: ${name}`);
-    if (this.boatComputer && !this.options.computerHost && !this.boatComputer.usable()) {
+    if (this.boatComputer && !this.options.computerHost && !this.options.computerBackend && !this.boatComputer.usable()) {
       throw new Error(this.options.cloudComputer?.isConfigured() ? NOT_ALLOWED_MESSAGE : NOT_CONFIGURED_MESSAGE);
     }
     const input = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
