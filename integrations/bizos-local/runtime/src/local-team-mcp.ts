@@ -1,3 +1,4 @@
+import { localComputerEnabled, assertLocalComputerEnabled } from "./computer/release.js";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENCY_TOOL_SPECS, isAgencyToolName } from "./harness/agency-tools.js";
@@ -331,7 +332,7 @@ export async function handleLocalTeamMessage(
   if (method === "notifications/initialized" || method === "notifications/cancelled") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") {
-    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !toolsets.has("continuity") || !["recruit_agent","cloud_computer_run","schedule_routine"].includes(tool.name)).map((tool) => ({
+    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => localComputerEnabled() || !isCloudToolName(tool.name)).filter(tool => !toolsets.has("continuity") || !["recruit_agent","cloud_computer_run","schedule_routine"].includes(tool.name)).map((tool) => ({
       ...tool,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: isCloudToolName(tool.name) },
     }));
@@ -344,7 +345,7 @@ export async function handleLocalTeamMessage(
         annotations: { readOnlyHint: READ_ONLY_TOOL.test(tool.name), destructiveHint: false, idempotentHint: false, openWorldHint: false },
       }))
       : [];
-    const computerTools = toolsets.has("computer")
+    const computerTools = localComputerEnabled() && toolsets.has("computer")
       ? COMPUTER_TOOL_SPECS.map((tool) => ({
         ...tool,
         annotations: { readOnlyHint: tool.name === "computer_observe", destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -354,6 +355,7 @@ export async function handleLocalTeamMessage(
   }
   if (method === "tools/call") {
     try {
+      if (isCloudToolName(params.name) || isComputerToolName(params.name)) assertLocalComputerEnabled();
       if (params.name === "recruit_agent") return reply(textResult(await invokeRecruit((params.arguments ?? {}) as Json)));
       if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));

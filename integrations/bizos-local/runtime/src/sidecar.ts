@@ -1,3 +1,4 @@
+import { localComputerEnabled } from "./computer/release.js";
 import { desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
 import { isQuickChatThread } from "./harness/continuity.js";
@@ -2729,6 +2730,9 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname.startsWith("/api/internal/local-team/")) {
         const operation = url.pathname.slice("/api/internal/local-team/".length);
         const capability = teamBroker.authorize(bearer, {allowDuringVoice: operation === "cloud"});
+        if (!localComputerEnabled() && (operation === "computer" || operation === "cloud")) {
+          throw new HttpError(503, "computer_disabled", "Computer is unavailable in this release.");
+        }
         // A 128 KiB text payload can expand sixfold when JSON escapes control
         // characters. Only this explicit document route has the larger bound.
         const input = await bodyOf(request, operation === "publish-artifact" ? 1024 * 1024 : MAX_BODY_BYTES);
@@ -2828,6 +2832,9 @@ async function serve(): Promise<void> {
       }
       // An agent's computer as the desktop panel draws it: status, page and
       // its latest screen (the agent's own seat — never anybody else's).
+      if (!localComputerEnabled() && url.pathname.startsWith("/api/local/computer/")) {
+        throw new HttpError(503, "computer_disabled", "Computer is unavailable in this release.");
+      }
       const computerBot = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)$/);
       if (computerBot && method === "GET") {
         return sendJson(response, 200, await facade.computerState(computerBot, url.searchParams.get("full") === "1"));
@@ -3013,6 +3020,9 @@ async function serve(): Promise<void> {
         if (!cloud) throw new HttpError(503, "starting", "Local harness is starting.");
         const machine = cloud;
         const action = url.pathname.slice("/api/local/cloud-computer".length);
+        if (!localComputerEnabled() && !(method === "POST" && action === "/sleep")) {
+          throw new HttpError(503, "computer_disabled", "Computer is unavailable in this release.");
+        }
         try {
           if (method === "GET" && action === "") return sendJson(response, 200, await machine.status());
           if (method === "PUT" && action === "") {
@@ -3025,7 +3035,7 @@ async function serve(): Promise<void> {
           }
           if (method === "POST" && (action === "/wake" || action === "/sleep" || action === "/desktop")) {
             objectBody((await bodyOf(request)) ?? {}, []);
-            if (!(await facade.entitlement()).features.cloudComputer) throw new ProRequiredError("cloudComputer");
+            if (action !== "/sleep" && !(await facade.entitlement()).features.cloudComputer) throw new ProRequiredError("cloudComputer");
             if (action === "/wake") return sendJson(response, 200, await machine.wake());
             if (action === "/sleep") return sendJson(response, 200, await machine.sleep("owner"));
             return sendJson(response, 200, await machine.desktop());
@@ -3183,7 +3193,7 @@ async function serve(): Promise<void> {
       // Exchange the one-shot ticket inside the trusted host. Neither token
       // reaches Codex, its prompt, argv, environment, or the renderer.
       const session = teamBroker.exchange(teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }));
-      const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !tool.name.startsWith("read_conversation_")).map((tool) => ({
+      const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => localComputerEnabled() || !isCloudToolName(tool.name)).filter(tool => !tool.name.startsWith("read_conversation_")).map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,

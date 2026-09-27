@@ -1,3 +1,6 @@
+import { beforeEach as beforeReleaseCase, afterEach as afterReleaseCase, vi as releaseEnv } from "vitest";
+beforeReleaseCase(() => releaseEnv.stubEnv("BIZOS_LOCAL_COMPUTER_ENABLED", "true"));
+afterReleaseCase(() => releaseEnv.unstubAllEnvs());
 // The agents' computers as seats on ONE shared cloud computer (Boat), against
 // a fake machine that plays the helper's part: every tool call is a helper
 // run whose request is decoded and answered the way the real helper answers

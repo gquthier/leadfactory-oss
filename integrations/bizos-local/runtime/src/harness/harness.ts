@@ -1,3 +1,4 @@
+import { localComputerEnabled, assertLocalComputerEnabled } from "../computer/release.js";
 import { ConversationContinuity } from "./continuity-sync.js";
 import type { ContinuityTransport } from "../continuity-bridge.js";
 import { EntitlementStore, type Entitlement, type ProFeature } from "./entitlement.js";
@@ -3570,7 +3571,7 @@ export class LocalBizosHarness {
   /** Whether this build can give its agents a computer right now: the
    * native one (Electron), or a configured cloud computer. */
   computerToolsAvailable(): boolean {
-    return Boolean(this.options.computerHost || this.options.computerBackend) || Boolean(this.boatComputer?.usable());
+    return localComputerEnabled() && (Boolean(this.options.computerHost || this.options.computerBackend) || Boolean(this.boatComputer?.usable()));
   }
 
   /** The verified folder this harness already assigned to the bot. Used by a
@@ -3591,6 +3592,7 @@ export class LocalBizosHarness {
     args: unknown,
     scope: { threadId?: string; runId?: string } = {},
   ): Promise<RichToolResult> {
+    assertLocalComputerEnabled();
     if (!isComputerToolName(name)) return richToolResult(`Unknown computer tool: ${name}`);
     if (this.boatComputer && !this.options.computerHost && !this.options.computerBackend && !this.boatComputer.usable()) {
       throw new Error(this.options.cloudComputer?.isConfigured() ? NOT_ALLOWED_MESSAGE : NOT_CONFIGURED_MESSAGE);

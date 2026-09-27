@@ -1,3 +1,6 @@
+import { beforeEach as beforeReleaseCase, afterEach as afterReleaseCase, vi as releaseEnv } from "vitest";
+beforeReleaseCase(() => releaseEnv.stubEnv("BIZOS_LOCAL_COMPUTER_ENABLED", "true"));
+afterReleaseCase(() => releaseEnv.unstubAllEnvs());
 // The cloud computer against a FAKE Boat v1 HTTP server on loopback: the
 // real client, real fetch, a temp state dir, and a manual clock for the
 // auto-sleep timer. No real Boat account, no real profile directory.

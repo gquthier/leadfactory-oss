@@ -1,3 +1,4 @@
+import { localComputerEnabled, assertLocalComputerEnabled } from "./release.js";
 // The user's cloud computer: ONE Boat sandbox (https://boat.dev) per local
 // workspace, shared by all of the user's agents.
 //
@@ -103,6 +104,7 @@ export class BoatClient {
   }
 
   async request<T>(method: string, path: string, body?: unknown, options: { headers?: Record<string, string>; timeoutMs?: number } = {}): Promise<T> {
+    if (!(method === "POST" && /^\/sandboxes\/[^/]+\/stop$/.test(path))) assertLocalComputerEnabled();
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -409,6 +411,7 @@ export class CloudComputer {
   }
 
   private async requireAllowed(): Promise<void> {
+    assertLocalComputerEnabled();
     if (!(await this.options.isAllowed())) throw new CloudComputerError("pro_required", NOT_ALLOWED_MESSAGE);
   }
 
@@ -425,7 +428,7 @@ export class CloudComputer {
 
   /** Is the plan allowed to use it right now? */
   async allowed(): Promise<boolean> {
-    return Boolean(await this.options.isAllowed());
+    return localComputerEnabled() && Boolean(await this.options.isAllowed());
   }
 
   /** Something that must happen on the machine before it is stopped — the
@@ -448,6 +451,7 @@ export class CloudComputer {
    * save also clears this company's own key so the shared one is the one
    * in use. */
   setApiKey(value: unknown, scope: unknown = "company"): CloudComputerStatus {
+    assertLocalComputerEnabled();
     if (typeof value !== "string") throw new CloudComputerError("invalid_payload", "apiKey must be a string.");
     const key = value.trim();
     if (key.length > 500 || /\s/.test(key)) throw new CloudComputerError("invalid_payload", "apiKey is not a valid key.");
@@ -467,6 +471,7 @@ export class CloudComputer {
   }
 
   setSettings(input: { machineClass?: unknown; idleMinutes?: unknown }): CloudComputerStatus {
+    assertLocalComputerEnabled();
     if (input.machineClass !== undefined) {
       if (!isMachineClass(input.machineClass)) throw new CloudComputerError("invalid_payload", "machineClass must be small, default or large.");
       this.record.machineClass = input.machineClass;
@@ -503,6 +508,7 @@ export class CloudComputer {
 
   /** Live status from Boat. No secret in it: no key, no desktop URL. */
   async status(): Promise<CloudComputerStatus> {
+    if (!localComputerEnabled()) return this.localStatus(undefined, false, "Computer is unavailable in this release.");
     const allowed = Boolean(await this.options.isAllowed());
     if (!this.apiKey() || !this.record.sandboxId) return this.localStatus(undefined, allowed);
     try {
@@ -602,6 +608,13 @@ export class CloudComputer {
       this.dispose();
       const id = this.record.sandboxId;
       if (!id) return { state: "none", sandboxId: null, note: "There is no cloud computer yet." };
+      // When withdrawn, stop the existing machine directly. No browser helper,
+      // state polling or wake is needed to terminate compute.
+      if (!localComputerEnabled()) {
+        await client.stop(id);
+        for (const listener of [...this.sleepListeners]) { try { listener(); } catch {} }
+        return { state: "archiving", sandboxId: id, note: "Computer stopped." };
+      }
       let state: string;
       try {
         state = (await client.get(id)).state;
@@ -733,6 +746,7 @@ export class CloudComputer {
 
   /** Put a file on the machine (it must be awake: call after `computerExec`). */
   async writeFile(path: string, content: string): Promise<void> {
+    assertLocalComputerEnabled();
     const id = this.record.sandboxId;
     if (!id) throw new CloudComputerError("machine_asleep", "The cloud computer is not running.");
     await this.client().writeFile(id, path, content);
@@ -776,6 +790,7 @@ export class CloudComputer {
   /** The agent tools. A refusal (free tier, no key) is a one-line result,
    * not an exception, so the agent can tell the person plainly. */
   async tool(botId: string, name: string, input: Record<string, unknown>): Promise<unknown> {
+    if (!localComputerEnabled() && name !== "cloud_computer_sleep") return { ok: false, error: "computer_disabled", message: "Computer is unavailable in this release." };
     if (!(await this.options.isAllowed())) return { ok: false, error: "pro_required", message: NOT_ALLOWED_MESSAGE };
     if (!this.apiKey()) return { ok: false, error: "not_configured", message: NOT_CONFIGURED_MESSAGE };
     if (name === "cloud_computer_wake") return this.wake();
