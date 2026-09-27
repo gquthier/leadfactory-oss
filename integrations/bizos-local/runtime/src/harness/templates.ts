@@ -65,7 +65,7 @@ import { LEAD_GEN_AGENCY } from "./template-lead-gen-agency.js";
 import { SERVICE_BASED_BUSINESS } from "./template-service-based-business.js";
 import { SOFTWARE } from "./template-software.js";
 import type { Bot } from "./types.js";
-import { contextNotes, parseCreationContext, type CreationContext } from "./onboarding.js";
+import { contextNotes, parseCreationContext, type ContextReference, type CreationContext } from "./onboarding.js";
 import { DEFAULT_KIT_ROOT, kitPresent, loadKit } from "./pack-kit.js";
 
 /** Every id this runtime must continue to understand on disk. E-commerce is a
@@ -364,6 +364,8 @@ export interface TemplateInstallation {
   onboardingCompletedAt?: string;
   /** Import was part of the first creation, never a late mutation. */
   contextImported?: true;
+  /** Live read-only source; legacy snapshots remain only in their vault. */
+  contextReference?: ContextReference;
 }
 
 /** One agent in the journal: its id, written before it exists. */
@@ -472,6 +474,8 @@ function installationOf(raw: unknown, id: TemplateId, binding: WorkspaceBinding 
   const bound = binding !== null && binding.templateId === id && raw.rootId === binding.rootId && raw.vaultPath === binding.path;
   if (!managed && !legacy && !bound) throw corrupt(`installation ${id} names a folder that is not its vault`);
   if (Object.keys(bots).some((slug) => !isSlug(slug))) throw corrupt(`installation ${id}`);
+  const contextReference = raw.contextReference === undefined ? undefined : parseCreationContext(raw.contextReference);
+  if (contextReference && (!("kind" in contextReference) || id !== "company-os" || !managed)) throw corrupt(`installation ${id} context reference`);
   return {
     id,
     version: raw.version,
@@ -485,6 +489,7 @@ function installationOf(raw: unknown, id: TemplateId, binding: WorkspaceBinding 
     ...(raw.creationMode === CEO_ON_DEMAND_CREATION ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
     ...(raw.onboardingVersion === 1 ? { onboardingVersion: 1 as const } : {}),
     ...(raw.contextImported === true ? { contextImported: true as const } : {}),
+    ...(contextReference ? { contextReference: contextReference as ContextReference } : {}),
     ...(typeof raw.onboardingCompletedAt === "string" && Number.isFinite(Date.parse(raw.onboardingCompletedAt)) ? { onboardingCompletedAt: raw.onboardingCompletedAt } : {}),
   };
 }

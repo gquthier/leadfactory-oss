@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { handleLocalTeamMessage } from "../src/local-team-mcp.js";
 
 describe("local team MCP", () => {
+  it("mounts bounded context tools only for an explicitly scoped local toolset", async () => {
+    const ordinary = await handleLocalTeamMessage({ id: 1, method: "tools/list" });
+    expect(JSON.stringify(ordinary)).not.toContain("read_context_file");
+    const context = vi.fn(async () => ({ bytesRead: 8, text: "example" }));
+    const scoped = await handleLocalTeamMessage({ id: 2, method: "tools/list" }, undefined, undefined, undefined, undefined,
+      { toolsets: new Set(["team", "context"]), context });
+    expect(JSON.stringify(scoped)).toContain("read_context_file");
+    const called = await handleLocalTeamMessage({ id: 3, method: "tools/call", params: { name: "read_context_file", arguments: { path: "brief.txt" } } },
+      undefined, undefined, undefined, undefined, { toolsets: new Set(["team", "context"]), context });
+    expect(context).toHaveBeenCalledWith({ tool: "read_context_file", arguments: { path: "brief.txt" } });
+    expect(JSON.stringify(called)).toContain("example");
+    const linked = await handleLocalTeamMessage({ id: 4, method: "tools/list" }, undefined, undefined, undefined, undefined,
+      { toolsets: new Set(["team", "context", "continuity"]), context });
+    expect(JSON.stringify(linked)).not.toContain("read_context_file");
+  });
   it("exposes only bounded local team management and returns persistent identifiers", async () => {
     const listed = await handleLocalTeamMessage({
       id: 1,

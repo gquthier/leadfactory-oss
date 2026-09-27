@@ -33,6 +33,15 @@ const CLOUD_TOOL_NAMES = new Set(["cloud_computer_wake", "cloud_computer_sleep",
 export const CONTINUITY_TOOL_SPECS = [PUBLISH_CONVERSATION_ARTIFACT, {
   name: "list_accessible_computers", description: "List physical BizOS installations granted to this conversation agent. Presence and runtimes are declarations; an offline machine cannot supply files or CLI.", inputSchema: {type:"object",properties:{},additionalProperties:false},
 }, READ_CONVERSATION_ARCHIVE, READ_CONVERSATION_ARTIFACT];
+export const CONTEXT_TOOL_SPECS = [{
+  name: "list_context_directory",
+  description: "List one bounded page of entries in the selected local project folder. Read-only, relative to that folder; no recursive scan. Follow the opaque nextCursor only when useful; it expires after five minutes and is consumed once. An empty page may have a continuation.",
+  inputSchema: { type: "object", properties: { path: { type: "string", description: "Relative folder path, or empty for the selected root." }, cursor: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, limit: { type: "integer", minimum: 1, maximum: 100 } }, additionalProperties: false },
+}, {
+  name: "read_context_file",
+  description: "Read up to 8192 bytes from one file in the selected local context, read-only. Paths are relative to the selected folder; for a single selected file use its exact displayed name. PDF and binary data are raw base64 byte pages, not parsed text.",
+  inputSchema: { type: "object", properties: { path: { type: "string" }, offset: { type: "integer", minimum: 0 }, maxBytes: { type: "integer", minimum: 1, maximum: 8192 } }, required: ["path"], additionalProperties: false },
+}] as const;
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
   description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain.",
@@ -284,6 +293,7 @@ function continuityResult(value: unknown): Json {
 }
 
 export interface LocalTeamMcpOptions {
+  context?: TeamCall;
   continuity?(tool: string, input: Json): Promise<unknown>;
   /** The pack invoker, when this server was mounted with the `agency` or
    * `commerce` toolset; `null` (the default) lists and routes the team tools only. */
@@ -312,6 +322,7 @@ export async function handleLocalTeamMessage(
   options: LocalTeamMcpOptions = {},
 ): Promise<Json | null> {
   const invokePack = options.pack ?? null;
+  const invokeContext = options.context ?? ((input: Json) => callEndpoint("/api/internal/local-team/context", input));
   const invokeCloud = options.cloud ?? callCloud;
   const invokeComputer = options.computer ?? callComputer;
   const invokeSend = options.send ?? callSend;
@@ -351,7 +362,7 @@ export async function handleLocalTeamMessage(
         annotations: { readOnlyHint: tool.name === "computer_observe", destructiveHint: false, idempotentHint: false, openWorldHint: true },
       }))
       : [];
-    return reply({ tools: [...teamTools, ...packTools, ...computerTools, ...(toolsets.has("continuity") ? CONTINUITY_TOOL_SPECS : [])] });
+    return reply({ tools: [...teamTools, ...packTools, ...computerTools, ...(toolsets.has("context") && !toolsets.has("continuity") ? CONTEXT_TOOL_SPECS.map(tool => ({...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }})) : []), ...(toolsets.has("continuity") ? CONTINUITY_TOOL_SPECS : [])] });
   }
   if (method === "tools/call") {
     try {
@@ -366,6 +377,7 @@ export async function handleLocalTeamMessage(
           : callEndpoint(`/api/internal/local-team/${operation}`, (params.arguments ?? {}) as Json))));
       }
       if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
+      if (toolsets.has("context") && !toolsets.has("continuity") && CONTEXT_TOOL_SPECS.some(tool => tool.name === params.name)) return reply(textResult(await invokeContext({ tool: params.name, arguments: params.arguments ?? {} }), false, MAX_PACK_RESULT_CHARS));
       if (params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
       if (params.name === "offer_quick_replies") return reply(textResult(await invokeQuickReplies((params.arguments ?? {}) as Json)));
       if (params.name === "propose_company_name") return reply(textResult(await invokeProposeName((params.arguments ?? {}) as Json)));

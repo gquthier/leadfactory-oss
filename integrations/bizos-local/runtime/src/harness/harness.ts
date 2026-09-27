@@ -15,6 +15,7 @@ import {
   type AccessPolicy,
   assertModeAllowed,
   canonicalizeSharedPath,
+  canonicalizeContextPath,
   defaultAccessPolicy,
   defaultSuggestions,
   deniedDirectories,
@@ -142,6 +143,7 @@ import {
   type WorkspaceTemplateProjection,
 } from "./templates.js";
 import { knownCompanyName, onboardingStatus as readOnboardingStatus, type OnboardingStatus } from "./onboarding.js";
+import { listContextDirectory, readContextFile } from "./context-reference.js";
 import { AGENCY_TOOLS_INSTRUCTIONS } from "./agency-tools.js";
 import { COMMERCE_TOOLS_INSTRUCTIONS } from "./commerce-tools.js";
 import { LEGACY_AGENCY_DIRECTORY, legacyAgencyVaultPath } from "./agency.js";
@@ -2100,6 +2102,7 @@ export class LocalBizosHarness {
       ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
       ...(pending.onboardingVersion === 1 ? { onboardingVersion: 1 as const } : {}),
       ...(creationOptions.context ? { contextImported: true as const } : {}),
+      ...(creationOptions.context && "kind" in creationOptions.context ? { contextReference: creationOptions.context } : {}),
     };
     this.updateRegistry((current) => {
       current.installations[id] = installation;
@@ -2172,6 +2175,13 @@ export class LocalBizosHarness {
   private async bindAndApply(templateId: TemplateId, rootId: string, options: CreationOptions = {}): Promise<TemplateApplyResult> {
     const checkedOptions = parseCreationOptions(options);
     if (checkedOptions.context && (templateId !== "company-os" || (rootId !== "new" && rootId !== vaultRootId(templateId)))) throw new BrainError("Imported context requires the Autonomous Company template in a new managed vault", "invalid_payload");
+    if (checkedOptions.context && "kind" in checkedOptions.context) {
+      const reference = checkedOptions.context;
+      canonicalizeContextPath(reference.sourcePath, reference.sourceKind, this.accessPolicy);
+      const stat = lstatSync(reference.sourcePath, { bigint: true });
+      if (stat.isSymbolicLink() || (reference.sourceKind === "file" ? !stat.isFile() : !stat.isDirectory()))
+        throw new BrainError("The selected context moved or changed. Choose it again.", "invalid_payload");
+    }
     return this.serialized(async () => {
       // A malformed built-in pack must fail before the durable one-way
       // binding exists. `applyTemplate` validates again at its own boundary.
@@ -3499,6 +3509,29 @@ export class LocalBizosHarness {
     return this.dispatcher.sendToChat(scope, raw);
   }
 
+  private contextReferenceForBot(botId: string) {
+    const bot = this.botStore.get(botId);
+    const binding = this.bindingOf();
+    if (!bot || bot.archived || binding?.templateId !== "company-os" || !this.verifiedBoundVaultPath(bot)) return null;
+    const installation = readTemplateRegistry(this.storage).installations["company-os"];
+    return installation?.contextReference && installation.vaultPath === vaultPathOf("company-os")
+      ? installation.contextReference : null;
+  }
+
+  contextToolsAvailableFor(botId: string): boolean {
+    try { return this.contextReferenceForBot(botId) !== null; } catch { return false; }
+  }
+
+  async contextTool(botId: string, name: string, args: unknown): Promise<unknown> {
+    const reference = this.contextReferenceForBot(botId);
+    if (!reference) throw new BrainError("This agent has no selected context reference in its local workspace.", "not_found");
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new BrainError("Context tool arguments must be an object.", "invalid_payload");
+    const input = args as Record<string, unknown>;
+    if (name === "list_context_directory") return listContextDirectory(reference, input, this.accessPolicy, `${this.storageRootRealPath}:${botId}`);
+    if (name === "read_context_file") return readContextFile(reference, input as {path: string; offset?: number; maxBytes?: number}, this.accessPolicy);
+    throw new BrainError("Unknown context tool.", "not_found");
+  }
+
   /** Only fresh onboarding installations opt into sequencing. Legacy company
    * journals and already active teams retain their original behavior. */
   onboardingStatus(botId: string): OnboardingStatus | null {
@@ -3521,7 +3554,9 @@ export class LocalBizosHarness {
       const row = current.installations[binding.templateId];
       if (row?.bots.ceo === botId && !row.onboardingCompletedAt) row.onboardingCompletedAt = this.clock.nowIso();
     });
-    return status;
+    return installed.contextReference && status.stage !== "ready"
+      ? { ...status, contextReference: { kind: installed.contextReference.sourceKind, label: installed.contextReference.sourceLabel } }
+      : status;
   }
 
   assertOnboardingRecruitment(scope: { botId: string; threadId: string; runId: string }): void {

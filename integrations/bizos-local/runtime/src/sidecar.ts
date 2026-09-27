@@ -72,7 +72,8 @@ import {
   type VoiceCallState,
 } from "./voice-tasks.js";
 import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-state.js";
-import { LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
+import { CONTEXT_TOOL_SPECS, LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
+import { ContextReferenceError } from "./harness/context-reference.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
 import { RemoteNativeComputerBackend } from "./computer/remote-native.js";
@@ -2752,6 +2753,14 @@ async function serve(): Promise<void> {
           if (operation === "send") return facade!.sendToChat(capability,input);
           if (operation === "quick-replies") return facade!.offerQuickReplies(capability,input);
           if (operation === "propose-name") return facade!.proposeCompanyName(capability,input);
+          if (operation === "context") {
+            if (harness.continuity.linked(capability.threadId) || !CONTEXT_TOOL_SPECS.some(tool => tool.name === parsed.tool)) throw new HttpError(403, "forbidden", "This local context tool is unavailable for this conversation.");
+            try { return await harness.contextTool(capability.botId, String(parsed.tool), parsed.arguments ?? {}); }
+            catch (error) {
+              if (error instanceof ContextReferenceError) throw new HttpError(409, "context_reference_unavailable", error.message);
+              throw error;
+            }
+          }
           if (operation === "agency" || operation === "pack") return facade!.packTool(capability,input);
           if (operation === "cloud") {
             if (!cloud || !isCloudToolName(parsed.tool)) throw new HttpError(404,"not_found","Unknown cloud computer tool.");
@@ -3240,7 +3249,18 @@ async function serve(): Promise<void> {
           },
         }))
         : [];
-      return [...teamTools, ...packTools, ...computerTools];
+      const contextTools = !harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id)
+        ? CONTEXT_TOOL_SPECS.map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema as unknown as Record<string, unknown>,
+          call: async (argumentsValue: unknown) => {
+            const capability = teamBroker.authorize(session);
+            if (harness.continuity.linked(capability.threadId)) throw new HttpError(403, "forbidden", "Local context is unavailable in a linked conversation.");
+            return harness.contextTool(capability.botId, tool.name, argumentsValue);
+          },
+        })) : [];
+      return [...teamTools, ...packTools, ...computerTools, ...contextTools];
     },
     // The same tools for Claude Code, which has no dynamic-tool slot:
     // a stdio MCP server, one per turn, holding a one-shot ticket that only
@@ -3251,7 +3271,7 @@ async function serve(): Promise<void> {
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
-        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}`,
+        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },

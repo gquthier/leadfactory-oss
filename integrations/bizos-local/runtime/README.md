@@ -181,32 +181,49 @@ Tests use temporary directories, injected clocks and scripted providers; they do
 not prove a native desktop build or deletion inside an external CLI provider.
 
 
-## Onboarding from business context (2026-09-26)
+## Onboarding from business context
 
 `POST /api/local/brain/templates/apply` accepts optional `companyName` and
-`context: { sourceLabel, files: [{ path, text }] }`, beside `owner.name` and
+`context: { kind: "reference", version: 1, sourceKind: "file" | "folder", sourcePath, sourceLabel, identity: { dev, ino } }`, beside `owner.name` and
 `language`. Context requires `company-os` in a new managed vault. Send all creation options
 in this first apply call; it already binds and installs atomically. Do not call
 `workspace-template/bind` first: that route installs immediately without creation
 options. A late context import into such an installation now returns 409 instead
 of silently claiming success. Read `workspace-template` afterward to verify the
-resulting binding. Electron owns
-the native picker and supplies a UTF-8 snapshot; the runtime never opens a
-caller-supplied source directory. The selected originals receive no writes or
-new access grants. `bootstrap.backend.companyName` exposes the current known
+resulting binding. Electron main owns the native picker and keeps the canonical
+path and filesystem identity private; the renderer sees only a sender-scoped
+opaque selection id, kind and label. Capture does not traverse or read the
+selected item. The runtime stores the reference with the local installation,
+then rechecks scope, identity and symlinks on each use. The selected originals
+receive no writes, parent grant or writable sandbox root. The CEO and agents
+working in that same bound Company OS vault can use `list_context_directory`
+and `read_context_file` through run-authorized local team tools. Directory
+lists return at most 100 entries and examine at most 1,000 entries per call,
+including exclusions. Opaque single-use cursors retain the iterator without
+rescanning earlier pages, scoped to the workspace, agent and selected directory.
+They expire after five minutes, with at most 32 open iterators; an expired cursor
+requires listing from the start. An empty page can still have a continuation.
+File reads are paged at 8192 bytes. PDF and
+other binary files yield raw base64 bytes, not parsed content. Moved or deleted
+sources require a new selection. Linked cloud conversations do not mount these
+tools. `bootstrap.backend.companyName` exposes the current known
 company name when it fits the 64-character workspace title (otherwise null), so Desktop may adopt it for a still-provisional workspace
-title without asking the person to name an existing business again. Limits: 80 files, 256 KiB per file, 512 KiB total, relative
+title without asking the person to name an existing business again.
+
+Historical snapshots and pending creation journals still accept the earlier
+`{ sourceLabel, files: [{ path, text }] }` contract. That legacy form has limits of 80 files, 256 KiB per file, 512 KiB total, relative
 paths up to 512 characters and individual names up to 255 UTF-8 bytes. Supported
 extensions: Markdown, MDX, text, JSON, CSV and YAML. Hidden/traversal paths,
 secrets, dependencies, instruction files, duplicates and binary text are refused.
-Only this apply route allows a 4 MiB JSON body to account for escaping; other
+The apply route retains its 4 MiB JSON body for historical snapshots; other
 routes keep their existing body limit.
 
-The private snapshot lives in `Knowledge/Imported Context/files/`, indexed by
-`Knowledge/Imported Context/README.md`. It is source evidence, not agent
-instructions or authorization. The creation journal records the snapshot before
-binding so startup can resume the same selection after a crash. Once installed,
-retries preserve user edits and do not post another welcome.
+Legacy snapshot files live in `Knowledge/Imported Context/files/`. A new
+reference writes only a bounded `Knowledge/Imported Context/README.md` index,
+without source bodies. Both forms are evidence, not instructions or new action
+authority. The creation journal records the chosen form before binding so
+startup can resume after a crash. Once installed, retries preserve user edits
+and do not post another welcome.
 
 Fresh installations opt into onboarding sequencing; historical journals and
 existing teams retain their original behavior. CEO reads supplied context,

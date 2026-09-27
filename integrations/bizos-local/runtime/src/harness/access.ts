@@ -201,6 +201,25 @@ export function canonicalizeSharedPath(raw: unknown, policy: AccessPolicy): stri
   return path;
 }
 
+/** A native-picked read-only context grants only this exact root. It does not
+ * create a Settings → Access grant or a writable sandbox root. */
+export function canonicalizeContextPath(raw: unknown, kind: "file" | "folder", policy: AccessPolicy): string {
+  if (typeof raw !== "string" || !raw.trim() || !isAbsolute(raw)) throw new AccessError("a context reference needs an absolute path");
+  const path = raw;
+  if (isNetworkPath(path)) throw new AccessError("network volumes cannot be shared — pick an item on this Mac");
+  assertNotDenied(path, policy);
+  let actual: string;
+  try { actual = policy.realpath(path); }
+  catch { throw new AccessError("The selected context moved or was deleted. Choose it again."); }
+  if (actual !== path) throw new AccessError("The selected context changed. Choose it again.");
+  if (isNetworkPath(actual)) throw new AccessError("network volumes cannot be shared — pick an item on this Mac");
+  assertNotDenied(actual, policy);
+  let matches = false;
+  try { matches = kind === "file" ? statSync(actual).isFile() : statSync(actual).isDirectory(); } catch { /* missing */ }
+  if (!matches) throw new AccessError("The selected context moved or was deleted. Choose it again.");
+  return actual;
+}
+
 /** Read is fine anywhere the deny list allows; WRITE is not. Checked at the
  * moment the mode is set, so it also covers "share read, then switch it". */
 export function assertModeAllowed(path: string, mode: AccessMode, policy: AccessPolicy): void {

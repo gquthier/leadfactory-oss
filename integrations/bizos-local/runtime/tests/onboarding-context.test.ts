@@ -1,4 +1,4 @@
-import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -42,6 +42,35 @@ describe("known company identity", () => {
 });
 
 describe("Autonomous Company from context", () => {
+  it("installs a live reference without copying bodies and lets only its local team page files", async () => {
+    const source = join(root, "Projet é space"); mkdirSync(source);
+    for (let i = 0; i < 81; i += 1) writeFileSync(join(source, `${i}.txt`), "context body ".repeat(1000));
+    const sourceStat = lstatSync(source);
+    const context = { kind: "reference" as const, version: 1 as const, sourceKind: "folder" as const,
+      sourcePath: source, sourceLabel: "Projet é space", identity: { dev: String(sourceStat.dev), ino: String(sourceStat.ino) } };
+    const { harness, facade, turns } = setup();
+    const applied = await facade.applyBrainTemplate({ id: "company-os", rootId: "new", owner: { name: "Ada" }, context }) as { bots: { ceo: string }; rootId: string };
+    const vault = (await harness.brain.roots()).find(row => row.id === applied.rootId)!.path;
+    const index = readFileSync(join(vault, "Knowledge/Imported Context/README.md"), "utf8");
+    expect(index).toContain("read_context_file");
+    expect(index).not.toContain("context body");
+    expect(readFileSync(join(source, "0.txt"), "utf8")).toBe("context body ".repeat(1000));
+    expect(harness.contextToolsAvailableFor(applied.bots.ceo)).toBe(true);
+    const page = await harness.contextTool(applied.bots.ceo, "read_context_file", { path: "0.txt", maxBytes: 64 }) as { bytesRead: number; text: string };
+    expect(page.bytesRead).toBe(64);
+    expect(page.text).toContain("context body");
+    await send(harness, applied.bots.ceo, "Start from my project.");
+    expect(turns[0]?.system).toContain("list_context_directory");
+    expect(turns[0]?.system).toContain("Projet é space");
+    const peer = await harness.bots.create({ name: "Local teammate" });
+    expect(harness.contextToolsAvailableFor(peer.id)).toBe(true);
+    const otherWorkspace = setup(join(root, "other-state")).harness;
+    expect(otherWorkspace.contextToolsAvailableFor(applied.bots.ceo)).toBe(false);
+    await expect(otherWorkspace.contextTool(applied.bots.ceo, "read_context_file", { path: "0.txt" })).rejects.toThrow();
+    const install = JSON.parse(readFileSync(join(root, "state/templates.json"), "utf8"));
+    expect(install.installations["company-os"].contextReference).toEqual(context);
+    expect(JSON.stringify(install).includes("context body")).toBe(false);
+  });
   it("creates only CEO, imports a private copy, records names, and preserves edits on retry", async () => {
     const { harness, facade } = setup();
     const result = await facade.applyBrainTemplate({ id: "company-os", rootId: "new", owner: { name: "Ada Lovelace" }, language: "en", companyName: "TableStory Films", context: snapshot }) as { bots: { ceo: string }; rootId: string };
