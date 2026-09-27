@@ -673,6 +673,7 @@ export function asModelSelection(value: unknown): ModelSelectionInput {
   if ((source !== "plan" && choice.planId !== undefined) || (source !== "provider" && choice.providerId !== undefined)) throw new PayloadError("selection has conflicting sources");
   if ((kind !== "agent" && scope.agentId !== undefined) || (kind !== "quickchat" && scope.chatId !== undefined)) throw new PayloadError("selection has conflicting scopes");
   const model = asClearableString(choice.model, "selection.model", 120);
+  if (source === "auto" && (model || kind === "workspace")) throw new PayloadError("Workspace and concrete model selections require an explicit source");
   return {
     scope: kind === "workspace" ? { kind } : kind === "agent" ? { kind, agentId: asString(scope.agentId, "agentId", 64) } : { kind, chatId: asString(scope.chatId, "chatId", 64) },
     selection: source === "plan" ? { source, model, planId: asPlanId(choice.planId, "planId") } : source === "provider" ? { source, model, providerId: asProviderId(choice.providerId) } : { source, model },

@@ -1298,6 +1298,7 @@ export class LocalBizosHarness {
       const busy = threadId ? this.dispatcher.activeRunIds(threadId).length > 0 : this.runStore.list(Number.MAX_SAFE_INTEGER).some(run => ["working", "queued", "waiting_input"].includes(run.state));
       if (busy) throw new SettingsError("Stop the active run before changing its model");
       const model = selection.model.trim();
+      if (selection.source === "auto" && model) throw new SettingsError("A concrete model requires an explicit source");
       if (scope.kind === "workspace" && !model) throw new SettingsError("Choose a concrete workspace model");
       if (model.length > 120 || (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model))) throw new SettingsError("invalid model id");
       let family: PlanProvider | undefined;

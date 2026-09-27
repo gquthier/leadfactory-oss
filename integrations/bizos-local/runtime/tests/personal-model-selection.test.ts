@@ -123,3 +123,23 @@ it('preserves the connector default for legacy workspace profiles with an unrela
   await f.harness.threads.send({ botId: bot.id }, { text: 'Fixture only' });
   expect(calls).toEqual(['lab/legacy-default']);
 });
+
+it('refuses a concrete model without source identity before mutating workspace or existing history', async () => {
+  const calls: Array<{driver: string; model?: string}> = [];
+  const handle = { stop: () => {}, respond: () => 'unavailable' as const, sessionId: () => null, settled: () => false };
+  const f = fixture(undefined, { startOpenAiTurn: input => { calls.push({driver: 'api', model: input.model}); return handle; }, startTurn: input => { calls.push({driver: 'codex', model: input.model}); return handle; } });
+  const provider = await f.harness.inference.add({ kind: 'openrouter', apiKey: 'fixture', model: 'lab/legacy-default' });
+  // A .39 profile may have an unrelated CLI model beside its selected provider.
+  await f.harness.runtime.setSettings({ local: { inferenceProviderId: provider.id, model: 'gpt-old-cli-model' } });
+  const bot = await f.harness.bots.create({ name: 'Preserved history' });
+  await f.harness.bots.greet(bot.id, 'en');
+  const history = await f.harness.threads.get({botId: bot.id});
+  const settings = await f.harness.runtime.getSettings();
+  for (const scope of [{kind: 'workspace'} as const, {kind: 'agent', agentId: bot.id} as const]) {
+    await expect(f.harness.runtime.selectModel({scope, selection: {source: 'auto', model: 'lab/exact'}})).rejects.toThrow('source');
+  }
+  expect(await f.harness.runtime.getSettings()).toEqual(settings);
+  expect((await f.harness.threads.get({botId: bot.id})).messages).toEqual(history.messages);
+  await f.harness.threads.send({botId: bot.id}, {text: 'Fixture only'});
+  expect(calls).toEqual([{driver: 'api', model: 'lab/legacy-default'}]);
+});

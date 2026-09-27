@@ -59,6 +59,7 @@ describe.skipIf(!built)('personal model selection authenticated HTTP contract', 
     const selected = (await api('GET', '/api/local/runtime')).body;
     expect(selected.settings.local).toMatchObject({model: 'lab/model-649', inferenceProviderId: id});
     expect(selected.inference.external.find((p: any) => p.id === id).model).toBe('lab/model-0');
+    expect((await api('POST', path, {scope: {kind: 'workspace'}, selection: {source: 'auto', model: selection.model}})).status).toBe(400);
     expect((await api('POST', path, {scope: {kind: 'workspace'}, selection: {...selection, model: 'not-in-catalog'}})).status).toBe(400);
     expect((await api('GET', '/api/local/runtime')).body.settings.local).toEqual(selected.settings.local);
     expect((await api('POST', path, {scope: {kind: 'workspace', chatId}, selection})).status).toBe(400);

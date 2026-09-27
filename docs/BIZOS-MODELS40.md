@@ -15,7 +15,9 @@ Other scopes: `{kind:"agent",agentId:"bot_…"}` and `{kind:"workspace"}`.
 Other selections: `{source:"plan",planId:"pln_…",model:"…"}` and
 `{source:"auto",model:""}` (inherit, agent/QuickChat only). Workspace selection
 requires a concrete model. The endpoint validates scope, source and catalog
-before one scope-owned write and returns the effective selection. It rejects
+before one scope-owned write and returns the effective selection. A concrete
+model requires an explicit plan/provider source: `auto` only means inherited
+default for agent/QuickChat, and is refused for workspace writes. It rejects
 active runs. The Desktop confirms persistence with a fresh read.
 
 QuickChat stores its own selection in its existing expiring record. Changing
@@ -59,3 +61,13 @@ configuration; account-unverifiable catalogs, including Cursor, remain static.
 Full packaged UI verification and cloud destination integration belong to the
 release integration step. These tests do not certify live provider quotas,
 production cloud routing or a distributed binary.
+
+## Review correction
+
+A provider model copied into an Automatic workspace row could previously erase
+its provider ID. Two failing Desktop regressions and a failing runtime regression
+reproduced this before correction. Concrete workspace rows now always carry a
+source ID; agent/QuickChat expose one explicit inheritance action. Runtime and IPC
+reject concrete model IDs with `source:auto`. The test also preserves prior .39
+settings/history and proves subsequent dispatch still reaches the legacy API
+provider, never a CLI fallback. Settings displays the effective workspace model.
