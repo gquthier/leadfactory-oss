@@ -48,7 +48,7 @@ export function desktopContinuityTransport(
         "x-bizos-workspace": row.workspaceId,
       },
       body: JSON.stringify({ operation, body }),
-      signal: AbortSignal.timeout(3_000),
+      signal: AbortSignal.timeout(operation === "cloud/send" ? 70_000 : 15_000),
     });
     const result = (await response.json()) as {
       ok?: boolean;

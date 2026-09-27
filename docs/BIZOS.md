@@ -155,3 +155,27 @@ Ce dossier contient le runtime local, pas à lui seul l’interface desktop de d
 Cette intégration cible **BizOS local OSS**. Elle n’importe ni moteur privé cloud, ni identité, ni conversations ou connexions d’une entreprise cloud. L’usage d’un modèle distant personnel reste une connexion au fournisseur choisi.
 
 Le runtime sous `integrations/bizos-local/runtime/` est **AGPL-3.0-only** ; ses notices amont sont conservées avec les sources. Le kit d’agence reste **MIT**. Voir [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md) et [le README du runtime](../integrations/bizos-local/runtime/README.md).
+
+### Destination du prochain tour : BizOS — 28 septembre 2026
+
+Le runtime expose `GET/POST /api/local/execution-destination` pour le fil agent
+public demandé. Le choix `personal | bizos` est conservé dans
+`cloud-execution.json`, par fil et avec le compte, l’organisation, l’installation
+et la conversation canonique attendus. Le choix BizOS passe par le bridge signé
+Electron et les opérations serveur bornées `cloud/status|send|run|stop`.
+L’historique canonique est synchronisé avant/après l’envoi et au polling ; les
+réponses et STOP sont projetés dans le même fil. Aucun échec cloud ne lance le
+fournisseur personnel. Une réponse perdue conserve l’identifiant du message et
+bloque une bascule jusqu’à récupération de ce même envoi.
+
+Périmètre : DM persistant déjà lié, compte/enrollment valides et policy cloud
+existante. QuickChat, groupes, fils non liés ou avec historique antérieur non
+canonique restent indisponibles. Aucun import implicite de fichiers ou d’ancien
+historique, aucun enrollment ni autorisation de budget ne sont créés par ce choix.
+Le retour personnel est possible après fin/STOP et synchronisation ; les drivers
+Claude/Codex restent les drivers personnels supportés par la continuité existante.
+
+Vérification : 54 tests ciblés runtime et TypeScript passent ; le test intégré
+côté backend couvre les vraies signatures/routes/RPC PostgreSQL, l’historique
+32 messages, l’idempotence, STOP, réponse simulée et retour personnel. Le runner
+modèle est simulé ; aucune inférence réelle ni validation du paquet revendiquée.

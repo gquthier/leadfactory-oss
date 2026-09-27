@@ -208,6 +208,15 @@ export class ConversationContinuity {
   private assertQuickChat(threadId: string): void {
     if (!isQuickChatThread(threadId)) throw new Error("Only QuickChat continuity can be forgotten here.");
   }
+  async cloud(threadId: string, operation: string, body: Record<string, unknown>): Promise<unknown> {
+    if (!['cloud/status', 'cloud/send', 'cloud/run', 'cloud/stop'].includes(operation)) throw new Error("Unknown cloud operation.");
+    this.assertPersistent(threadId);
+    const link = this.store.status(threadId);
+    const identity = await this.identity();
+    if (!link || identity.userId !== link.accountId || identity.orgId !== link.orgId || identity.installationId !== link.installationId)
+      throw new Error("Sign in to the account and installation that own this linked conversation.");
+    return this.call(operation, { ...body, ...this.scope(threadId), workspaceId: identity.workspaceId, localConversationId: threadId });
+  }
   async identity(): Promise<ContinuityIdentity> {
     return this.call("status", {});
   }

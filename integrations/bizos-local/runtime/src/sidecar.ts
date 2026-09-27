@@ -1,3 +1,4 @@
+import { CloudExecution } from "./harness/cloud-execution.js";
 import { localComputerEnabled } from "./computer/release.js";
 import { desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
@@ -717,6 +718,10 @@ export class LocalTeamBroker {
 
 export class CollaborationFacade {
   private readonly handlers;
+  private cloudController?: CloudExecution;
+  private get cloud(): CloudExecution {
+    return this.cloudController ??= new CloudExecution(this.harness.storage, this.harness.continuity);
+  }
   private mutationTail: Promise<unknown> = Promise.resolve();
   private quickChatIndexDirty = false;
   readonly userId: string;
@@ -1261,6 +1266,23 @@ export class CollaborationFacade {
       if (!allowedBotIds || requestedBotIds.some((id) => !allowedBotIds.includes(id))) {
         throw new HttpError(422, "invalid_agent_target", "Agent is not in this thread.");
       }
+      const localThreadId = threadIdForTarget(target);
+      if (this.cloud.ownsRequest(clientMessageId) || (this.cloud.destination(localThreadId) === "bizos" && !this.index.messages[clientMessageId])) {
+        if (!("botId" in target) || mentionAgentIds.length) throw new HttpError(422, "invalid_agent_target", "Cloud execution uses the linked conversation agent.");
+        const sent = await this.cloud.send(localThreadId, clientMessageId, content);
+        this.index.messages[clientMessageId] = {
+          state: "completed", fingerprint: JSON.stringify({ threadId, content, mentionAgentIds: [] }),
+          threadId: localThreadId, messageId: sent.eventId, runIds: sent.runs.map(run => `cloud_${run.runId}`), createdAt: new Date().toISOString(),
+        };
+        this.persistIndex(this.index);
+        const original = await this.invoke<ThreadMessage | null>("lbz:threads:message", [target, sent.eventId]);
+        if (!original) throw new HttpError(503, "history_unavailable", "The cloud message is not in the synchronized conversation yet.");
+        const bots = await this.invoke<Bot[]>("lbz:bots:list");
+        return { status: sent.duplicate ? 200 : 201, body: {
+          message: this.message(original, target, bots), duplicate: sent.duplicate,
+          runs: await Promise.all(sent.runs.map(run => this.cloudRun(`cloud_${run.runId}`))),
+        } };
+      }
       // Explicit mentions win; otherwise the harness routes the text itself
       // (`mentions.resolveGroupTargets`): `@everyone` reaches every member,
       // and a message naming nobody goes to ONE lead (the CEO, else the first
@@ -1530,15 +1552,44 @@ export class CollaborationFacade {
     const rows = await this.invoke<Run[]>("lbz:runs:list", [{ limit: 200 }]);
     const selected = rows.filter((run) => (!threadId || run.threadId === threadId)
       && (!input.active || run.state === "queued" || run.state === "working" || run.state === "waiting_input"));
-    return { runs: await Promise.all(selected.map((run) => this.run(run.id))) };
+    return { runs: await Promise.all([...selected.map((run) => this.run(run.id)), ...this.cloud.runIds(threadId, input.active).map(id => this.cloudRun(id))]) };
+  }
+
+  private async cloudRun(id: string, stop = false) {
+    const saved = await this.cloud.run(id, stop);
+    const target = targetForThreadId(saved.threadId);
+    if (!target || !("botId" in target)) throw new Error("Cloud thread unavailable.");
+    return { ...saved.run, runId: this.runId(id), threadId: this.publicThreadId(target),
+      agentId: this.agentId(target.botId), triggerMessageId: this.messageId(saved.eventId) };
+  }
+
+  async executionDestination(threadId: string, destination?: 'personal' | 'bizos') {
+    return this.exclusive(async () => {
+      const target = this.target(threadId), localId = threadIdForTarget(target);
+      const runs = await this.invoke<Run[]>("lbz:runs:list", [{ limit: 200 }]);
+      const running = runs.some(run => run.threadId === localId && ['queued', 'working', 'waiting_input'].includes(run.state));
+      if (destination && running) throw new HttpError(409, "run_active", "Stop the active run before changing execution.");
+      // A pre-link local transcript is not silently uploaded or omitted.
+      if (destination === 'bizos' || destination === undefined) {
+        const snapshot = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
+        const canonical = new Set(this.harness.continuity.projection(localId).map(row => row.id));
+        if (snapshot.messages.some(row => (row.role === 'user' || row.role === 'bot') && !canonical.has(row.id))) {
+          if (destination) throw new HttpError(409, "history_not_linked", "The local history is not fully linked to BizOS.");
+          return { destination: this.cloud.destination(localId), available: false, reason: "The local history is not fully linked to BizOS." };
+        }
+      }
+      return destination ? this.cloud.select(localId, destination) : this.cloud.status(localId);
+    });
   }
 
   async getRun(publicRunId: string) {
-    return this.run(this.internalRunId(publicRunId));
+    const id = this.internalRunId(publicRunId);
+    return this.cloud.ownsRun(id) ? this.cloudRun(id) : this.run(id);
   }
 
   async cancel(publicRunId: string) {
     const runId = this.internalRunId(publicRunId);
+    if (this.cloud.ownsRun(runId)) return this.cloudRun(runId, true);
     const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
     const active = publicRunState(run.state) === "running" || publicRunState(run.state) === "queued";
@@ -1558,6 +1609,7 @@ export class CollaborationFacade {
 
   async approvals(publicRunId: string) {
     const runId = this.internalRunId(publicRunId);
+    if (this.cloud.ownsRun(runId)) { await this.cloud.run(runId); return { runId: publicRunId, approvals: [] }; }
     const run = await this.invoke<Run | null>("lbz:runs:get", [runId]);
     if (!run) throw new HttpError(404, "not_found", "Run not found.");
     const target = targetForThreadId(run.threadId);
@@ -2763,6 +2815,18 @@ async function serve(): Promise<void> {
         return sendJson(response, operation === "recruit" || operation === "routine" ? 201 : 200, result);
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      if (url.pathname === "/api/local/execution-destination") {
+        if (method === "GET") {
+          const threadId = url.searchParams.get("threadId");
+          if (!threadId) throw new HttpError(400, "invalid_body", "Conversation required.");
+          return sendJson(response, 200, await facade.executionDestination(threadId));
+        }
+        if (method === "POST") {
+          const input = objectBody(await bodyOf(request), ["threadId", "destination"]);
+          if (typeof input.threadId !== "string" || !["personal", "bizos"].includes(String(input.destination))) throw new HttpError(400, "invalid_body", "Choose an execution destination.");
+          return sendJson(response, 200, await facade.executionDestination(input.threadId, input.destination as "personal" | "bizos"));
+        }
+      }
       if (url.pathname === "/api/local/continuity/prepare-shutdown" && method === "POST") return sendJson(response,200,{results:await harness.continuity.prepareShutdown()});
       if (url.pathname === "/api/local/continuity/transfers" && method === "GET") return sendJson(response,200,await harness.continuity.pendingTransfers());
       if (url.pathname === "/api/local/continuity/status" && method === "GET") {
