@@ -52,6 +52,7 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
       cwd: runtimeRoot,
       env: {
         HOME: home,
+        BIZOS_LOCAL_COMPUTER_ENABLED: "true",
         PATH: "/usr/bin:/bin",
         TMPDIR: temp,
         LOCALBIZOS_SIDECAR_STATE: join(temp, "state"),

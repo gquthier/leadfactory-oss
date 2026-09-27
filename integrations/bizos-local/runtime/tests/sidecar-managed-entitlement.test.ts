@@ -184,4 +184,19 @@ describe.skipIf(!built)("Desktop-managed entitlement real HTTP boundary", () => 
       tier: "pro",
     });
   });
+  it("refuses all Computer owner routes by default even with a valid paid feature projection", async () => {
+    const begin=await api("POST","/api/local/entitlement/owner-session",{});
+    const projection={version:1,subject:"10000000-0000-4000-8000-000000000001",orgId:"20000000-0000-4000-8000-000000000001",instanceId:descriptor.instanceId,
+      features:{customModels:true,customConnectors:true,cloudComputer:true},issuedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString()};
+    expect((await api("POST","/api/local/entitlement/projection",{sessionId:begin.body.sessionId,revision:1,projection})).status).toBe(200);
+    for(const [method,path,body] of [
+      ["GET","/api/local/cloud-computer",undefined], ["PUT","/api/local/cloud-computer",{idleMinutes:5}],
+      ["POST","/api/local/cloud-computer/key",{apiKey:"synthetic"}], ["POST","/api/local/cloud-computer/wake",{}],
+      ["POST","/api/local/cloud-computer/desktop",{}], ["GET","/api/local/computer/qa",undefined],
+      ["POST","/api/local/computer/qa/setup",{}], ["POST","/api/local/computer/qa/control",{}], ["POST","/api/local/computer/qa/release",{}],
+    ] as const) expect(await api(method,path,body)).toMatchObject({status:503,body:{error:{code:"computer_disabled"}}});
+    expect((await api("GET","/api/local/cloud-computer",undefined,"")).status).toBe(401);
+    expect((await api("POST","/api/internal/local-team/cloud",{tool:"cloud_computer_wake"},"forged")).status).toBe(401);
+  });
+
 });

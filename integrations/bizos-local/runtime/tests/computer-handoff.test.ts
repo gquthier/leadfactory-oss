@@ -1,3 +1,6 @@
+import { beforeEach as beforeReleaseCase, afterEach as afterReleaseCase, vi as releaseEnv } from "vitest";
+beforeReleaseCase(() => releaseEnv.stubEnv("BIZOS_LOCAL_COMPUTER_ENABLED", "true"));
+afterReleaseCase(() => releaseEnv.unstubAllEnvs());
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

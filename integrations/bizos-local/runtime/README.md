@@ -7,6 +7,16 @@ personal GPT-Live, Jev and Kie credentials, and starts or adopts the sidecar.
 Local execution does not make remote Codex, Claude, Cursor or personal API
 inference offline. Native Ollama uses an already running loopback server.
 
+## Beta39 Computer release switch (2026-09-27)
+
+Agent Computer is disabled unless the trusted runtime environment explicitly
+sets `BIZOS_LOCAL_COMPUTER_ENABLED=true`. A paid feature projection or saved Boat
+key does not enable the release. Tool manifests omit Computer/Boat tools;
+stale MCP calls, owner provisioning/control routes, native surfaces and the
+Boat HTTP adapter independently refuse active effects. Owner `/sleep` and
+surface disposal remain available for cleanup. No profile, key or database is
+deleted. Ordinary personal CLI/file permissions and routines are unchanged.
+
 ## Build and test
 
 Use Node.js 22 or newer inside the full `leadfactory-oss` checkout:

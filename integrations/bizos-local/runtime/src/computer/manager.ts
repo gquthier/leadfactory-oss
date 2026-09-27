@@ -1,3 +1,4 @@
+import { localComputerEnabled, assertLocalComputerEnabled } from "./release.js";
 // The rules ABOVE the machine: when an agent may touch it, when the user is
 // asked first, and who gets told what changed.
 //
@@ -145,7 +146,7 @@ export class ComputerManager {
 
   /** Whichever machine serves this call. */
   private get backend(): ManagedComputerBackend | null {
-    return this.pick();
+    return localComputerEnabled() ? this.pick() : null;
   }
 
   /** Which kind of machine an agent would get right now. */
@@ -174,6 +175,7 @@ export class ComputerManager {
   }
 
   async setUp(botId: string): Promise<ComputerState> {
+    assertLocalComputerEnabled();
     if (!this.backend) return this.state(botId);
     this.remember(botId);
     this.publishStatus(botId);
@@ -210,6 +212,7 @@ export class ComputerManager {
       await backend.start(botId);
       this.publishStatus(botId);
     }
+    assertLocalComputerEnabled();
     // Starting/waking is an await boundary: STOP may have won while the
     // backend came up. Never return a machine to an ended requester.
     if (!this.options.approvals.hasActiveTurn(requester)) {
@@ -220,6 +223,7 @@ export class ComputerManager {
 
   /** A tool call arrived. Everything that can refuse it, refuses it here. */
   private machineFor(requester: ComputerRequester): ManagedComputerBackend {
+    assertLocalComputerEnabled();
     const { botId } = requester;
     const backend = this.backend;
     if (!backend) {
@@ -342,6 +346,7 @@ export class ComputerManager {
       return "cancelled";
     }
     try {
+      assertLocalComputerEnabled();
       backend.takeControl(botId);
     } catch (error) {
       this.handoffRequests.delete(botId);
@@ -356,6 +361,7 @@ export class ComputerManager {
   }
 
   private requireAgentControl(backend: ManagedComputerBackend, requester: ComputerRequester): void {
+    assertLocalComputerEnabled();
     const { botId } = requester;
     if (!this.options.approvals.hasActiveTurn(requester)) {
       throw new Error("This computer only runs while this exact agent run is active.");
@@ -368,6 +374,7 @@ export class ComputerManager {
   // ── the user's side ───────────────────────────────────────────────────
 
   takeControl(botId: string): ComputerState {
+    assertLocalComputerEnabled();
     this.backend?.takeControl(botId);
     return this.state(botId);
   }
@@ -395,6 +402,7 @@ export class ComputerManager {
   }
 
   giveBack(botId: string, handoffId?: string): ComputerState {
+    assertLocalComputerEnabled();
     const pending = this.handoffs.get(botId);
     if (pending) {
       if (!handoffId || pending.id !== handoffId) {
@@ -433,6 +441,7 @@ export class ComputerManager {
   }
 
   navigateForUser(botId: string, what: "back" | "forward" | "reload"): void {
+    assertLocalComputerEnabled();
     this.backend?.navigateForUser(botId, what);
   }
 
@@ -441,6 +450,7 @@ export class ComputerManager {
   }
 
   forwardInput(botId: string, event: Record<string, unknown>): void {
+    assertLocalComputerEnabled();
     this.backend?.forwardInput(botId, event);
   }
 
@@ -509,6 +519,7 @@ export class ComputerManager {
   /** Handed to the backend as `onFrame`: one capture, fanned out to whoever is
    * watching. */
   onFrame(botId: string, frame: CapturedFrame): void {
+    if (!localComputerEnabled()) return;
     const listeners = this.frameListeners.get(botId);
     if (!listeners?.size) return;
     const state = this.state(botId);
@@ -537,7 +548,7 @@ export class ComputerManager {
     this.frameTimers.get(botId)?.cancel();
     this.frameTimers.delete(botId);
     this.frameListeners.delete(botId);
-    this.backend?.dispose(botId);
+    this.pick()?.dispose(botId);
   }
 
   stop(): void {
@@ -549,6 +560,6 @@ export class ComputerManager {
     this.watchers.clear();
     this.frameTimers.clear();
     this.frameListeners.clear();
-    this.backend?.disposeAll();
+    this.pick()?.disposeAll();
   }
 }
