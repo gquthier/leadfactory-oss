@@ -242,6 +242,8 @@ export const REMOTE_TASK_NOTE = "Task from BizOS admin";
 export const DEVICE_CAPABILITY_CACHE_MS = 10 * 60_000;
 
 export interface HarnessOptions {
+  /** Desktop-owned local feature projections; absent for user-controlled OSS. */
+  managedEntitlementInstanceId?: string;
   /** Trusted main bridge only; absent for independent Local OSS. */
   continuityTransport?: ContinuityTransport;
   /** `<userData>/localbizos` — every file the runtime owns lives here. */
@@ -579,7 +581,7 @@ export class LocalBizosHarness {
     this.planRegistry = new PlanRegistry(this.storage);
     this.appsStore = new AppsStore(this.storage, () => this.clock.nowIso(), () => this.environment());
     this.inferenceStore = new InferenceStore(this.storage, () => this.clock.nowIso());
-    this.entitlementStore = new EntitlementStore(this.storage, () => this.environment());
+    this.entitlementStore = new EntitlementStore(this.storage, () => this.environment(), options.managedEntitlementInstanceId);
     this.homeDir = options.homeDir ?? homedir();
     this.accessPolicy = defaultAccessPolicy(this.homeDir, options.deniedDirs ?? []);
     this.accessStore = new AccessStore({
@@ -1582,9 +1584,11 @@ export class LocalBizosHarness {
   };
 
   /** Settings → Plans & usage: external API-key providers (OpenRouter, Ollama, any OpenAI-compatible API). */
-  /** The local plan tier — a dev/test switch, see `entitlement.ts`. */
+  /** Desktop managed projection, or the independent OSS local switch. */
   readonly entitlement = {
     get: async (): Promise<Entitlement> => this.entitlementStore.get(),
+    beginOwnerSession: () => this.entitlementStore.beginOwnerSession(),
+    applyManaged: (value: unknown) => this.entitlementStore.applyManaged(value),
     set: async (tier: unknown): Promise<Entitlement> => this.entitlementStore.set(tier),
     /** Throws `ProRequiredError` on the free tier. */
     require: (feature: ProFeature): void => this.entitlementStore.require(feature),

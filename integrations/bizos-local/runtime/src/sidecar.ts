@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
+import { MANAGED_ENTITLEMENT_ENV } from "./harness/managed-entitlement.js";
 import { ProRequiredError, type ProFeature } from "./harness/entitlement.js";
 import { isTemplateId, parseCreationOptions } from "./harness/templates.js";
 import {
@@ -250,6 +251,7 @@ function safeHarnessEnvironment(): NodeJS.ProcessEnv {
     // The local plan tier override (entitlement.ts) is read by the harness.
     "BIZOS_LOCAL_PLAN",
   ]) {
+    if (key === "BIZOS_LOCAL_PLAN" && process.env[MANAGED_ENTITLEMENT_ENV] === "1") continue;
     if (process.env[key] !== undefined) environment[key] = process.env[key];
   }
   return environment;
@@ -2693,6 +2695,7 @@ async function serve(): Promise<void> {
   const stateLock = acquireStateLock(lockPath);
   process.once("exit", () => stateLock.release());
   const id = instanceId();
+  const managedEntitlement = process.env[MANAGED_ENTITLEMENT_ENV] === "1";
   const token = randomBytes(48).toString("base64url");
   const teamBroker = new LocalTeamBroker();
   const localTeamMcpScriptPath = join(dirname(fileURLToPath(import.meta.url)), "local-team-mcp.js");
@@ -2987,6 +2990,21 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/local/runtime/model") {
         return sendJson(response, 200, { settings: await facade.setModel(await bodyOf(request)) });
       }
+      if (url.pathname.startsWith("/api/local/entitlement/")) {
+        if (!managedEntitlement) throw new HttpError(404,"not_found","Managed entitlement unavailable.");
+        if (request.headers.origin || request.headers["sec-fetch-site"]) throw new HttpError(403,"forbidden","Native owner requests only.");
+        if (method === "POST" && url.pathname === "/api/local/entitlement/owner-session") {
+          objectBody(await bodyOf(request), []);
+          return sendJson(response,200,harness.entitlement.beginOwnerSession());
+        }
+        if (method === "POST" && url.pathname === "/api/local/entitlement/projection") {
+          const projection = await bodyOf(request);
+          try { return sendJson(response, 200, harness.entitlement.applyManaged(projection)); }
+          catch { throw new HttpError(400, "invalid_entitlement", "Local feature projection refused."); }
+        }
+        throw new HttpError(405,"method_not_allowed","Method not allowed.");
+      }
+      if (managedEntitlement && method !== "GET" && url.pathname === "/api/local/entitlement") throw new HttpError(403,"forbidden","Managed entitlement cannot be set locally.");
       if (method === "GET" && url.pathname === "/api/local/entitlement") return sendJson(response, 200, await facade.entitlement());
       // The cloud computer (one Boat sandbox for this workspace). Status and
       // settings carry no secret; `desktop` returns a secret-bearing stream
@@ -3142,6 +3160,7 @@ async function serve(): Promise<void> {
       })
     : undefined;
   const harness: LocalBizosHarness = new LocalBizosHarness({
+    ...(managedEntitlement ? { managedEntitlementInstanceId: id } : {}),
     rootDir: harnessRoot,
     ...(nativeDescriptorPath ? {continuityTransport: desktopContinuityTransport(resolve(nativeDescriptorPath))} : {}),
     cloudComputer,

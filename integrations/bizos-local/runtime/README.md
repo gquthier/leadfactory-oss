@@ -210,3 +210,25 @@ cleared transcripts do not restart completed onboarding. The
 CEO is still responsible for reading and interpreting source documents and for
 keeping prose to one question at a time. Tests use scripted agents and real
 loopback HTTP, not a paid model, so they do not prove model reasoning quality.
+
+## Desktop-managed local feature authority (27 September 2026)
+
+Desktop launches its managed runtime with `LOCALBIZOS_MANAGED_ENTITLEMENT=1`.
+In this mode the default and every restart are free: `BIZOS_LOCAL_PLAN`, the local
+entitlement file and public tier PUT are ignored/refused as authority. Independent
+OSS launches preserve their user-controlled local switch; neither contract grants
+SaaS permissions, provider credentials, cloud usage or credits.
+
+A native owner bearer, without browser Origin/Sec-Fetch-Site, opens the private
+`POST /api/local/entitlement/owner-session` epoch. Only that epoch and increasing
+revisions may deliver `POST /api/local/entitlement/projection`. Claims bind one
+account, organization and runtime instance, exact feature booleans and a maximum
+15-minute lifetime. State is RAM-only, expires on wall or monotonic time, and is
+cleared on owner reset/denial. Renderer reads expose feature flags/expiry only;
+Desktop blocks the entire private route family. Cloud services must independently
+revalidate authority for every cloud operation.
+
+Focused unit and real HTTP tests cover foreign/stale claims, epoch reset, expiry,
+clock rollback, env/file/raw PUT refusal, owner/browser boundaries and unchanged
+OSS behavior. These synthetic projections prove enforcement, not a paid backend
+account's entitlement or a production connection.
