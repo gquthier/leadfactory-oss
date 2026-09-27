@@ -86,7 +86,7 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
     await rm(temp, { recursive: true, force: true });
   }, 60_000);
 
-  it("serves the tier, answers 402 pro_required on free, and unlocks on PUT pro", async () => {
+  it("keeps connector Pro gates while personal models remain available on free", async () => {
     expect((await api("GET", "/api/local/entitlement", undefined, "")).status).toBe(401);
     expect(await api("GET", "/api/local/entitlement")).toEqual({
       status: 200,
@@ -94,12 +94,11 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
     });
     const gemini = { kind: "openai-compatible", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: "k", model: "gemini-2.5-flash" };
     const refused = await api("POST", "/api/local/providers", gemini);
-    expect(refused).toMatchObject({ status: 402, body: { error: "pro_required", feature: "customModels" } });
-    expect(typeof refused.body.message).toBe("string");
+    expect(refused).toMatchObject({ status: 201, body: { provider: { hasKey: true } } });
     expect(await api("POST", "/api/local/apps", { custom: { name: "Mine", transport: "http", url: "https://example.com/mcp" } }))
       .toMatchObject({ status: 402, body: { error: "pro_required", feature: "customConnectors" } });
     expect(await api("POST", "/api/local/runtime/inference", { source: "provider", providerId: "prv_abc123def456" }))
-      .toMatchObject({ status: 402, body: { error: "pro_required" } });
+      .toMatchObject({ status: 400 });
     expect((await api("PUT", "/api/local/entitlement", { tier: "gold" })).status).toBe(400);
     expect(await api("PUT", "/api/local/entitlement", { tier: "pro" })).toEqual({
       status: 200,
@@ -110,7 +109,7 @@ describe.skipIf(!built)("Plan tier HTTP boundary", () => {
     expect(added.body.provider).toMatchObject({ kind: "openai-compatible", model: "gemini-2.5-flash", hasKey: true });
     expect((await api("PATCH", `/api/local/providers/${added.body.provider.id}`, { model: "gemini-3.5-flash-lite" })).status).toBe(200);
     expect((await api("PUT", "/api/local/entitlement", { tier: "free" })).body.tier).toBe("free");
-    expect((await api("PATCH", `/api/local/providers/${added.body.provider.id}`, { model: "x" })).status).toBe(402);
+    expect((await api("PATCH", `/api/local/providers/${added.body.provider.id}`, { model: "x" })).status).toBe(200);
   });
 
   it("serves the cloud computer: no secrets in status, key stored 0600, Pro-gated wake, team route needs a capability", async () => {

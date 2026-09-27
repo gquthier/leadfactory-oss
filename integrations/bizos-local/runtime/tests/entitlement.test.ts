@@ -1,12 +1,12 @@
 // The local plan tier (a dev/test stub, not billing): free by default,
-// `BIZOS_LOCAL_PLAN` overrides, custom models and custom connectors are Pro,
-// and a free turn sets an existing provider aside for the connected plan.
+// `BIZOS_LOCAL_PLAN` overrides. Personal providers remain available on free;
+// custom connector and cloud-computer permissions are unchanged.
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CodexTurnHandle, CodexTurnInput } from "../src/harness/codex-driver.js";
-import { FREE_TIER_PROVIDER_NOTE } from "../src/harness/dispatch.js";
+import type { OpenAiTurnInput } from "../src/harness/openai-driver.js";
 import { ENTITLEMENT_FILE, EntitlementStore, ProRequiredError } from "../src/harness/entitlement.js";
 import { LocalBizosHarness } from "../src/harness/harness.js";
 import { Storage } from "../src/harness/storage.js";
@@ -37,32 +37,34 @@ describe("EntitlementStore", () => {
 
 function setup(environment: NodeJS.ProcessEnv = {}) {
   const turns: CodexTurnInput[] = [];
+  const apiTurns: OpenAiTurnInput[] = [];
   const harness = new LocalBizosHarness({
     rootDir: join(root, "state"), homeDir: root, baseUrl: "", readSessionCookie: async () => "", orgName: () => "Acme",
     execPath: "/fake/node", packaged: false, runAsNodeAvailable: false, mcpScriptPath: join(root, "disabled.mjs"),
     environment: { PATH: "/nowhere", LBZ_CODEX_PATH: join(root, "scripted-codex"), ...environment }, devices: false,
+    startOpenAiTurn: input => { apiTurns.push(input); return { stop: () => {}, respond: () => "unavailable", sessionId: () => null, settled: () => false }; },
     startTurn: (input): CodexTurnHandle => {
       turns.push(input);
       return { stop: () => undefined, respond: () => "unavailable", sessionId: () => null, settled: () => false };
     },
   });
   const facade = new CollaborationFacade(harness, "fixture", new LocalTeamBroker(), emptyDurableIndex(), null, () => undefined);
-  return { harness, facade, turns };
+  return { harness, facade, turns, apiTurns };
 }
 
 describe("Pro gates on the facade", () => {
-  it("refuses custom models and connectors on free, and allows them on pro", async () => {
+  it("allows personal models on free while retaining custom connector permissions", async () => {
     const { harness, facade } = setup();
     try {
       const gemini = { kind: "openai-compatible", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", apiKey: "k", model: "gemini-2.5-flash" };
-      await expect(facade.addInferenceProvider(gemini)).rejects.toMatchObject({ code: "pro_required", feature: "customModels" });
-      await expect(facade.setModel({ model: "gpt-5.4-mini" })).rejects.toBeInstanceOf(ProRequiredError);
-      await expect(facade.createBot({ name: "Ada", model: "o3" })).rejects.toBeInstanceOf(ProRequiredError);
+      await expect(facade.addInferenceProvider(gemini)).resolves.toMatchObject({ hasKey: true });
+      await expect(facade.setModel({ model: "gpt-5.4-mini" })).resolves.toBeDefined();
+      await expect(facade.createBot({ name: "Ada", model: "o3" })).resolves.toBeDefined();
       const { bot } = await facade.createBot({ name: "Ada" });
-      await expect(facade.updateBot(bot.id, { model: "o3" })).rejects.toBeInstanceOf(ProRequiredError);
-      await expect(facade.updateBot(bot.id, { providerId: "prv_abc123def456" })).rejects.toBeInstanceOf(ProRequiredError);
+      await expect(facade.updateBot(bot.id, { model: "o3" })).resolves.toMatchObject({ bot: { model: "o3" } });
+      await expect(facade.updateBot(bot.id, { providerId: "prv_abc123def456" })).rejects.toThrow("unknown provider");
       await expect(facade.updateBot(bot.id, { model: "", title: "Analyst" })).resolves.toMatchObject({ bot: { title: "Analyst" } });
-      await expect(facade.setInference({ source: "provider", providerId: "prv_abc123def456" })).rejects.toBeInstanceOf(ProRequiredError);
+      await expect(facade.setInference({ source: "provider", providerId: "prv_abc123def456" })).rejects.toThrow("unknown provider");
       await expect(facade.setInference({ source: "auto" })).resolves.toBeDefined();
       expect(() => facade.installApp({ custom: { name: "Mine", transport: "http", url: "https://example.com/mcp" } })).toThrow(ProRequiredError);
 
@@ -76,25 +78,20 @@ describe("Pro gates on the facade", () => {
     }
   });
 
-  it("keeps a configured provider but answers a free turn with the connected plan, and says so", async () => {
-    const { harness, turns } = setup();
+  it("dispatches the chosen provider unchanged after a downgrade to free", async () => {
+    const { harness, turns, apiTurns } = setup();
     try {
       await harness.entitlement.set("pro");
-      const provider = await harness.inference.add({ kind: "openrouter", apiKey: "k", model: "openai/gpt-4.1-mini" });
+      const provider = await harness.inference.add({ kind: "openrouter", apiKey: "fixture", model: "openai/gpt-4.1-mini" });
       await harness.runtime.setInference({ source: "provider", providerId: provider.id });
       await harness.entitlement.set("free");
       const bot = await harness.bots.create({ name: "Ada" });
-      const sent = await harness.threads.send({ botId: bot.id }, { text: "hello" });
-      for (let n = 0; n < 200 && !turns.length; n++) await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(turns).toHaveLength(1);
-      expect(turns[0]!.modelProvider).toBeUndefined();
-      const snapshot = await harness.threads.get({ botId: bot.id });
-      const botMessage = snapshot.messages.find((message) => message.runId === sent.runIds[0]);
-      expect(botMessage?.blocks).toContainEqual({ kind: "meta", text: FREE_TIER_PROVIDER_NOTE });
+      await harness.threads.send({ botId: bot.id }, { text: "hello" });
+      expect(turns).toHaveLength(0);
+      expect(apiTurns).toHaveLength(1);
+      expect(apiTurns[0]!.model).toBe("openai/gpt-4.1-mini");
       expect((await harness.runtime.getSettings()).local.inferenceProviderId).toBe(provider.id);
       expect(existsSync(join(root, "state", ENTITLEMENT_FILE))).toBe(true);
-    } finally {
-      harness.stop();
-    }
+    } finally { harness.stop(); }
   });
 });

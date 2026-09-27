@@ -1,10 +1,11 @@
+import { isPersonalModelSelection, selectionBotFields, type PersonalModelSelection } from "./model-selection.js";
 import { createHash } from "node:crypto";
 import type { Clock } from "./clock.js";
 import type { Storage } from "./storage.js";
 import { collapseMessages } from "./threads.js";
 import type { Bot, MessageBlock, Run, ThreadMessage } from "./types.js";
 
-export interface QuickChat { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt?: string; expiresAt: string }
+export interface QuickChat { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt?: string; expiresAt: string; modelSelection?: PersonalModelSelection }
 export const QUICK_CHATS_FILE = "quick-chats.json";
 export const EXPIRED_QUICK_CHATS_FILE = "expired-quick-chats.json";
 export const QUICK_CHAT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -43,6 +44,7 @@ export class QuickChatStore {
     for (const id of this.expired) storage.blockThread(`chat:${id}`);
     const raw = storage.readJsonStrict<unknown>(QUICK_CHATS_FILE, []);
     if (!Array.isArray(raw) || raw.some(row => !row || typeof row !== "object" || !chatIdPattern.test(row.id) || typeof row.title !== "string" || !validDate(row.createdAt) || !validDate(row.updatedAt) || (row.lastMessageAt !== undefined && !validDate(row.lastMessageAt))) || new Set(raw.map(row => row.id)).size !== raw.length) throw new Error("quick-chats.json is corrupt");
+    if (raw.some(row => row.modelSelection !== undefined && !isPersonalModelSelection(row.modelSelection))) throw new Error("quick-chats.json model selection is corrupt");
     const legacyRuns = storage.readJson<Run[]>("runs.json", []);
     this.chats = raw.filter(row => !this.expired.has(row.id)).map(row => {
       const fingerprints = new Map<string, string>();
@@ -67,7 +69,7 @@ export class QuickChatStore {
       this.fingerprints.set(row.id, fingerprints);
       const updatedAt = lastMessageAt ?? row.createdAt;
       return { id: row.id, title: "QuickChat", createdAt: row.createdAt, updatedAt,
-        ...(lastMessageAt ? { lastMessageAt } : {}), expiresAt: new Date(Date.parse(updatedAt) + QUICK_CHAT_TTL_MS).toISOString() };
+        ...(lastMessageAt ? { lastMessageAt } : {}), ...(row.modelSelection ? { modelSelection: row.modelSelection } : {}), expiresAt: new Date(Date.parse(updatedAt) + QUICK_CHAT_TTL_MS).toISOString() };
     });
     if (JSON.stringify(raw) !== JSON.stringify(this.chats)) this.persist();
   }
@@ -143,11 +145,19 @@ export class QuickChatStore {
     chat.expiresAt = new Date(Date.parse(chat.updatedAt) + QUICK_CHAT_TTL_MS).toISOString();
     this.persist(); this.schedule();
   }
+  setModelSelection(id: string, selection: PersonalModelSelection): QuickChat {
+    this.get(id);
+    const chat = this.chats.find(row => row.id === id)!;
+    chat.modelSelection = { ...selection };
+    // Configuration is not message activity and must not extend the TTL.
+    this.persist();
+    return this.get(id);
+  }
   executor(id: string): Bot | undefined {
     this.sweep();
     const chat = this.chats.find(row => row.id === id);
     if (!chat || this.expired.has(id)) return undefined;
-    return { id, name: "QuickChat", color: "#FF6A3D", avatarKind: "procedural", pinned: false, archived: false, unread: false, notifyOnFinish: false, status: "idle", sortOrder: 0, createdAt: chat.createdAt };
+    return { ...(chat.modelSelection ? selectionBotFields(chat.modelSelection) : {}), id, name: "QuickChat", color: "#FF6A3D", avatarKind: "procedural", pinned: false, archived: false, unread: false, notifyOnFinish: false, status: "idle", sortOrder: 0, createdAt: chat.createdAt };
   }
   private schedule(): void {
     this.cancelTimer?.(); this.cancelTimer = undefined;

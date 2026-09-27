@@ -31,7 +31,7 @@ export const DEFAULT_THEME: ThemePreference = "system";
  * `claude --model …`). Underscores are allowed so Claude aliases like
  * `claude-sonnet-4-5` fit; anything outside this alphabet is an attempt
  * at an argument, not a model. */
-export const MODEL_ID = /^[a-z0-9][a-z0-9._-]{0,80}$/i;
+export const MODEL_ID = /^[a-z0-9][a-z0-9._:/-]{0,119}$/i;
 
 export const PLAN_PROVIDERS = ["codex", "claude", "cursor"] as const;
 /** Opaque plan id shape — mirrors `plan-registry.PLAN_ID`. */

@@ -1633,21 +1633,18 @@ export class CollaborationFacade {
   /** 402 `pro_required` on the free tier. */
   private requirePro(feature: ProFeature): void { this.harness.entitlement.require(feature); }
 
+  selectModel(raw: unknown) { return this.invoke("lbz:runtime:selectModel", [raw]); }
   async setInference(raw: unknown) {
-    if (raw && typeof raw === "object" && (raw as Record<string, unknown>).source === "provider") this.requirePro("customModels");
     return this.invoke("lbz:runtime:setInference", [raw]);
   }
   async setModel(raw: unknown) {
     const input = objectBody(raw, ["model"]);
     const model = requiredString(input.model, "model", 120);
-    const current = await this.invoke<RuntimeSettings>("lbz:runtime:getSettings");
-    // Re-sending the model already in force is not a selection.
-    if (model !== current.local.model) this.requirePro("customModels");
     return this.invoke("lbz:runtime:setSettings", [{ mode: "local", local: { model } }]);
   }
   inferenceProviders() { return this.invoke("lbz:inference:list"); }
-  async addInferenceProvider(raw: unknown) { this.requirePro("customModels"); return this.invoke("lbz:inference:add", [raw]); }
-  async updateInferenceProvider(id: string, raw: unknown) { this.requirePro("customModels"); return this.invoke("lbz:inference:update", [id, raw]); }
+  async addInferenceProvider(raw: unknown) { return this.invoke("lbz:inference:add", [raw]); }
+  async updateInferenceProvider(id: string, raw: unknown) { return this.invoke("lbz:inference:update", [id, raw]); }
   removeInferenceProvider(id: string) { return this.invoke("lbz:inference:remove", [id]); }
   testInferenceProvider(id: string) { return this.invoke("lbz:inference:test", [id]); }
   disconnectPlan(id: string) { return this.invoke("lbz:plans:disconnect", [id]); }
@@ -1687,8 +1684,6 @@ export class CollaborationFacade {
     });
   }
   async createBot(raw: unknown) {
-    const model = raw && typeof raw === "object" ? (raw as Record<string, unknown>).model : undefined;
-    if (typeof model === "string" && model.trim()) this.requirePro("customModels");
     // `language` is the owner's app language for the greeting, not a bot field.
     let language: "fr" | "en" = "fr";
     if (raw && typeof raw === "object" && !Array.isArray(raw) && "language" in raw) {
@@ -1707,15 +1702,6 @@ export class CollaborationFacade {
     return { bot, agent, thread };
   }
   async updateBot(id: string, raw: unknown) {
-    if (raw && typeof raw === "object") {
-      const patch = raw as Record<string, unknown>;
-      const current = (await this.bots()).find((candidate) => candidate.id === id);
-      // Choosing a provider or a model override is Pro; clearing one, or
-      // re-sending the value already set, is not.
-      const chooses = (key: "providerId" | "model") =>
-        typeof patch[key] === "string" && (patch[key] as string).trim() !== "" && (patch[key] as string).trim() !== (current?.[key] ?? "");
-      if (chooses("providerId") || chooses("model")) this.requirePro("customModels");
-    }
     const bot = await this.invoke<Bot>("lbz:bots:update", [id, raw]);
     const bootstrap = await this.bootstrap();
     const agent = this.agent(bot);
@@ -3000,6 +2986,7 @@ async function serve(): Promise<void> {
       if (testPlanId && method === "POST") return sendJson(response, 200, await facade.testPlan(testPlanId));
       const planId = routeId(url.pathname, /^\/api\/local\/plans\/([^/]+)$/);
       if (planId && method === "DELETE") return sendJson(response, 200, await facade.disconnectPlan(planId));
+      if (method === "POST" && url.pathname === "/api/local/model-selection") return sendJson(response, 200, await facade.selectModel(await bodyOf(request)));
       if (method === "POST" && url.pathname === "/api/local/runtime/inference") {
         return sendJson(response, 200, { settings: await facade.setInference(await bodyOf(request)) });
       }

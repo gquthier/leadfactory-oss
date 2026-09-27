@@ -71,6 +71,8 @@ export const INFERENCE_PRESETS: ReadonlyArray<InferencePreset> = [
   },
 ];
 
+export interface ApiModelDetail { id: string; label: string; inputModalities: string[]; outputModalities: string[]; tools?: boolean }
+
 export interface InferenceProvider {
   id: string;
   kind: InferenceKind;
@@ -83,7 +85,7 @@ export interface InferenceProvider {
   model: string;
   createdAt: string;
   updatedAt: string;
-  lastTest?: { at: string; ok: boolean; models: string[]; modelDetails?: OllamaModelDetail[]; error?: string };
+  lastTest?: { at: string; ok: boolean; models: string[]; modelDetails?: OllamaModelDetail[]; apiModelDetails?: ApiModelDetail[]; error?: string };
 }
 
 export type PublicInferenceProvider = Omit<InferenceProvider, "apiKey"> & { hasKey: boolean };
@@ -177,6 +179,7 @@ function normalizeProvider(raw: unknown): InferenceProvider | null {
             ok: raw.lastTest.ok === true,
             models: Array.isArray(raw.lastTest.models) ? raw.lastTest.models.filter((m): m is string => typeof m === "string") : [],
             ...(Array.isArray(raw.lastTest.modelDetails) ? { modelDetails: raw.lastTest.modelDetails.filter((m): m is OllamaModelDetail => isRecord(m) && typeof m.id === "string" && Array.isArray(m.capabilities) && (m.locality === "local" || m.locality === "remote" || m.locality === "unknown") && typeof m.chat === "boolean" && typeof m.tools === "boolean").slice(0, 200) } : {}),
+            ...(Array.isArray(raw.lastTest.apiModelDetails) ? { apiModelDetails: raw.lastTest.apiModelDetails.filter((m): m is ApiModelDetail => isRecord(m) && typeof m.id === "string" && typeof m.label === "string" && Array.isArray(m.inputModalities) && Array.isArray(m.outputModalities)) } : {}),
             ...(typeof raw.lastTest.error === "string" ? { error: raw.lastTest.error } : {}),
           },
         }
@@ -249,24 +252,26 @@ export class InferenceStore {
     }
     if (patch.baseUrl !== undefined) {
       const nextUrl = validateBaseUrl(patch.baseUrl, provider.kind);
-      if (provider.kind === "ollama" && nextUrl !== provider.baseUrl) delete provider.lastTest;
+      if (nextUrl !== provider.baseUrl) delete provider.lastTest;
       provider.baseUrl = nextUrl;
     }
-    if (patch.apiKey !== undefined) provider.apiKey = validateKey(patch.apiKey);
+    if (patch.apiKey !== undefined) { const key = validateKey(patch.apiKey); if (key !== provider.apiKey) delete provider.lastTest; provider.apiKey = key; }
     if (patch.model !== undefined) provider.model = validateModel(patch.model) || presetFor(provider.kind).model;
     provider.updatedAt = this.nowIso();
     this.persist();
     return { ...provider };
   }
 
-  recordTest(id: string, result: { ok: boolean; models: string[]; modelDetails?: OllamaModelDetail[]; error?: string }): InferenceProvider {
+  recordTest(id: string, result: { ok: boolean; models: string[]; modelDetails?: OllamaModelDetail[]; apiModelDetails?: ApiModelDetail[]; error?: string }): InferenceProvider {
     const provider = this.providers.find((p) => p.id === id);
     if (!provider) throw new InferenceError("that provider is not added");
+    const previous = provider.lastTest;
     provider.lastTest = {
       at: this.nowIso(),
       ok: result.ok,
-      models: result.models.slice(0, 200),
+      models: !result.ok && previous ? previous.models : [...new Set(result.models.filter(id => typeof id === "string" && id.length <= 120 && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(id)))],
       ...(result.modelDetails ? { modelDetails: result.modelDetails.slice(0, 200) } : {}),
+      ...(result.apiModelDetails ? { apiModelDetails: result.apiModelDetails } : !result.ok && previous?.apiModelDetails ? { apiModelDetails: previous.apiModelDetails } : {}),
       ...(result.error ? { error: result.error.slice(0, 400) } : {}),
     };
     this.persist();
@@ -340,7 +345,7 @@ export function codexModelProviderFor(provider: InferenceProvider): CodexModelPr
 export interface InferenceProbe {
   ok: boolean;
   models: string[];
-  modelDetails?: OllamaModelDetail[];
+  modelDetails?: OllamaModelDetail[]; apiModelDetails?: ApiModelDetail[];
   error?: string;
 }
 
@@ -360,12 +365,34 @@ export async function probeInferenceProvider(
     });
     if (response.status === 401 || response.status === 403) return { ok: false, models: [], error: "the key was refused" };
     if (!response.ok) return { ok: false, models: [], error: `the API answered ${response.status}` };
-    const body = (await response.json()) as unknown;
+    // Never silently truncate an API catalog. Bound bytes, fail explicitly.
+    const limit = 8 * 1024 * 1024;
+    if (Number(response.headers.get("content-length")) > limit) throw new InferenceError("Model catalog exceeds the 8 MiB response limit");
+    const reader = response.body?.getReader();
+    if (!reader) throw new InferenceError("Model catalog response is empty");
+    const chunks: Uint8Array[] = []; let bytes = 0;
+    while (true) {
+      const part = await reader.read(); if (part.done) break;
+      bytes += part.value.byteLength;
+      if (bytes > limit) { await reader.cancel(); throw new InferenceError("Model catalog exceeds the 8 MiB response limit"); }
+      chunks.push(part.value);
+    }
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
     const rows = isRecord(body) && Array.isArray(body.data) ? body.data : Array.isArray(body) ? body : [];
     const models = rows
       .map((row) => (isRecord(row) && typeof row.id === "string" ? row.id : isRecord(row) && typeof row.name === "string" ? row.name : null))
       .filter((id): id is string => id !== null);
-    return { ok: true, models };
+    const validModels = [...new Set(models.filter(id => id.length <= 120 && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(id)))];
+    const ids = new Set(validModels);
+    const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+    const apiModelDetails = rows.flatMap(row => {
+      if (!isRecord(row) || typeof row.id !== "string" || !ids.has(row.id)) return [];
+      const architecture = isRecord(row.architecture) ? row.architecture : {};
+      return [{ id: row.id, label: typeof row.name === "string" ? row.name.slice(0, 200) : row.id,
+        inputModalities: strings(architecture.input_modalities), outputModalities: strings(architecture.output_modalities),
+        ...(Array.isArray(row.supported_parameters) ? { tools: row.supported_parameters.includes("tools") } : {}) }];
+    });
+    return { ok: true, models: validModels, apiModelDetails };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

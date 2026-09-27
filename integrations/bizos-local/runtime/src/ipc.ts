@@ -1,3 +1,4 @@
+import type { ModelSelectionInput } from "./harness/model-selection.js";
 // The IPC surface behind `window.localbizos`.
 //
 // Two rules hold this boundary:
@@ -663,6 +664,21 @@ export function asInferenceChoice(value: unknown): {
   };
 }
 
+export function asModelSelection(value: unknown): ModelSelectionInput {
+  const input = asStrictRecord(value, "input", ["scope", "selection"]);
+  const scope = asStrictRecord(input.scope, "scope", ["kind", "agentId", "chatId"]);
+  const kind = asEnum(scope.kind, "scope.kind", ["workspace", "agent", "quickchat"] as const);
+  const choice = asStrictRecord(input.selection, "selection", ["source", "model", "planId", "providerId"]);
+  const source = asEnum(choice.source, "selection.source", ["auto", "plan", "provider"] as const);
+  if ((source !== "plan" && choice.planId !== undefined) || (source !== "provider" && choice.providerId !== undefined)) throw new PayloadError("selection has conflicting sources");
+  if ((kind !== "agent" && scope.agentId !== undefined) || (kind !== "quickchat" && scope.chatId !== undefined)) throw new PayloadError("selection has conflicting scopes");
+  const model = asClearableString(choice.model, "selection.model", 120);
+  return {
+    scope: kind === "workspace" ? { kind } : kind === "agent" ? { kind, agentId: asString(scope.agentId, "agentId", 64) } : { kind, chatId: asString(scope.chatId, "chatId", 64) },
+    selection: source === "plan" ? { source, model, planId: asPlanId(choice.planId, "planId") } : source === "provider" ? { source, model, providerId: asProviderId(choice.providerId) } : { source, model },
+  };
+}
+
 export type IpcHandler = (args: unknown[]) => Promise<unknown>;
 
 /** What the bridge needs from Electron that the harness does not own. */
@@ -770,6 +786,7 @@ export function buildHandlers(
     "lbz:inference:update": (args) => harness.inference.update(asProviderId(at(args, 0)), asInferencePatch(at(args, 1))),
     "lbz:inference:remove": (args) => harness.inference.remove(asProviderId(at(args, 0))),
     "lbz:inference:test": (args) => harness.inference.test(asProviderId(at(args, 0))),
+    "lbz:runtime:selectModel": (args) => harness.runtime.selectModel(asModelSelection(at(args, 0))),
     "lbz:runtime:setInference": (args) => harness.runtime.setInference(asInferenceChoice(at(args, 0))),
     "lbz:runtime:setPermissions": (args) =>
       harness.runtime.setPermissions({

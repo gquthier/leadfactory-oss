@@ -1,3 +1,4 @@
+import { selectionBotFields, type ModelSelectionInput } from "./model-selection.js";
 import { localComputerEnabled, assertLocalComputerEnabled } from "../computer/release.js";
 import { ConversationContinuity } from "./continuity-sync.js";
 import type { ContinuityTransport } from "../continuity-bridge.js";
@@ -306,6 +307,7 @@ export interface HarnessOptions {
   deniedDirs?: string[];
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
+  startOpenAiTurn?: DispatchDependencies["startOpenAiTurn"];
   startOllamaTurn?: DispatchDependencies["startOllamaTurn"];
   startClaudeTurn?: DispatchDependencies["startClaudeTurn"];
   startCursorTurn?: DispatchDependencies["startCursorTurn"];
@@ -539,7 +541,7 @@ export class LocalBizosHarness {
   private sessionCookie = "";
   private broker: SessionBroker | null = null;
   private brokerStarting: Promise<SessionBroker | null> | null = null;
-  private catalog: { at: number; value: ModelCatalog } | null = null;
+  private catalog: { at: number; key?: string; value: ModelCatalog } | null = null;
   /** The Claude list is per ACCOUNT, not per machine: two plans on this Mac
    * can be entitled to different models, so the cache is keyed by the
    * config directory whose token answered. */
@@ -757,6 +759,7 @@ export class LocalBizosHarness {
           if (ended) this.publishRoutineUpdated(ended, "ended");
         }
       },
+      ...(options.startOpenAiTurn ? { startOpenAiTurn: options.startOpenAiTurn } : {}),
       ...(options.startTurn ? { startTurn: options.startTurn } : {}),
       ...(options.startClaudeTurn ? { startClaudeTurn: options.startClaudeTurn } : {}),
       ...(options.startCursorTurn ? { startCursorTurn: options.startCursorTurn } : {}),
@@ -1286,6 +1289,44 @@ export class LocalBizosHarness {
   // ── bridge surface ────────────────────────────────────────────────────
 
   readonly runtime = {
+    /** Validate everything before a single scope-owned persistence operation.
+     * Selecting never mutates a connector's shared default or starts inference. */
+    selectModel: async ({ scope, selection }: ModelSelectionInput) => {
+      const threadId = scope.kind === "agent" ? `bot:${scope.agentId}` : scope.kind === "quickchat" ? `chat:${scope.chatId}` : null;
+      if (scope.kind === "agent" && !this.botStore.get(scope.agentId)) throw new SettingsError("unknown agent");
+      if (scope.kind === "quickchat") this.quickChatStore.get(scope.chatId);
+      const busy = threadId ? this.dispatcher.activeRunIds(threadId).length > 0 : this.runStore.list(Number.MAX_SAFE_INTEGER).some(run => ["working", "queued", "waiting_input"].includes(run.state));
+      if (busy) throw new SettingsError("Stop the active run before changing its model");
+      const model = selection.model.trim();
+      if (scope.kind === "workspace" && !model) throw new SettingsError("Choose a concrete workspace model");
+      if (model.length > 120 || (model && !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model))) throw new SettingsError("invalid model id");
+      let family: PlanProvider | undefined;
+      if (selection.source === "provider") {
+        const provider = this.inferenceStore.get(selection.providerId);
+        if (!provider) throw new SettingsError("unknown provider");
+        const effective = model || provider.model;
+        if (!provider.lastTest?.ok || !provider.lastTest.models.includes(effective)) throw new SettingsError("Model is unavailable in the provider catalog; refresh the catalog");
+        if (provider.kind === "openrouter" && !provider.apiKey) throw new SettingsError("Connect this provider before selecting a model");
+        if (provider.kind === "ollama") {
+          const detail = provider.lastTest.modelDetails?.find(row => row.id === effective);
+          if (!detail?.chat || detail.locality !== "local" || (scope.kind !== "quickchat" && !detail.tools)) throw new SettingsError("Ollama model does not support this conversation");
+        }
+      } else if (selection.source === "plan") {
+        const plan = this.planRegistry.get(selection.planId);
+        if (!plan || plan.status !== "connected") throw new SettingsError("Selected plan is not connected");
+        family = plan.provider;
+        const catalog = await this.modelsFor(family, plan.id);
+        if (model && !catalog.models.some(row => row.id === model)) throw new SettingsError("Model is unavailable in this plan catalog");
+      }
+      // Catalog lookup may await a CLI: re-check the scope at the commit point.
+      if (threadId ? this.dispatcher.activeRunIds(threadId).length > 0 : this.runStore.list(Number.MAX_SAFE_INTEGER).some(run => ["working", "queued", "waiting_input"].includes(run.state))) throw new SettingsError("Stop the active run before changing its model");
+      if (selection.source === "plan" && this.planRegistry.get(selection.planId)?.status !== "connected") throw new SettingsError("Selected plan is no longer connected");
+      const effectiveSelection = { ...selection, model };
+      if (scope.kind === "agent") this.botStore.update(scope.agentId, selectionBotFields(effectiveSelection));
+      else if (scope.kind === "quickchat") this.quickChatStore.setModelSelection(scope.chatId, effectiveSelection);
+      else this.settingsStore.set({ local: { model, inferenceProviderId: selection.source === "provider" ? selection.providerId : null, activePlanId: selection.source === "plan" ? selection.planId : null, provider: family } });
+      return { scope, selection: effectiveSelection };
+    },
     getSettings: async (): Promise<RuntimeSettings> => this.settingsStore.get(),
     /**
      * Who answers the next turns. `auto` lets the router pick the best
@@ -1324,7 +1365,7 @@ export class LocalBizosHarness {
         });
       } else {
         if (!input.providerId || !this.inferenceStore.get(input.providerId)) throw new SettingsError("unknown provider");
-        this.settingsStore.set({ local: { inferenceProviderId: input.providerId } });
+        this.settingsStore.set({ local: { inferenceProviderId: input.providerId, model: this.inferenceStore.get(input.providerId)!.model } });
       }
       this.catalog = null;
       return this.settingsStore.get();
@@ -1416,11 +1457,12 @@ export class LocalBizosHarness {
     models: async (): Promise<ModelsResponse> => {
       const settings = this.settingsStore.get();
       const provider: PlanProvider =
-        this.planRegistry.getActive()?.provider ?? settings.local.provider ?? "codex";
-      return this.modelsFor(provider);
+        (settings.local.activePlanId ? this.planRegistry.get(settings.local.activePlanId)?.provider : undefined) ?? settings.local.provider ?? "codex";
+      return this.modelsFor(provider, settings.local.activePlanId ?? undefined);
     },
     /** Every family at once, for a chooser that lets a bot pick its plan. */
-    modelCatalogs: async (): Promise<Record<PlanProvider, ModelsResponse>> => ({
+    modelCatalogs: async () => ({
+      plans: Object.fromEntries(await Promise.all(this.planRegistry.list().filter(plan => plan.status === "connected").map(async plan => [plan.id, { ...await this.modelsFor(plan.provider, plan.id), planId: plan.id }]))),
       codex: await this.modelsFor("codex"),
       claude: await this.modelsFor("claude"),
       cursor: await this.modelsFor("cursor"),
@@ -1428,11 +1470,18 @@ export class LocalBizosHarness {
     toolsStatus: async (): Promise<LocalToolsStatus> => describeLocalToolsStatus(this.options),
   };
 
-  private async modelsFor(provider: PlanProvider): Promise<ModelsResponse> {
+  private async modelsFor(provider: PlanProvider, planId?: string): Promise<ModelsResponse> {
+    const plan = planId ? this.planRegistry.get(planId) : undefined;
+    // A catalog discovered from another account must never be advertised as live for this one.
+    if (planId && (provider === "cursor" || (provider === "claude" && !plan?.configDir) || (provider === "codex" && !plan?.codexHome))) {
+      const catalog = provider === "claude" ? STATIC_CLAUDE_MODELS : provider === "cursor" ? STATIC_CURSOR_MODELS : STATIC_CODEX_MODELS;
+      return { provider, source: "static", models: catalog.options.map(option => ({ ...option, isDefault: option.id === catalog.default })) };
+    }
+    const environment = { ...this.environment(), ...(plan?.codexHome ? { CODEX_HOME: plan.codexHome } : {}), ...(plan?.configDir ? { CLAUDE_CONFIG_DIR: plan.configDir } : {}) };
     {
       if (provider === "claude") {
         const now = this.clock.now().getTime();
-        const configDir = this.claudePlanConfigDir();
+        const configDir = plan?.configDir ?? this.claudePlanConfigDir();
         const key = configDir ?? "";
         if (!this.claudeCatalog || this.claudeCatalog.key !== key || now - this.claudeCatalog.at > MODEL_CACHE_MS) {
           this.claudeCatalog = {
@@ -1441,7 +1490,7 @@ export class LocalBizosHarness {
             value: await resolveClaudeModelCatalog({
               ...(configDir ? { configDir } : {}),
               homeDir: this.homeDir,
-              environment: this.environment(),
+              environment,
             }),
           };
         }
@@ -1462,10 +1511,11 @@ export class LocalBizosHarness {
           const cli = resolveCursorPath(undefined, this.environment(), { packaged: this.options.packaged });
           this.cursorCatalog = {
             at: now,
-            value: await resolveCursorModelCatalog({ cli, environment: this.environment() }),
+            value: await resolveCursorModelCatalog({ cli, environment }),
           };
         }
-        const catalog = this.cursorCatalog.value;
+        // Cursor exposes a machine CLI catalog, not an account admission API.
+        const catalog = planId ? STATIC_CURSOR_MODELS : this.cursorCatalog.value;
         return {
           models: catalog.options.map((option) => ({
             id: option.id,
@@ -1477,16 +1527,17 @@ export class LocalBizosHarness {
         };
       }
       const now = this.clock.now().getTime();
-      if (!this.catalog || now - this.catalog.at > MODEL_CACHE_MS) {
+      const key = plan?.codexHome ?? "";
+      if (!this.catalog || this.catalog.key !== key || now - this.catalog.at > MODEL_CACHE_MS) {
         let cli: string | null = null;
         try { cli = this.selectedCli("codex"); } catch { /* static catalog when no vetted CLI exists */ }
-        const status = cli ? await probeCodexStatus(cli, this.environment(), undefined,
+        const status = cli ? await probeCodexStatus(cli, environment, undefined,
           { packaged: this.options.packaged, managedRoot: this.managedCliRoot() }) : { found: false };
         const value =
           status.found && status.path
-            ? await resolveModelCatalog(status.path, this.environment())
+            ? await resolveModelCatalog(status.path, environment)
             : STATIC_CODEX_MODELS;
-        this.catalog = { at: now, value };
+        this.catalog = { at: now, key, value };
       }
       const catalog = this.catalog.value;
       return {
@@ -1612,7 +1663,7 @@ export class LocalBizosHarness {
         throw new InferenceError("Choose another inference source before removing the selected Ollama connector.");
       }
       const removed = this.inferenceStore.remove(id);
-      if (removed && selected) this.settingsStore.set({ local: { inferenceProviderId: null } });
+
       return { removed };
     },
     /** Lists the endpoint's models with the stored key — what a turn will be able to use. */
@@ -2757,9 +2808,7 @@ export class LocalBizosHarness {
     },
     disconnect: async (planId: string): Promise<{ removed: boolean }> => {
       const removed = this.planRegistry.remove(planId);
-      if (removed && this.settingsStore.get().local.activePlanId === planId) {
-        this.settingsStore.set({ local: { activePlanId: null } });
-      }
+      // Keep an explicit selection as unavailable instead of falling back to another account.
       return { removed };
     },
     test: async (planId: string): Promise<{ ok: boolean; reason?: string }> => {

@@ -425,10 +425,6 @@ interface SessionContext {
 /** A primed session's brief is refreshed when it changed and is this old. */
 export const BRIEF_REFRESH_MS = 6 * 60 * 60_000;
 
-/** The run note of a free-tier turn whose custom model was set aside. */
-export const FREE_TIER_PROVIDER_NOTE =
-  "Custom models need BizOS Pro: this reply used your connected plan instead.";
-
 /** The queued half of an active turn, to launch the turn that continues it. */
 function queuedOf(turn: ActiveTurn): QueuedTurn {
   return {
@@ -1751,26 +1747,23 @@ export class Dispatcher {
     // An explicit external binding must remain exact even after deletion.
     const strictBinding = queued.executionPolicy?.source === "voice" ? queued.executionPolicy.binding : null;
     const ownPlanProvider = strictBinding ? null : bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
+    if (!strictBinding && bot.planId && !ownPlanProvider) { this.abandon(queued, bot.id, "The selected personal plan was removed; choose another source."); return; }
     const preferredProvider = strictBinding?.provider ?? ownPlanProvider ?? settings.local.provider;
     // An external endpoint answers through codex and needs no plan at all;
     // otherwise the router picks among the connected plans.
     let ownExternal: ExternalExecutionProvider | null = null;
     let globalExternal: ExternalExecutionProvider | null = null;
-    // Free tier: custom models (external providers) are a Pro feature. The
-    // selection is kept — upgrading brings it back — but this turn answers
-    // with the connected plan, and says so.
     const globalProviderId = settings.local.inferenceProviderId;
-    const freeTier = !strictBinding && !queued.ollamaBinding && this.deps.planTier?.() === "free";
-    const ignoredProvider = freeTier && Boolean(bot.providerId || (!(bot.planId && ownPlanProvider) && globalProviderId));
+    const exactPlanId = strictBinding?.planId ?? (bot.providerId ? undefined : bot.planId || (!globalProviderId ? settings.local.activePlanId : undefined)) ?? undefined;
     try {
-      ownExternal = strictBinding || queued.ollamaBinding || freeTier ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
-      globalExternal = strictBinding || queued.ollamaBinding || freeTier || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
+      ownExternal = strictBinding || queued.ollamaBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
+      globalExternal = strictBinding || queued.ollamaBinding || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
     } catch (error) {
       this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error)); return;
     }
-    if (!strictBinding && !freeTier && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
+    if (!strictBinding && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
     const external = strictBinding ? null : queued.ollamaBinding ?? ownExternal ?? (bot.planId && ownPlanProvider ? null : globalExternal);
-    if (!strictBinding && !freeTier && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
+    if (!strictBinding && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
       this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Settings."); return;
     }
     const plan = external
@@ -1779,8 +1772,9 @@ export class Dispatcher {
           cursorKey,
           ...(preferredProvider ? { preferredProvider } : {}),
           ...(bot.planId && ownPlanProvider ? { botPlanId: bot.planId } : {}),
-          ...(strictBinding ? { exactPlanId: strictBinding.planId } : {}),
+          ...(exactPlanId ? { exactPlanId } : {}),
         });
+    if (exactPlanId && !external && (!plan || plan.id !== exactPlanId)) { this.abandon(queued, bot.id, "The selected personal plan is unavailable; reconnect it or choose another source."); return; }
     if (strictBinding && (!plan || plan.id !== strictBinding.planId || plan.provider !== strictBinding.provider)) {
       this.abandon(queued, bot.id, "The voice task's selected personal plan is no longer available.");
       return;
@@ -1791,8 +1785,8 @@ export class Dispatcher {
     const native = provider === "ollama" || provider === "api";
     const family = plan?.provider ?? preferredProvider;
     const model = external
-      ? (queued.ollamaBinding?.model || bot.model?.trim() || external.model || undefined)
-      : (modelForFamily(family, bot.model) ?? modelForFamily(family, settings.local.model));
+      ? (queued.ollamaBinding?.model || bot.model?.trim() || (!bot.providerId && settings.local.model?.trim()) || external.model || undefined)
+      : (bot.model?.trim() || (bot.planId ? undefined : exactPlanId ? settings.local.model?.trim() : modelForFamily(family, settings.local.model)) || undefined);
     if (provider === "ollama" && !model) { this.abandon(queued, bot.id, "Select an installed Ollama model in Settings."); return; }
     if (provider === "api" && !model) { this.abandon(queued, bot.id, "Choose a model for this API provider in Settings → Plans & usage."); return; }
 
@@ -1862,7 +1856,6 @@ export class Dispatcher {
       // Cursor's print mode cannot raise an approval card at all, so the
       // transcript says so on EVERY Cursor turn, not only under `skip-all`.
       blocks: [
-        ...(ignoredProvider ? [{ kind: "meta" as const, text: FREE_TIER_PROVIDER_NOTE }] : []),
         ...(provider === "cursor"
           ? [{ kind: "meta" as const, text: cursorPermissionNote(settings.local.permissions) }]
           : skipPermissions ? [{ kind: "meta" as const, text: SKIPPED_PERMISSIONS_NOTE }] : []),
@@ -2116,7 +2109,7 @@ export class Dispatcher {
     failure: string | null,
   ): boolean {
     if(this.deps.continuity?.linked(turn.threadId))return false;
-    if (turn.executionPolicy?.source === "voice" || turn.failoverUsed || turn.cancelled || turn.discarded) return false;
+    if (bot.planId || this.deps.settings().local.activePlanId || turn.executionPolicy?.source === "voice" || turn.failoverUsed || turn.cancelled || turn.discarded) return false;
     if (!turn.planId || !this.deps.failoverPlan) return false;
     if (!this.isPlanFailoverReason(failure)) return false;
 
