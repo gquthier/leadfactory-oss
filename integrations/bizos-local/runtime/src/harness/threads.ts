@@ -117,6 +117,14 @@ export class ThreadStore {
     return next;
   }
 
+  hasUnlinkedHistory(target: ThreadTarget): boolean {
+    const threadId = threadIdForTarget(target);
+    const canonical = new Set((this.continuity?.projection(threadId) ?? []).map(row => row.id));
+    this.hooks?.assertAccessible(threadId);
+    return this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage)
+      .some(row => (row.role === "user" || row.role === "bot") && !canonical.has(row.id));
+  }
+
   snapshot(target: ThreadTarget, activeRunIds: string[] = []): ThreadSnapshot {
     const threadId = threadIdForTarget(target);
     const rows = this.rows(threadId);

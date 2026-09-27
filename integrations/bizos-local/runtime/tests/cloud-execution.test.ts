@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Storage } from '../src/harness/storage.js';
 import type { ConversationContinuity } from '../src/harness/continuity-sync.js';
+import { ContinuityBridgeError } from '../src/continuity-bridge.js';
 import { CloudExecution } from '../src/harness/cloud-execution.js';
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root,{recursive:true,force:true})));
@@ -57,4 +58,36 @@ it('a completed cloud retry keeps its original route after selecting personal',a
   const before=f.cloud.mock.calls.length;
   expect((await f.manager.send('bot:marketing','message','hello')).duplicate).toBe(true);
   expect(f.cloud.mock.calls.length).toBe(before);
+});
+
+it('a definitive first refusal survives restart and permits an explicit personal return',async()=>{
+  const f=fixture(); await f.manager.select('bot:marketing','bizos');
+  f.cloud.mockRejectedValueOnce(new ContinuityBridgeError(409,'policy_changed','policy_changed',true));
+  await expect(f.manager.send('bot:marketing','message','hello')).rejects.toThrow('policy_changed');
+  const restored=new CloudExecution(f.storage,f.continuity);
+  expect(restored.ownsRequest('message')).toBe(false);
+  expect((await restored.select('bot:marketing','personal')).destination).toBe('personal');
+});
+it('a later definitive refusal cannot erase an earlier unknown outcome',async()=>{
+  const f=fixture(); await f.manager.select('bot:marketing','bizos');
+  f.cloud.mockRejectedValueOnce(new Error('network timeout'));
+  await expect(f.manager.send('bot:marketing','message','hello')).rejects.toThrow('timeout');
+  f.cloud.mockRejectedValueOnce(new ContinuityBridgeError(409,'policy_changed','policy_changed',true));
+  await expect(f.manager.send('bot:marketing','message','hello')).rejects.toThrow('policy_changed');
+  await expect(new CloudExecution(f.storage,f.continuity).select('bot:marketing','personal')).rejects.toThrow('unconfirmed');
+});
+it('local size validation and pre-dispatch sync failure do not create unknown requests',async()=>{
+  const f=fixture(); await f.manager.select('bot:marketing','bizos');
+  await expect(f.manager.send('bot:marketing','oversize','x'.repeat(10001))).rejects.toThrow('10000');
+  vi.mocked(f.continuity.sync).mockRejectedValueOnce(new Error('sync failed'));
+  await expect(f.manager.send('bot:marketing','sync','hello')).rejects.toThrow('sync failed');
+  expect(f.manager.ownsRequest('oversize')).toBe(false);
+  expect(f.manager.ownsRequest('sync')).toBe(false);
+  expect((await f.manager.select('bot:marketing','personal')).destination).toBe('personal');
+});
+it('an HTTP error without an explicit refusal marker remains unknown',async()=>{
+  const f=fixture(); await f.manager.select('bot:marketing','bizos');
+  f.cloud.mockRejectedValueOnce(new ContinuityBridgeError(400,'invalid_body','invalid_body',false));
+  await expect(f.manager.send('bot:marketing','message','hello')).rejects.toThrow();
+  await expect(f.manager.select('bot:marketing','personal')).rejects.toThrow('unconfirmed');
 });

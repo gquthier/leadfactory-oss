@@ -1,0 +1,35 @@
+import { afterEach, expect, it } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Storage } from '../src/harness/storage.js';
+import { ThreadStore } from '../src/harness/threads.js';
+import { systemClock } from '../src/harness/clock.js';
+import { CollaborationFacade } from '../src/sidecar.js';
+import type { ConversationContinuity } from '../src/harness/continuity-sync.js';
+import type { ThreadMessage } from '../src/harness/types.js';
+const roots:string[]=[];
+afterEach(()=>roots.splice(0).forEach(root=>rmSync(root,{recursive:true,force:true})));
+for (const count of [0,60,130]) it(`refuses local pre-link context outside the ${count}-message canonical history`,async()=>{
+  const root=mkdtempSync(join(tmpdir(),'cloud-history-'));roots.push(root);
+  const storage=new Storage(root),thread='bot:review';
+  const row=(id:string,seq:number,text:string):ThreadMessage=>({id,seq,threadId:thread,role:'user',blocks:[{kind:'text',text}],createdAt:'2026-09-28T00:00:00Z'});
+  storage.appendNdjson(storage.threadPath(thread),row('private-before-link',1,'Approved price is 79 EUR.'));
+  const canonical=Array.from({length:count},(_,i)=>row(`canonical-${i}`,i+2,`linked text ${i}`));
+  const continuity={projection:()=>canonical,store:{projectionAnchor:()=>undefined}} as unknown as ConversationContinuity;
+  const threads=new ThreadStore(storage,systemClock,continuity);
+  let selected=false;
+  const facade=Object.create(CollaborationFacade.prototype) as CollaborationFacade;
+  Object.assign(facade,{instanceId:'fixture',mutationTail:Promise.resolve(),harness:{continuity,threads},cloudController:{destination:()=> 'personal',select:async()=>{selected=true;return {destination:'bizos',available:true};}},invoke:async(channel:string)=>{
+    if(channel==='lbz:runs:list') return [];
+    throw Error(channel);
+  }});
+  expect(threads.hasUnlinkedHistory({botId:'review'})).toBe(true);
+  expect((await facade.executionDestination('local:fixture:thread:bot:review')).available).toBe(false);
+  await expect(facade.executionDestination('local:fixture:thread:bot:review','bizos')).rejects.toThrow('not fully linked');
+  expect(selected).toBe(false);
+  canonical.unshift(row('private-before-link',1,'Approved price is 79 EUR.'));
+  expect(threads.hasUnlinkedHistory({botId:'review'})).toBe(false);
+  await facade.executionDestination('local:fixture:thread:bot:review','bizos');
+  expect(selected).toBe(true);
+});

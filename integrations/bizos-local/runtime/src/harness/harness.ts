@@ -3449,6 +3449,7 @@ export class LocalBizosHarness {
   };
 
   readonly threads = {
+    hasUnlinkedHistory: (target: ThreadTarget): boolean => this.threadStore.hasUnlinkedHistory(target),
     get: async (target: ThreadTarget): Promise<ThreadSnapshot> =>
       this.threadStore.snapshot(target, this.dispatcher.activeRunIds(threadIdForTarget(target))),
     messages: async (

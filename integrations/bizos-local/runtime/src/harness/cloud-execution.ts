@@ -1,3 +1,4 @@
+import { ContinuityBridgeError } from '../continuity-bridge.js';
 import type { ConversationContinuity } from './continuity-sync.js';
 import type { Storage } from './storage.js';
 
@@ -11,7 +12,7 @@ interface Binding { accountId: string; orgId: string; conversationId: string; in
 interface SavedRun { threadId: string; binding: Binding; run: CloudRun; eventId: string; }
 interface State {
   selections: Record<string, { destination: 'personal' | 'bizos'; binding: Binding }>;
-  requests: Record<string, { threadId: string; content: string; binding: Binding; result?: CloudSend }>;
+  requests: Record<string, { threadId: string; content: string; binding: Binding; result?: CloudSend; rejected?: boolean }>;
   runs: Record<string, SavedRun>;
 }
 const FILE = 'cloud-execution.json';
@@ -51,7 +52,7 @@ export class CloudExecution {
   }
   async select(threadId: string, destination: 'personal' | 'bizos') {
     if (destination === 'personal' && !this.state.selections[threadId]) return { destination, available: false };
-    if (Object.values(this.state.requests).some(request => request.threadId === threadId && !request.result))
+    if (Object.values(this.state.requests).some(request => request.threadId === threadId && !request.result && !request.rejected))
       throw new Error('Retry the unconfirmed cloud message before changing execution.');
     const status = await this.status(threadId);
     if (!status.available && !(destination === 'personal' && 'active' in status)) throw new Error(status.reason ?? 'BizOS is unavailable.');
@@ -62,8 +63,9 @@ export class CloudExecution {
     return { ...status, destination };
   }
   ownsRun(runId: string): boolean { return Object.hasOwn(this.state.runs, runId); }
-  ownsRequest(clientMessageId: string): boolean { return Object.hasOwn(this.state.requests, clientMessageId); }
+  ownsRequest(clientMessageId: string): boolean { return Object.hasOwn(this.state.requests, clientMessageId) && !this.state.requests[clientMessageId]?.rejected; }
   async send(threadId: string, clientMessageId: string, content: string): Promise<CloudSend> {
+    if (!content.trim() || content.trim().length > 10_000) throw new Error('A cloud message must contain 1 to 10000 characters.');
     const saved = this.state.selections[threadId];
     const old = this.state.requests[clientMessageId];
     if (!saved || (saved.destination !== 'bizos' && !old?.result)) throw new Error('BizOS is not selected for this conversation.');
@@ -74,14 +76,25 @@ export class CloudExecution {
       await this.continuity.sync(threadId);
       return { ...old.result, duplicate: true };
     }
-    // Persist the immutable retry identity before the network request. A lost
-    // response retries the same server message, never creates a second turn.
-    if (!old) {
-      this.state.requests[clientMessageId] = { threadId, content, binding: this.binding(threadId) };
-      this.save();
-    }
+    // Synchronization failure has not attempted this new cloud request.
     await this.continuity.sync(threadId);
-    const result = await this.continuity.cloud(threadId, 'cloud/send', { clientMessageId, content }) as CloudSend;
+    const uncertainBefore = Boolean(old && !old.result && !old.rejected);
+    // Persist before dispatch: process death or transport loss remains unknown.
+    this.state.requests[clientMessageId] = { threadId, content, binding: this.binding(threadId), ...(old?.result ? { result: old.result } : {}) };
+    this.save();
+    let result: CloudSend;
+    try {
+      result = await this.continuity.cloud(threadId, 'cloud/send', { clientMessageId, content }) as CloudSend;
+    } catch (error) {
+      // A later rejection cannot prove that an earlier timed-out attempt did
+      // not commit. Only the first attempt's explicit pre-admission refusal
+      // releases the selection fence. Never infer this from HTTP status alone.
+      if (!uncertainBefore && !old?.result && error instanceof ContinuityBridgeError && error.requestRejected) {
+        this.state.requests[clientMessageId]!.rejected = true;
+        this.save();
+      }
+      throw error;
+    }
     this.assertBinding(threadId, saved.binding);
     if (!result.eventId || !Array.isArray(result.runs) || result.runs.some(run => run.threadId !== saved.binding.conversationId))
       throw new Error('BizOS returned a different conversation.');

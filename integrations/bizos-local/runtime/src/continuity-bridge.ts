@@ -12,6 +12,11 @@ export interface ContinuityIdentity {
   orgId: string;
   workspaceId: string;
 }
+export class ContinuityBridgeError extends Error {
+  constructor(readonly status: number, readonly code: string, message: string, readonly requestRejected = false) {
+    super(message);
+  }
+}
 export function desktopContinuityTransport(
   descriptorPath: string,
   fetchImpl: typeof fetch = fetch,
@@ -54,11 +59,14 @@ export function desktopContinuityTransport(
       ok?: boolean;
       result?: T;
       error?: string;
+      code?: string;
+      requestRejected?: boolean;
     };
     if (!response.ok || result.ok !== true)
-      throw new Error(
-        result.error?.slice(0, 400) ??
-          `Continuity bridge refused request (${response.status}).`,
+      throw new ContinuityBridgeError(
+        response.status, result.code ?? 'unavailable',
+        result.error?.slice(0, 400) ?? `Continuity bridge refused request (${response.status}).`,
+        result.requestRejected === true,
       );
     return result.result as T;
   };

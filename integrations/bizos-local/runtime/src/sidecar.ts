@@ -1571,9 +1571,7 @@ export class CollaborationFacade {
       if (destination && running) throw new HttpError(409, "run_active", "Stop the active run before changing execution.");
       // A pre-link local transcript is not silently uploaded or omitted.
       if (destination === 'bizos' || destination === undefined) {
-        const snapshot = await this.invoke<ThreadSnapshot>("lbz:threads:get", [target]);
-        const canonical = new Set(this.harness.continuity.projection(localId).map(row => row.id));
-        if (snapshot.messages.some(row => (row.role === 'user' || row.role === 'bot') && !canonical.has(row.id))) {
+        if (this.harness.threads.hasUnlinkedHistory(target)) {
           if (destination) throw new HttpError(409, "history_not_linked", "The local history is not fully linked to BizOS.");
           return { destination: this.cloud.destination(localId), available: false, reason: "The local history is not fully linked to BizOS." };
         }
