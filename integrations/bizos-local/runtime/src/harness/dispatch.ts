@@ -1785,7 +1785,7 @@ export class Dispatcher {
     const native = provider === "ollama" || provider === "api";
     const family = plan?.provider ?? preferredProvider;
     const model = external
-      ? (queued.ollamaBinding?.model || bot.model?.trim() || (!bot.providerId && settings.local.model?.trim()) || external.model || undefined)
+      ? (queued.ollamaBinding?.model || bot.model?.trim() || (!bot.providerId && settings.local.inferenceModel?.trim()) || external.model || undefined)
       : (bot.model?.trim() || (bot.planId ? undefined : exactPlanId ? settings.local.model?.trim() : modelForFamily(family, settings.local.model)) || undefined);
     if (provider === "ollama" && !model) { this.abandon(queued, bot.id, "Select an installed Ollama model in Settings."); return; }
     if (provider === "api" && !model) { this.abandon(queued, bot.id, "Choose a model for this API provider in Settings → Plans & usage."); return; }

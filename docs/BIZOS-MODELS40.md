@@ -21,7 +21,10 @@ active runs. The Desktop confirms persistence with a fresh read.
 QuickChat stores its own selection in its existing expiring record. Changing
 configuration does not change its timestamps/TTL or other chats. Group controls
 explicitly edit workspace defaults; existing agent overrides still win.
-Selecting a model never rewrites a connector's shared default.
+Selecting a model never rewrites a connector's shared default. The new workspace
+provider override uses `local.inferenceModel`; legacy profiles without this field
+keep using the connector default even when `local.model` still names an old CLI
+model. This migration case has a separate injected-driver regression.
 
 Personal models are usable independently of the paid entitlement. Other
 entitlement features remain unchanged. Explicit CLI account selection disables
@@ -41,7 +44,8 @@ configuration; account-unverifiable catalogs, including Cursor, remain static.
 - 53 focused runtime tests passed across personal-model-selection, entitlement,
   quick-chats, ollama, openai-dispatch, cursor-dispatch, continuity-dispatch,
   sidecar-model-selection and sidecar-entitlement. Final targeted recheck includes
-  deleted explicit CLI accounts in all three scopes.
+  deleted explicit CLI accounts in all three scopes. After the legacy-profile
+  compatibility fix, 15 targeted unit/HTTP tests passed.
 - Real sidecar HTTP fixture verifies auth, free personal providers, 650 models,
   secret-free public responses, exact workspace/QuickChat persistence, unchanged
   connector defaults/TTL and rejected invalid writes. Provider server accepts only

@@ -1324,7 +1324,7 @@ export class LocalBizosHarness {
       const effectiveSelection = { ...selection, model };
       if (scope.kind === "agent") this.botStore.update(scope.agentId, selectionBotFields(effectiveSelection));
       else if (scope.kind === "quickchat") this.quickChatStore.setModelSelection(scope.chatId, effectiveSelection);
-      else this.settingsStore.set({ local: { model, inferenceProviderId: selection.source === "provider" ? selection.providerId : null, activePlanId: selection.source === "plan" ? selection.planId : null, provider: family } });
+      else this.settingsStore.set({ local: { model, inferenceModel: selection.source === "provider" ? model : null, inferenceProviderId: selection.source === "provider" ? selection.providerId : null, activePlanId: selection.source === "plan" ? selection.planId : null, provider: family } });
       return { scope, selection: effectiveSelection };
     },
     getSettings: async (): Promise<RuntimeSettings> => this.settingsStore.get(),
@@ -1354,18 +1354,18 @@ export class LocalBizosHarness {
       if (input.source === "auto") {
         this.planRegistry.setActive(null);
         this.settingsStore.set({
-          local: { activePlanId: null, inferenceProviderId: null, provider: input.provider, ...modelFor(input.provider) },
+          local: { activePlanId: null, inferenceProviderId: null, inferenceModel: null, provider: input.provider, ...modelFor(input.provider) },
         });
       } else if (input.source === "plan") {
         if (!input.planId) throw new SettingsError("planId is required");
         const plan = this.planRegistry.setActive(input.planId);
         if (!plan) throw new SettingsError("unknown plan");
         this.settingsStore.set({
-          local: { activePlanId: plan.id, provider: plan.provider, inferenceProviderId: null, ...modelFor(plan.provider) },
+          local: { activePlanId: plan.id, provider: plan.provider, inferenceProviderId: null, inferenceModel: null, ...modelFor(plan.provider) },
         });
       } else {
         if (!input.providerId || !this.inferenceStore.get(input.providerId)) throw new SettingsError("unknown provider");
-        this.settingsStore.set({ local: { inferenceProviderId: input.providerId, model: this.inferenceStore.get(input.providerId)!.model } });
+        this.settingsStore.set({ local: { inferenceProviderId: input.providerId, inferenceModel: null, model: this.inferenceStore.get(input.providerId)!.model } });
       }
       this.catalog = null;
       return this.settingsStore.get();

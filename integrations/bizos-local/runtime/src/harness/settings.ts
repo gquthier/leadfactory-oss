@@ -125,6 +125,7 @@ export function normalizeSettings(raw: unknown): RuntimeSettings {
       ...(activePlanId !== undefined ? { activePlanId } : {}),
       ...(provider ? { provider } : {}),
       ...(inferenceProviderId !== undefined ? { inferenceProviderId } : {}),
+      ...(local.inferenceModel === null ? { inferenceModel: null } : typeof local.inferenceModel === "string" && MODEL_ID.test(local.inferenceModel) ? { inferenceModel: local.inferenceModel } : {}),
       ...(heartbeatSetting(local.heartbeat) ? { heartbeat: heartbeatSetting(local.heartbeat)! } : {}),
     },
     appearance: {
@@ -260,6 +261,8 @@ export function validateLocalPatch(local: Record<string, unknown>, policy: Setti
       }
     }
   }
+
+  if (local.inferenceModel !== undefined && local.inferenceModel !== null && (typeof local.inferenceModel !== "string" || !MODEL_ID.test(local.inferenceModel))) throw new SettingsError("invalid provider model override");
 
   if ("model" in local && local.model !== undefined && local.model !== null) {
     if (typeof local.model !== "string" || !MODEL_ID.test(local.model.trim())) {

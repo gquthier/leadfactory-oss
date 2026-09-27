@@ -113,3 +113,13 @@ it('refreshes 650 models with metadata using only GET /models and refuses oversi
   expect(result.apiModelDetails?.at(-1)).toMatchObject({ id: 'lab/model-649', label: 'Model 649', tools: true });
   expect(await probeInferenceProvider(provider, { fetchImpl: async () => new Response('{}', { headers: { 'content-length': String(9 * 1024 * 1024) } }) })).toMatchObject({ ok: false, error: expect.stringContaining('8 MiB') });
 });
+
+it('preserves the connector default for legacy workspace profiles with an unrelated CLI model', async () => {
+  const calls: string[] = [];
+  const f = fixture(undefined, { startOpenAiTurn: input => { calls.push(input.model); return { stop: () => {}, respond: () => 'unavailable', sessionId: () => null, settled: () => false }; } });
+  const provider = await f.harness.inference.add({ kind: 'openrouter', apiKey: 'fixture', model: 'lab/legacy-default' });
+  await f.harness.runtime.setSettings({ local: { inferenceProviderId: provider.id, model: 'gpt-old-cli-model' } });
+  const bot = await f.harness.bots.create({ name: 'Legacy profile' });
+  await f.harness.threads.send({ botId: bot.id }, { text: 'Fixture only' });
+  expect(calls).toEqual(['lab/legacy-default']);
+});

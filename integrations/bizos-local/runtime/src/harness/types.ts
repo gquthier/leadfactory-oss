@@ -38,6 +38,8 @@ export interface LocalRuntimeSettings {
    * turns instead of a plan, through codex's `model_providers`. `null` or
    * absent means the plans do. */
   inferenceProviderId?: string | null;
+  /** Workspace provider override; absent in legacy profiles, which use the connector default. */
+  inferenceModel?: string | null;
   /** Proactive heartbeat (sidecar only). Absent ⇒ ON every 30 minutes,
    * 08:00–21:00 local. See `harness/heartbeat.ts`. */
   heartbeat?: { enabled: boolean; everyMinutes: number };
