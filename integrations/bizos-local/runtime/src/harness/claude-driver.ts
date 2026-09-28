@@ -10,7 +10,8 @@
 // answered. CLI permission requests use the host control channel and the
 // same persistent approval cards as the Codex driver.
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeConfigEnvironment, cleanChildEnvironment } from "./child-env.js";
 import {
@@ -40,6 +41,7 @@ export interface ClaudeTurnInput {
   model?: string;
   effort?: ReasoningEffort;
   sandbox: SandboxMode;
+  /** Legacy input ignored: native sessions are never resumed. */
   resumeCursor?: string | null;
   /** Absolute CLAUDE_CONFIG_DIR for this plan. */
   configDir?: string;
@@ -51,7 +53,6 @@ export interface ClaudeTurnInput {
   mcpConfigDir?: string;
   environment?: Record<string, string | undefined>;
   onEvent: (event: RuntimeEvent) => void;
-  tee?: (entry: { dir: "in" | "out"; msg: unknown }) => void;
   pathOverride?: string;
   isAlwaysAllowed?: CodexTurnInput["isAlwaysAllowed"];
   /** Settings → Plans & usage said "never ask anyone": see `buildClaudeArgs`. */
@@ -94,6 +95,19 @@ export function writeClaudeMcpConfig(dir: string, servers: Record<string, McpSer
   return path;
 }
 
+/** Keep the BizOS persona out of process argv and private to this turn. */
+export function writeClaudeSystemPrompt(system: string): { dir: string; path: string } {
+  const dir = mkdtempSync(join(tmpdir(), "bizos-claude-prompt-"));
+  const path = join(dir, "system.txt");
+  try {
+    writeFileSync(path, system, { mode: 0o600, flag: "wx" });
+    return { dir, path };
+  } catch (error) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* preserve the original write error */ }
+    throw error;
+  }
+}
+
 /** Only servers explicitly marked "run without asking" are preapproved;
  * other requests reach the host permission channel. */
 export function claudeAllowedTools(servers: Record<string, McpServerSpec>): string[] {
@@ -117,8 +131,7 @@ export function buildClaudeArgs(input: {
   boundedTools?: boolean;
   text: string;
   model?: string;
-  system?: string;
-  resumeCursor?: string | null;
+  systemPromptPath?: string;
   cwd: string;
   additionalDirectories?: string[];
   effort?: ReasoningEffort;
@@ -149,6 +162,7 @@ export function buildClaudeArgs(input: {
     "stream-json",
     "--verbose",
     "--include-partial-messages",
+    "--no-session-persistence",
     "--permission-mode",
     bypass ? "bypassPermissions" : input.boundedTools ? "manual" : permissionModeFor(input.sandbox),
     ...(bypass ? ["--dangerously-skip-permissions"] : []),
@@ -156,8 +170,7 @@ export function buildClaudeArgs(input: {
   ];
   if (input.boundedTools) args.push("--restricted", "--safe-mode", "--tools", "", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--settings", JSON.stringify({disableAllHooks:true}));
   if (input.model) args.push("--model", input.model);
-  if (input.system) args.push("--append-system-prompt", input.system);
-  if (input.resumeCursor) args.push("--resume", input.resumeCursor);
+  if (input.systemPromptPath) args.push("--append-system-prompt-file", input.systemPromptPath);
   if (input.effort) args.push("--effort", input.effort);
   // In the explicitly selected native bypass mode, BizOS augments the CLI:
   // retain the account/project MCP sources as well as the harness's servers.
@@ -189,6 +202,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
     sessionId: null as string | null,
     child: null as PipedChild | null,
     mcpConfigPath: null as string | null,
+    systemPromptDir: null as string | null,
     initialized: false,
     resultError: null as string | null,
     resultSeen: false,
@@ -200,7 +214,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
 
   const emit = (event: RuntimeEvent): void => {
     try {
-      input.onEvent(event);
+      input.onEvent(event.type === "session.started" ? { ...event, sessionId: null } : event);
     } catch {
       /* a listener must never take the turn down */
     }
@@ -212,7 +226,6 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
     const stdin = state.child?.stdin;
     if (!stdin || stdin.destroyed || stdin.writableEnded) return false;
     try {
-      input.tee?.({ dir: "in", msg: redactSecrets(message) });
       stdin.write(`${JSON.stringify(message)}\n`);
       return true;
     } catch { return false; }
@@ -246,6 +259,17 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
     state.mcpConfigPath = null;
   };
 
+  const dropSystemPrompt = (): boolean => {
+    if (!state.systemPromptDir) return true;
+    try {
+      rmSync(state.systemPromptDir, { recursive: true, force: true });
+      state.systemPromptDir = null;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const finish = (ok: boolean, stopReason: string | null): void => {
     if (state.settled) return;
     state.settled = true;
@@ -256,21 +280,26 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
       state.child = null;
     }
     dropMcpConfig();
-    if (ok) emit({ type: "context.confirmed" });
-    emit({ type: "turn.completed", ok, stopReason });
+    const promptRemoved = dropSystemPrompt();
+    if (!promptRemoved) emit({ type: "runtime.error", message: "Could not remove Claude's private prompt file." });
+    if (ok && promptRemoved) emit({ type: "context.confirmed" });
+    emit({ type: "turn.completed", ok: ok && promptRemoved, stopReason: promptRemoved ? stopReason : "private_prompt_cleanup_failed" });
   };
 
   const stop = (): void => {
+    if (state.settled) return;
     state.stopRequested = true;
     clearTimeout(initializeTimer);
     for (const id of [...pending.keys()]) resolvePermission(id, false, "system", "The run was stopped. Do not execute this action.");
     clearPermissions();
     if (state.child) killCliTree(state.child);
+    if (!dropSystemPrompt()) emit({ type: "runtime.error", message: "Could not remove Claude's private prompt file." });
   };
 
   emit({ type: "turn.started" });
 
   let child: PipedChild;
+  let setupStage = "environment";
   try {
     const environment = claudeChildEnvironment(
       input.environment ?? process.env,
@@ -278,8 +307,16 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
       input.configDir,
     );
     const servers = input.mcpServers ?? {};
+    setupStage = "MCP config";
     if (Object.keys(servers).length && input.mcpConfigDir) {
       state.mcpConfigPath = writeClaudeMcpConfig(input.mcpConfigDir, servers);
+    }
+    setupStage = "private prompt file";
+    let systemPromptPath: string | undefined;
+    if (input.system) {
+      const prompt = writeClaudeSystemPrompt(input.system);
+      state.systemPromptDir = prompt.dir;
+      systemPromptPath = prompt.path;
     }
     const allowedTools = state.mcpConfigPath ? claudeAllowedTools(servers) : [];
     const args = buildClaudeArgs({
@@ -288,21 +325,23 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
       ...(input.additionalDirectories?.length ? { additionalDirectories: input.additionalDirectories } : {}),
       sandbox: input.sandbox,
       ...(input.model ? { model: input.model } : {}),
-      ...(input.system ? { system: input.system } : {}),
-      ...(input.resumeCursor ? { resumeCursor: input.resumeCursor } : {}),
+      ...(systemPromptPath ? { systemPromptPath } : {}),
       ...(input.boundedTools ? { boundedTools: true } : {}),
       ...(input.effort ? { effort: input.effort } : {}),
       ...(state.mcpConfigPath ? { mcpConfigPath: state.mcpConfigPath } : {}),
       ...(allowedTools.length ? { allowedTools } : {}),
       ...(input.skipPermissions ? { skipPermissions: true } : {}),
     });
+    setupStage = "CLI spawn";
     child = spawnCli(input.cli, args, {
       cwd: input.cwd,
       env: environment as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (error) {
-    const failure = describeSpawnFailure(error as NodeJS.ErrnoException, input.cli, input.cwd);
+    const failure = setupStage === "CLI spawn"
+      ? describeSpawnFailure(error as NodeJS.ErrnoException, input.cli, input.cwd)
+      : { message: `Could not prepare Claude ${setupStage}.`, setup: true };
     emit({ type: "runtime.error", message: failure.message, setup: failure.setup });
     finish(false, failure.message);
     return handle();
@@ -330,7 +369,6 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
         finish(false, "Claude emitted a malformed protocol frame");
         continue;
       }
-      input.tee?.({ dir: "out", msg: redactSecrets(message) });
       publicMessages.ingest(message);
       if (message.type === "control_response") {
         const response = message.response as Record<string, unknown> | undefined;
@@ -344,7 +382,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
         }
         state.initialized = true;
         emit({ type: "context.sent" });
-        writeFrame({ type: "user", session_id: input.resumeCursor ?? "", parent_tool_use_id: null,
+        writeFrame({ type: "user", session_id: "", parent_tool_use_id: null,
           message: { role: "user", content: input.text } });
         continue;
       }
@@ -450,7 +488,7 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
         if (!resolvePermission(requestId, decision.behavior === "allow", "user", decision.message)) return "unavailable";
         return decision.behavior === "allow" ? "allowed-once" : "rejected";
       },
-      sessionId: () => state.sessionId,
+      sessionId: () => null,
       settled: () => state.settled,
     };
   }

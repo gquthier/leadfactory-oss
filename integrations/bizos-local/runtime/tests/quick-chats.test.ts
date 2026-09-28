@@ -64,7 +64,8 @@ describe('workspace Quick chats', () => {
     await f.harness.quickChats.send(a.id, 'Continue A', 'send-a-2');
     expect(f.turns[2]!.system).toContain('Answer Alpha');
     expect(f.turns[2]!.system).not.toContain('Answer Beta');
-    expect(f.turns[2]!.resumeCursor).toBe('native_0');
+    expect(f.turns[2]!.resumeCursor).toBeNull();
+    expect('tee' in f.turns[2]!).toBe(false);
     expect(await f.harness.bots.list()).toEqual(roster);
     expect(readdirSync(roots[0]!.path)).toEqual(files);
     expect(existsSync(join(f.root, 'workspaces', a.id))).toBe(false);

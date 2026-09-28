@@ -1,6 +1,6 @@
 // The light local harness: slim brief, file memory, once-per-session
 // context, time-budgeted autonomy, paused approvals and restart resume.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -214,29 +214,26 @@ async function checkpoint(harness: LocalBizosHarness, bot: Bot, status: "in_prog
   });
 }
 
-describe("once-per-session context (Codex)", () => {
-  it("sends the brief + chat on thread start and only the delta to a primed resumed thread", async () => {
+describe("ephemeral CLI context (Codex)", () => {
+  it("replays the brief and chat on every turn without a native cursor", async () => {
     const { harness, turns } = setup();
     const bot = await harness.bots.create({ name: "Vega", title: "CTO" });
     await harness.threads.send({ botId: bot.id }, { text: "First: what is our deploy status?" });
     expect(turns[0]!.resumeCursor).toBeNull();
     expect(turns[0]!.system).toContain("full latitude");
-    expect(turns[0]!.resumedSystem).toBe(turns[0]!.system);
+    expect(turns[0]!.resumedSystem).toBeUndefined();
     // The triggering message is the turn text, never also in the context.
     expect(turns[0]!.system).not.toContain("First: what is our deploy status?");
     expect(turns[0]!.text).toBe("First: what is our deploy status?");
     reply(turns[0]!, "Deploy is green.", "lbz-dynamic-v1:thr_1");
+    expect(existsSync(join(root, "state", "cursors.json"))).toBe(false);
+    expect(readdirSync(join(root, "state", "native"))).toEqual([]);
 
     await harness.threads.send({ botId: bot.id }, { text: "Second: and the ads?" });
     const second = turns[1]!;
-    expect(second.resumeCursor).toBe("lbz-dynamic-v1:thr_1");
-    // Primed thread: no brief, no old transcript, not the new message twice.
-    expect(second.resumedSystem).not.toContain("full latitude");
-    expect(second.resumedSystem).not.toContain("First: what is our deploy status?");
-    expect(second.resumedSystem).not.toContain("Deploy is green.");
-    expect(second.resumedSystem).not.toContain("Second: and the ads?");
-    expect(second.resumedSystem).toMatch(/^Now: 20\d\d-/);
-    // Fallback when resume fails: the full context is still there.
+    expect(second.resumeCursor).toBeNull();
+    expect("tee" in second).toBe(false);
+    // The native provider starts empty, so BizOS replays its own transcript.
     expect(second.system).toContain("full latitude");
     expect(second.system).toContain("First: what is our deploy status?");
     expect(second.system).toContain("Deploy is green.");
@@ -247,7 +244,7 @@ describe("once-per-session context (Codex)", () => {
     expect(second.system).toMatch(/USER\.md \[\d+% — \d+\/1,375 chars\]/);
   });
 
-  it("the driver sends `resumedSystem` only when thread/resume succeeded", async () => {
+  it("the driver ignores native resume and always sends the full portable context", async () => {
     for (const resumeOk of [true, false]) {
       const dir = mkdtempSync(join(root, "codex-"));
       const log = join(dir, "turns.ndjson");
@@ -284,14 +281,14 @@ process.stdin.on("data", (chunk) => {
         });
       });
       const sent = JSON.parse(readFileSync(log, "utf8").trim()) as { input: Array<{ text: string }> };
-      expect(sent.input[0]!.text).toBe(resumeOk ? "ONLY THE DELTA\n\nSecond message" : "BRIEF + FULL CHAT\n\nSecond message");
-      expect(events.find((event) => event.type === "session.started")).toMatchObject({ resumed: resumeOk });
+      expect(sent.input[0]!.text).toBe("BRIEF + FULL CHAT\n\nSecond message");
+      expect(events.find((event) => event.type === "session.started")).toMatchObject({ sessionId: null, resumed: false });
     }
   });
 });
 
-describe("once-per-session context (Claude)", () => {
-  it("keeps the system slot byte-stable and puts only the delta in the turn", async () => {
+describe("ephemeral CLI context (Claude)", () => {
+  it("replays fresh brief and transcript on each turn", async () => {
     const turns: ClaudeTurnInput[] = [];
     const harness = new LocalBizosHarness({
       rootDir: join(root, "state"), homeDir: root, baseUrl: "", readSessionCookie: async () => "", orgName: () => "Acme",
@@ -311,19 +308,22 @@ describe("once-per-session context (Claude)", () => {
     const bot = await harness.bots.create({ name: "Vega" });
     await harness.threads.send({ botId: bot.id }, { text: "First question" });
     reply(turns[0]!, "First answer", "sess_1");
-    // The agent learns something between turns: the snapshot stays put.
+    expect(existsSync(join(root, "state", "cursors.json"))).toBe(false);
+    expect(readdirSync(join(root, "state", "native"))).toEqual([]);
+    // A new native session receives updated memory and portable history.
     const workspace = (await harness.bots.list()).find((row) => row.id === bot.id)!.workspacePath!;
     writeFileSync(join(workspace, "MEMORY.md"), "# Memory\n- (2026-09-23) Prefers Vercel.\n");
     await harness.threads.send({ botId: bot.id }, { text: "Second question" });
-    expect(turns[1]!.resumeCursor).toBe("sess_1");
-    expect(turns[1]!.system).toBe(turns[0]!.system);
+    expect(turns[1]!.resumeCursor).toBeNull();
+    expect("tee" in turns[1]!).toBe(false);
+    expect(turns[1]!.system).toContain("Prefers Vercel");
     expect(turns[1]!.system).not.toMatch(/Now: /);
     expect(turns[1]!.text).toMatch(/^Now: /);
-    expect(turns[1]!.text).not.toContain("First question");
-    expect(turns[1]!.text).not.toContain("First answer");
+    expect(turns[1]!.text).toContain("First question");
+    expect(turns[1]!.text).toContain("First answer");
     expect(turns[1]!.text.endsWith("Second question")).toBe(true);
     expect(turns[1]!.text.match(/Second question/g)).toHaveLength(1);
-    // A provider that silently started a new session gets everything back.
+    // The next fresh turn also receives the portable history.
     reply(turns[1]!, "Second answer", "sess_2");
     await harness.threads.send({ botId: bot.id }, { text: "Third question" });
     expect(turns[2]!.text).toContain("First question");

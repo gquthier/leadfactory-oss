@@ -256,7 +256,7 @@ describe("voice task lifecycle", () => {
     await expect(f.turns[1]!.dynamicTools![0]!.call({})).resolves.toEqual({ botId: f.botId });
   });
 
-  it("keeps the typed chat's tool surface so voice and the next typed turn both resume the same CLI thread", async () => {
+  it("keeps the typed chat's tool surface while voice and typed turns replay portable history", async () => {
     const f = await fixture();
     const cursor = "lbz-dynamic-v1:thr_voice_resume";
     await f.harness.threads.send({ botId: f.botId }, { text: "Typed turn before the call" });
@@ -266,16 +266,16 @@ describe("voice task lifecycle", () => {
     const call = await f.facade.prepareVoiceCall({ requestId: REQUEST_A, agentId: f.agentId });
     await f.facade.dispatchVoiceCall(call.callId, { operationId: OPERATION_A, content: "Voice task" });
     expect(f.turns).toHaveLength(2);
-    // Same surface ⇒ same policy fingerprint ⇒ the saved cursor is used and
-    // the history is not replayed into a fresh thread.
-    expect(f.turns[1]!.resumeCursor).toBe(cursor);
+    expect(f.turns[1]!.resumeCursor).toBeNull();
+    expect(f.turns[1]!.system).toContain("Typed answer");
     expect(f.turns[1]!.dynamicTools?.map((tool) => tool.name)).toEqual(f.turns[0]!.dynamicTools?.map((tool) => tool.name));
     f.turns[1]!.onEvent({ type: "session.started", sessionId: cursor, model: null });
     finish(f.turns[1]!, "Voice answer");
     expect((await f.facade.voiceCall(call.callId)).state).toBe("done");
 
     await f.harness.threads.send({ botId: f.botId }, { text: "Typed turn after the call" });
-    expect(f.turns[2]!.resumeCursor).toBe(cursor);
+    expect(f.turns[2]!.resumeCursor).toBeNull();
+    expect(f.turns[2]!.system).toContain("Voice answer");
   });
 
   it("reports the latest public progress message while the run is still running", async () => {

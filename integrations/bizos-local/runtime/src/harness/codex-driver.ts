@@ -15,13 +15,13 @@
 // -32600), which is how a folder the user shared read-write becomes a
 // writable root — see `workspaceWritePolicy`.
 //
-// `resumeCursor` is the codex thread id; a later turn tries `thread/resume`
-// and falls back to a fresh `thread/start`.
+// Every BizOS turn starts a fresh ephemeral thread. The portable business
+// transcript is replayed by dispatch; native Codex sessions are never reused.
 import { cleanChildEnvironment } from "./child-env.js";
 import { augmentedPath } from "./env-path.js";
 import type { CodexModelProvider } from "./inference.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
-import { redactSecrets, redactSecretsInText } from "./redact.js";
+import { redactSecretsInText } from "./redact.js";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.js";
 import { isRichToolResult, toolResultText } from "./tool-result.js";
 import type { ReasoningEffort, SandboxMode } from "./types.js";
@@ -182,12 +182,7 @@ export interface CodexTurnInput {
   text: string;
   /** Persona; codex has no system slot, so it is prefixed to `text`. */
   system?: string;
-  /**
-   * What to prefix instead when `thread/resume` succeeds: the thread already
-   * holds the brief and the history, so only what is new is sent. Absent ⇒
-   * `system` is sent on every turn (the legacy behaviour). A failed resume
-   * always falls back to `system`, the full context.
-   */
+  /** Legacy input ignored: a BizOS turn never resumes a native thread. */
   resumedSystem?: string;
   model?: string;
   effort?: ReasoningEffort;
@@ -196,6 +191,7 @@ export interface CodexTurnInput {
    * codex as the structured per-turn `sandboxPolicy` — see
    * `workspaceWritePolicy`. */
   writableRoots?: string[];
+  /** Legacy input ignored: the dispatcher replays the portable transcript. */
   resumeCursor?: string | null;
   mcpServers?: Record<string, McpServerSpec>;
   /** An external OpenAI-compatible endpoint instead of the signed-in plan:
@@ -219,8 +215,6 @@ export interface CodexTurnInput {
    * (`UserInput`), so an image the user attached is really seen. */
   extraInput?: Array<Record<string, unknown>>;
   onEvent: (event: RuntimeEvent) => void;
-  /** Redacted native protocol tee, for debugging protocol drift. */
-  tee?: (entry: { dir: "in" | "out"; msg: unknown }) => void;
   /** Test seam: scales the retry backoff so a fake CLI's transient
    * failures do not stall real seconds. */
   retryScale?: number;
@@ -234,8 +228,7 @@ export interface CodexTurnHandle {
     requestId: string,
     decision: { behavior: RequestBehavior; message?: string },
   ): "allowed-once" | "answered" | "rejected" | "unavailable";
-  /** The codex thread id, once `thread/start`/`thread/resume` answered —
-   * persisted as the resume cursor for this bot × thread. */
+  /** Native session ids are intentionally unavailable for ephemeral turns. */
   sessionId(): string | null;
   /** Whether the turn has finished (successfully or not). */
   settled(): boolean;
@@ -481,7 +474,6 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
     stopRequested: false,
     sawStreamDelta: false,
     sawAnyPublicOutput: false,
-    sessionId: null as string | null,
     child: null as PipedChild | null,
   };
 
@@ -521,7 +513,6 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
       } catch {
         // The child died; `close` settles the turn.
       }
-      input.tee?.({ dir: "out", msg: redactSecrets(message) });
     };
 
     const request = (method: string, params: unknown, timeoutMs = 60_000): Promise<unknown> =>
@@ -875,7 +866,6 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
         } catch {
           continue;
         }
-        input.tee?.({ dir: "in", msg: redactSecrets(message) });
         if (abandoned) continue;
         const hasResult = message.result !== undefined || message.error !== undefined;
         if (message.id !== undefined && hasResult) {
@@ -928,64 +918,36 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
         });
         send({ jsonrpc: "2.0", method: "initialized", params: {} });
 
-        let codexThreadId: string | null = null;
-        let startedModel: string | null = null;
-        let resumedThread = false;
-        const dynamicCursorPrefix = "lbz-dynamic-v1:";
-        const persistedCursor = typeof input.resumeCursor === "string" ? input.resumeCursor : null;
-        const cursor = persistedCursor?.startsWith(dynamicCursorPrefix)
-          ? persistedCursor.slice(dynamicCursorPrefix.length)
-          : input.dynamicTools?.length ? null : persistedCursor;
-        if (cursor) {
-          try {
-            const resumed = (await request("thread/resume", { threadId: cursor })) as
-              | { thread?: { id?: string } }
-              | undefined;
-            codexThreadId = resumed?.thread?.id ?? cursor;
-            resumedThread = true;
-          } catch {
-            // Resume unsupported or the thread is gone — start fresh.
-          }
-        }
-        if (!codexThreadId) {
-          const started = (await request("thread/start", {
-            cwd: input.cwd,
-            ...(input.model ? { model: input.model } : {}),
-            // `skip-all` is the whole point of the setting: no sandbox, no
-            // approvals, for every agent at once.
-            sandbox: input.skipPermissions ? "danger-full-access" : input.sandbox,
-            approvalPolicy: input.skipPermissions ? "never" : "on-request",
-            ephemeral: false,
-            ...(input.dynamicTools?.length ? {
-              dynamicTools: input.dynamicTools.map(({ name, description, inputSchema }) => ({
-                type: "function",
-                name,
-                description,
-                inputSchema,
-              })),
-            } : {}),
-          })) as { thread?: { id?: string }; model?: string } | undefined;
-          codexThreadId = started?.thread?.id ?? null;
-          startedModel = started?.model ?? null;
-        }
-        const sessionId = codexThreadId && input.dynamicTools?.length
-          ? `${dynamicCursorPrefix}${codexThreadId}`
-          : codexThreadId;
-        state.sessionId = sessionId;
-        emit({ type: "session.started", sessionId, model: startedModel ?? input.model ?? null, resumed: resumedThread });
-        const prefix = resumedThread && input.resumedSystem !== undefined ? input.resumedSystem : input.system;
+        const started = (await request("thread/start", {
+          cwd: input.cwd,
+          ...(input.model ? { model: input.model } : {}),
+          // `skip-all` is the whole point of the setting: no sandbox, no
+          // approvals, for every agent at once.
+          sandbox: input.skipPermissions ? "danger-full-access" : input.sandbox,
+          approvalPolicy: input.skipPermissions ? "never" : "on-request",
+          ephemeral: true,
+          ...(input.dynamicTools?.length ? {
+            dynamicTools: input.dynamicTools.map(({ name, description, inputSchema }) => ({
+              type: "function",
+              name,
+              description,
+              inputSchema,
+            })),
+          } : {}),
+        })) as { thread?: { id?: string }; model?: string } | undefined;
+        const codexThreadId = started?.thread?.id;
+        if (!codexThreadId) throw new Error("Codex did not return an ephemeral thread ID");
+        const startedModel = started?.model ?? null;
+        emit({ type: "session.started", sessionId: null, model: startedModel ?? input.model ?? null, resumed: false });
+        const prefix = input.system;
 
         // Writable roots only mean something in a write sandbox: in
         // `read-only` the user's shared folders are named to the bot and
         // readable by the tools, and nothing is writable — saying otherwise
         // would be a permission the runtime does not grant.
         //
-        // The policy is sent on EVERY workspace-write turn, empty roots
-        // included. `turn/start`'s override lasts "for this turn and subsequent
-        // turns", so a resumed thread kept the roots of the turn that first set
-        // them: revoking a shared folder left it writable until the app was
-        // restarted. Sending the current policy every time is what makes a
-        // revocation take effect on the next message.
+        // The policy is sent on every workspace-write turn, empty roots
+        // included. A new ephemeral thread never inherits old folder grants.
         const writableRoots = input.sandbox === "workspace-write" ? (input.writableRoots ?? []) : [];
         const sandboxPolicy: WorkspaceWritePolicy | ReadOnlyPolicy | DangerFullAccessPolicy =
           input.skipPermissions
@@ -1058,7 +1020,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
       finish(decision.behavior, decision.message, "user");
       return decision.behavior === "allow" ? "allowed-once" : decision.behavior === "answer" ? "answered" : "rejected";
     },
-    sessionId: () => state.sessionId,
+    sessionId: () => null,
     settled: () => state.settled,
   };
 }

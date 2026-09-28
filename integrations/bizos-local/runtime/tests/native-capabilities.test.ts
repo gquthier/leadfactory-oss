@@ -36,26 +36,32 @@ function fakeCodex() {
 describe('local native CLI capabilities', () => {
   for (const resumed of [false, true]) {
     for (const skip of [false, true]) {
-      it(`Codex ${resumed ? 'resumed' : 'new'} turn explicitly ${skip ? 'bypasses' : 'restores'} approvals`, async () => {
+      it(`Codex ${resumed ? 'given a legacy cursor' : 'without a cursor'} explicitly ${skip ? 'bypasses' : 'restores'} approvals in a fresh thread`, async () => {
         const messages = fakeCodex();
         const handle = startCodexTurn({ cli: '/test/codex', cwd: '/test/workspace', text: 'test', sandbox: 'read-only', skipPermissions: skip, ...(resumed ? { resumeCursor: 'native-thread' } : {}), onEvent: () => {} });
         await vi.waitFor(() => expect(messages.some(m => m.method === 'turn/start')).toBe(true));
         const turn = messages.find(m => m.method === 'turn/start')?.params;
         expect(turn.approvalPolicy).toBe(skip ? 'never' : 'on-request');
         expect(turn.sandboxPolicy.type).toBe(skip ? 'dangerFullAccess' : 'readOnly');
-        expect(messages.some(m => m.method === (resumed ? 'thread/resume' : 'thread/start'))).toBe(true);
+        expect(messages.some(m => m.method === 'thread/start' && m.params.ephemeral === true)).toBe(true);
+        expect(messages.some(m => m.method === 'thread/resume')).toBe(false);
+        expect(handle.sessionId()).toBeNull();
         handle.stop();
       });
     }
   }
   it('adds BizOS MCP servers without excluding native Claude connectors in bypass mode', () => {
-    const args = buildClaudeArgs({ text: 'test', cwd: '/test', sandbox: 'read-only', skipPermissions: true, mcpConfigPath: '/test/mcp.json', system: 'BizOS context', resumeCursor: 'session-1' });
+    const args = buildClaudeArgs({ text: 'test', cwd: '/test', sandbox: 'read-only', skipPermissions: true, mcpConfigPath: '/test/mcp.json', systemPromptPath: '/test/private-system.txt' });
     expect(args).toContain('--dangerously-skip-permissions');
     expect(args).toContain('bypassPermissions');
     expect(args).toContain('--mcp-config');
     expect(args).not.toContain('--strict-mcp-config');
-    expect(args).toContain('--append-system-prompt');
-    expect(args).toContain('--resume');
+    expect(args).toContain('--append-system-prompt-file');
+    expect(args).toContain('/test/private-system.txt');
+    expect(args).toContain('--no-session-persistence');
+    expect(args).not.toContain('--append-system-prompt');
+    expect(args).not.toContain('--resume');
+    expect(args).not.toContain('BizOS context');
     expect(args).not.toContain('--tools');
   });
   it('keeps configured MCP isolation and normal permissions when bypass is off', () => {

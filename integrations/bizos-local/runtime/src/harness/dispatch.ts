@@ -352,6 +352,8 @@ interface QueuedTurn {
 }
 
 interface ActiveTurn extends QueuedTurn {
+  /** Codex and Claude turns are fresh native sessions with portable replay. */
+  ephemeralCli?: boolean;
   onboardingNameProposed?: boolean;
   continuityBinding?: string;
   /** The API provider and model a native API turn answers with, recorded on
@@ -1868,14 +1870,8 @@ export class Dispatcher {
     this.deps.bots.setStatus(bot.id, "working");
     this.deps.events.publish({ type: "run.started", runId: queued.runId, threadId, botId: bot.id });
 
-    /**
-     * What the CLI thread this cursor points at was STARTED under.
-     *
-     * `thread/resume` (and Claude `--resume`) carry the thread id and nothing
-     * else. A change of plan (different CODEX_HOME / CLAUDE_CONFIG_DIR) MUST
-     * invalidate the cursor — otherwise a turn would resume under the wrong
-     * account. Same for sandbox, roots, model and cwd.
-     */
+    /** Cursor alone resumes a native session; its policy fingerprint prevents
+     * reuse across an account, sandbox, model, workspace or tool change. */
     const policyKey = `${cursorKey}|policy`;
     // Under an external provider the plan's model id means nothing: the
     // provider's own default model answers unless the bot names one.
@@ -1920,11 +1916,11 @@ export class Dispatcher {
       ...(external?.kind === "ollama" ? { baseUrl: external.baseUrl } : {}),
       tools: toolSurface,
     });
-    const resumeCursor = linked || native || (provider === "cursor" && Object.keys(mountedServers).length > 0) ? null :
+    const ephemeralCli = provider === "codex" || provider === "claude";
+    const resumeCursor = linked || native || ephemeralCli || (provider === "cursor" && Object.keys(mountedServers).length > 0) ? null :
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
-    // Local Codex / Claude / Cursor agents get the slim brief once per
-    // provider session and only what is new on every turn after it; the
-    // cloud path, quick chats and native Ollama keep their prompts.
+    // Codex and Claude get a fresh native session and full portable replay.
+    // Cursor retains its policy-bound native continuity.
     const local = linked || native || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
       provider, tools: toolSurface, excludeMessageId: message.id, resumeCursor, cursorKey, writableRoots, skipPermissions,
     });
@@ -1949,6 +1945,7 @@ export class Dispatcher {
       ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
       ...(external?.kind === "api" ? { apiBinding: { providerId: external.providerId, model: model! } } : {}),
       policyFingerprint,
+      ephemeralCli,
       ...(continuityBinding ? { continuityBinding } : {}),
       handle: undefined as unknown as CodexTurnHandle,
       message,
@@ -2047,10 +2044,6 @@ export class Dispatcher {
         isAlwaysAllowed: skipPermissions
           ? () => true
           : (request) => this.isPreApproved(approvalKey(bot.id, request.requestType, request.tool, approvalDetailFor(request.tool, request.detail))),
-        tee: (entry) => {
-          if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
-          this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
-        },
       });
     } else {
       const start = this.deps.startTurn ?? defaultStartCodexTurn;
@@ -2060,7 +2053,6 @@ export class Dispatcher {
       handle = start({
         ...common,
         ...(attached.input.length ? { extraInput: attached.input } : {}),
-        ...(local?.resumedSystem !== undefined ? { resumedSystem: local.resumedSystem } : {}),
         ...(writableRoots.length ? { writableRoots } : {}),
         ...(external?.kind === "codex" ? { modelProvider: external } : {}),
         mcpServers: dynamicTools ? codexServers : mountedServers,
@@ -2076,10 +2068,6 @@ export class Dispatcher {
                   approvalDetailFor(request.tool, request.detail),
                 ),
               ),
-        tee: (entry) => {
-          if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
-          this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
-        },
       });
     }
     turn.handle = handle;
@@ -2483,7 +2471,7 @@ export class Dispatcher {
         } });
         break;
       case "session.started":
-        if (event.sessionId && !turn.discarded) {
+        if (event.sessionId && !turn.discarded && !turn.ephemeralCli) {
           this.cursors[cursorKey] = event.sessionId;
           this.cursors[`${cursorKey}|policy`] = turn.policyFingerprint;
           this.recordSessionContext(turn, cursorKey, event.sessionId, event.resumed);
