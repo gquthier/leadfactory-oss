@@ -29,10 +29,13 @@ it('allows free personal models and atomically persists QuickChat without changi
   const f = fixture();
   const p = await f.facade.addInferenceProvider({ kind: 'openrouter', apiKey: 'fixture', model: 'lab/default' }) as {id: string};
   (f.harness as any).inferenceStore.recordTest(p.id, { ok: true, models: ['lab/default', 'lab/selected'] });
-  const a = await f.harness.quickChats.create('a'), b = await f.harness.quickChats.create('b');
+  const a = await f.harness.quickChats.create('a');
   const before = await f.harness.runtime.getSettings();
   const selection = { source: 'provider' as const, providerId: p.id, model: 'lab/selected' };
   await f.harness.runtime.selectModel({ scope: { kind: 'quickchat', chatId: a.id }, selection });
+  // A configured chat is no longer a blank one: a new intention gets its own chat (UX-02).
+  const b = await f.harness.quickChats.create('b');
+  expect(b.id).not.toBe(a.id);
   expect((await f.harness.quickChats.get(a.id)).chat).toMatchObject({ modelSelection: selection, expiresAt: a.expiresAt });
   expect((await f.harness.quickChats.get(b.id)).chat).not.toHaveProperty('modelSelection');
   expect(await f.harness.runtime.getSettings()).toEqual(before);
