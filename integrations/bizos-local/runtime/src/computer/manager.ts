@@ -75,6 +75,7 @@ interface PendingHandoff {
   requester: ComputerRequester;
   cancelled: boolean;
   resolve(result: ComputerHandoffResult): void;
+  abort?: AbortController;
 }
 
 /** What the renderer is told. `computer.status` and `computer.screen` are the
@@ -345,8 +346,12 @@ export class ComputerManager {
       this.handoffRequests.delete(botId);
       return "cancelled";
     }
+    let serverHandoffId: string | null = null;
     try {
       assertLocalComputerEnabled();
+      if (backend.requestServerHandoff) {
+        serverHandoffId = await backend.requestServerHandoff(botId, reason.trim());
+      }
       backend.takeControl(botId);
     } catch (error) {
       this.handoffRequests.delete(botId);
@@ -354,9 +359,25 @@ export class ComputerManager {
     }
     return new Promise<ComputerHandoffResult>((resolve) => {
       this.handoffRequests.delete(botId);
-      this.handoffs.set(botId, { id: randomUUID(), requester, cancelled: false, resolve });
+      const id = serverHandoffId ?? randomUUID();
+      const abort = serverHandoffId ? new AbortController() : undefined;
+      this.handoffs.set(botId, { id, requester, cancelled: false, resolve, abort });
       this.publishStatus(botId);
       this.options.approvals.setHandoffWaiting(requester, true);
+      if (serverHandoffId && backend.waitForGiveBack && abort) {
+        const poll = async () => {
+          while (!abort.signal.aborted) {
+            try {
+              await backend.waitForGiveBack!(botId, id, abort.signal);
+              if (!abort.signal.aborted) this.giveBack(botId, id);
+              return;
+            } catch {
+              await new Promise<void>(next => setTimeout(next, 2_000));
+            }
+          }
+        };
+        void poll();
+      }
     });
   }
 
@@ -409,6 +430,7 @@ export class ComputerManager {
         throw new Error("this Give back request does not match the current human handoff");
       }
       this.backend?.giveBack(botId);
+      pending.abort?.abort();
       this.handoffs.delete(botId);
       if (!pending.cancelled) {
         this.options.approvals.setHandoffWaiting(pending.requester, false);
@@ -554,6 +576,7 @@ export class ComputerManager {
   stop(): void {
     this.handoffRequests.clear();
     for (const pending of this.handoffs.values()) pending.resolve("cancelled");
+    for (const pending of this.handoffs.values()) pending.abort?.abort();
     this.handoffs.clear();
     for (const watcher of this.watchers.values()) watcher.cancel();
     for (const timer of this.frameTimers.values()) timer.cancel();

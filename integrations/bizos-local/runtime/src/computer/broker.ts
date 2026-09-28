@@ -136,7 +136,7 @@ export async function handleComputerCall(
     if (op === "download") {
       const outcome = await manager.download(requester, String(request.url ?? ""));
       const where = manager.backendKind() === "container"
-        ? "It is in your own folder on the cloud computer; cloud_computer_run can read it there."
+        ? "It is in your virtual computer's Downloads folder."
         : "It is inside your own workspace, so upload_document can read it.";
       return {
         status: 200,

@@ -179,3 +179,21 @@ Vérification : 54 tests ciblés runtime et TypeScript passent ; le test intégr
 côté backend couvre les vraies signatures/routes/RPC PostgreSQL, l’historique
 32 messages, l’idempotence, STOP, réponse simulée et retour personnel. Le runner
 modèle est simulé ; aucune inférence réelle ni validation du paquet revendiquée.
+# Ordinateur par agent dans BizOS Simple .46 (candidat, 2026-09-29)
+
+Le sidecar embarqué utilise `computer/remote-server.ts` quand Electron lui donne
+le descripteur privé du pont continuité. Il interroge toutes les 60 secondes la
+disponibilité signée du serveur, puis monte `computer_observe`, `computer_act`,
+`computer_download` et `computer_request_handoff` seulement si le plan et le
+serveur les autorisent. Les appels passent par Electron main puis les routes
+`/api/desktop-computer/v1/*`; aucun fichier ou variable de clé Boat n'est requis
+pour ce mode. Chaque requête porte l'espace de travail et l'identifiant de bot ;
+le serveur dérive la clé du siège `(org, propriétaire, agent local)`.
+
+Le pont maintient les règles locales de tour actif et d'approbation des hôtes
+connectés. L'agent lit une capture et une observation DOM ; les références
+`e1`, `e2` sont les sélecteurs acceptés par ce fournisseur. Les téléchargements
+restent dans le dossier Downloads de l'ordinateur virtuel. Le handoff libère
+la lease agent côté serveur et le sidecar attend le Give back exact. Les outils
+Boat BYO locaux ne sont plus montés par le sidecar Simple lorsque le pont signé
+est présent ; l'installation autonome sans ce pont conserve son comportement.
