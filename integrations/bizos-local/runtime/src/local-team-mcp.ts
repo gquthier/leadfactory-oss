@@ -42,6 +42,19 @@ export const CONTEXT_TOOL_SPECS = [{
   description: "Read up to 8192 bytes from one file in the selected local context, read-only. Paths are relative to the selected folder; for a single selected file use its exact displayed name. PDF and binary data are raw base64 byte pages, not parsed text.",
   inputSchema: { type: "object", properties: { path: { type: "string" }, offset: { type: "integer", minimum: 0 }, maxBytes: { type: "integer", minimum: 1, maximum: 8192 } }, required: ["path"], additionalProperties: false },
 }] as const;
+export const BIZOS_TOOL_SPECS = [{
+  name: "bizos_email_send", description: "Send one message from this company's BizOS email address. The server validates the recipient, enforces limits and keeps the provider key.",
+  inputSchema: { type: "object", properties: { to: { type: "string" }, subject: { type: "string" }, text: { type: "string" }, operation_id: { type: "string", description: "Stable id for this send; reuse on retry." } }, required: ["to", "subject", "text", "operation_id"], additionalProperties: false },
+}, {
+  name: "bizos_email_inbox", description: "Read up to 30 recent messages in this company's BizOS inbox. The account and workspace must be linked.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+}, {
+  name: "bizos_site_publish", description: "Publish an existing BizOS landing site version for this company; returns its public URL. Requires a valid brand snapshot.",
+  inputSchema: { type: "object", properties: { site_id: { type: "string" }, version_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this publish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
+}, {
+  name: "bizos_image_generate", description: "Generate an image through the BizOS server. Uses Work Credits, stores the image in the gallery and returns its hosted URL or a pending receipt.",
+  inputSchema: { type: "object", properties: { prompt: { type: "string" }, size: { type: "string", enum: ["1:1", "4:5", "9:16"] }, quality: { type: "string", enum: ["low", "medium", "high"] }, operation_id: { type: "string", description: "Stable id for this image; reuse on retry." } }, required: ["prompt", "operation_id"], additionalProperties: false },
+}] as const;
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
   description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain. Use role_slug for an installed blueprint. When no blueprint fits or the role catalog is empty, supply name, title, description, context and initial_task without role_slug to create a custom specialist directly; the catalog is not required.",
@@ -118,6 +131,14 @@ export const LOCAL_TEAM_TOOL_SPECS = [{
     required: ["objective", "status", "summary", "next_step", "evidence"],
     additionalProperties: false,
   },
+}, {
+  name: "list_routines",
+  description: "List the routines you own. The CEO can also see teammates' routines.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+}, {
+  name: "cancel_routine",
+  description: "Stop one routine you own; the CEO may stop a teammate's routine. This prevents future scheduled runs.",
+  inputSchema: { type: "object", properties: { routine_id: { type: "string" } }, required: ["routine_id"], additionalProperties: false },
 }, {
   name: "send_to_chat",
   description: "Put files or images from your workspace into this chat, attached to your next message (same message as your text, in order). Use it to show a screenshot or an image you made, or to hand over a report, sheet, PDF or any file — never paste a file's contents or its path in prose instead. Files must be inside your workspace; they stay where they are (save what you produce under outputs/YYYY-MM-DD/ of the company workspace). Up to 10 per call. Give each image a short alt text in the person's language; never label an image \"Generated\".",
@@ -253,6 +274,8 @@ async function callEndpoint(path: string, input: Json, timeoutMs = 15_000): Prom
 const callRecruit: TeamCall = (input) => callEndpoint("/api/internal/local-team/recruit", input);
 const callManage: TeamCall = (input) => callEndpoint("/api/internal/local-team/manage", input);
 const callSchedule: TeamCall = (input) => callEndpoint("/api/internal/local-team/routine", input);
+const callListRoutines: TeamCall = (input) => callEndpoint("/api/internal/local-team/list-routines", input);
+const callCancelRoutine: TeamCall = (input) => callEndpoint("/api/internal/local-team/cancel-routine", input);
 const callCheckpoint: TeamCall = (input) => callEndpoint("/api/internal/local-team/checkpoint", input);
 const callSend: TeamCall = (input) => callEndpoint("/api/internal/local-team/send", input);
 const callQuickReplies: TeamCall = (input) => callEndpoint("/api/internal/local-team/quick-replies", input);
@@ -309,6 +332,7 @@ export interface LocalTeamMcpOptions {
   /** `offer_quick_replies` / `propose_company_name` (default to the sidecar routes). */
   quickReplies?: TeamCall;
   proposeName?: TeamCall;
+  bizos?: TeamCall;
 }
 
 const READ_ONLY_TOOL = /^(agency|commerce)_(context|schema|list_|read_)/;
@@ -362,7 +386,7 @@ export async function handleLocalTeamMessage(
         annotations: { readOnlyHint: tool.name === "computer_observe", destructiveHint: false, idempotentHint: false, openWorldHint: true },
       }))
       : [];
-    return reply({ tools: [...teamTools, ...packTools, ...computerTools, ...(toolsets.has("context") && !toolsets.has("continuity") ? CONTEXT_TOOL_SPECS.map(tool => ({...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }})) : []), ...(toolsets.has("continuity") ? CONTINUITY_TOOL_SPECS : [])] });
+    return reply({ tools: [...teamTools, ...packTools, ...computerTools, ...(toolsets.has("bizos") ? BIZOS_TOOL_SPECS : []), ...(toolsets.has("context") && !toolsets.has("continuity") ? CONTEXT_TOOL_SPECS.map(tool => ({...tool, annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }})) : []), ...(toolsets.has("continuity") ? CONTINUITY_TOOL_SPECS : [])] });
   }
   if (method === "tools/call") {
     try {
@@ -370,6 +394,9 @@ export async function handleLocalTeamMessage(
       if (params.name === "recruit_agent") return reply(textResult(await invokeRecruit((params.arguments ?? {}) as Json)));
       if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
       if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
+      if (params.name === "list_routines") return reply(textResult(await callListRoutines((params.arguments ?? {}) as Json)));
+      if (params.name === "cancel_routine") return reply(textResult(await callCancelRoutine((params.arguments ?? {}) as Json)));
+      if (toolsets.has("bizos") && BIZOS_TOOL_SPECS.some(tool => tool.name === params.name)) return reply(textResult(await (options.bizos ?? ((input) => callEndpoint("/api/internal/local-team/bizos", input, 320_000)))({ tool: params.name, arguments: params.arguments ?? {} })));
       if (toolsets.has("continuity")) {
         const operation = Object.entries(CONTINUITY_MCP_OPERATIONS).find(([,name]) => name === params.name)?.[0];
         if (operation) return reply(continuityResult(await (options.continuity

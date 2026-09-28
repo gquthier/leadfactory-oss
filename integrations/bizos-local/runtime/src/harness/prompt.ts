@@ -85,7 +85,9 @@ export interface LocalArchitectureManifest {
   sharedBrainPath?: string;
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
   supportedProviders: Array<"codex" | "claude" | "cursor" | "ollama">;
-  peers: Array<{ agentId: string; name: string }>;
+  peers: Array<{ agentId: string; name: string; title?: string }>;
+  /** Exact names in the trusted sidecar MCP toolset for providers without dynamic tools. */
+  mcpToolNames?: string[];
   recruitment: "autonomous-codex-claude" | "autonomous-local-tools" | "unavailable";
   host?: { platform: string; home: string; provider: string; permissions: string; tools: string[] };
 }
@@ -496,15 +498,24 @@ export function buildLocalBrief(input: LocalBriefInput): string {
     outputsRoot: singleLine(manifest.sharedBrainPath ?? manifest.workspaceDir, 1000),
   }));
 
-  const peers = manifest.peers.slice(0, 12).map((peer) => singleLine(peer.name, 60)).filter(Boolean);
+  const mounted = new Set((manifest.host?.tools ?? []).map((tool) => tool.replace(/^tool:/, "")));
+  const mcpMounted = (manifest.host?.tools ?? []).includes("mcp:local_team_actions");
+  const has = (tool: string) => mounted.has(tool) || (mcpMounted && (manifest.mcpToolNames ?? []).includes(tool));
+  const peers = manifest.peers.slice(0, 12).map((peer) => `${singleLine(peer.name, 60)}${peer.title ? ` (${singleLine(peer.title, 80)})` : ""}`).filter(Boolean);
   const work = ["How you work:"];
-  if (input.teamTools) {
+  if (input.teamTools && has("checkpoint_task")) {
     work.push("- Multi-step work: call checkpoint_task as you go (objective, verified progress, next step, evidence). While it stays in_progress and moves, you are resumed automatically (up to 45 min or 20 turns, and once after an app restart). Mark it completed only after checking the result; blocked with the exact missing input.");
+  }
+  if (input.teamTools && has("schedule_routine")) {
     work.push(`- ${ROUTINES_SENTENCE} Use schedule_routine; a promise or a shell timer is not a routine.`);
-  } else {
+    if (has("list_routines") && has("cancel_routine")) work.push("- Review existing routines with list_routines; stop obsolete ones with cancel_routine. The CEO can set a routine for a teammate by owner_agent_id.");
+  }
+  if (!input.teamTools) {
     work.push("- Checkpoints, routines and recruiting aren't available with this provider: don't promise them.");
   }
-  work.push(`- Teammates: ${peers.length ? `${peers.join(", ")}${manifest.peers.length > peers.length ? ", …" : ""}. In a team thread, @Name hands work over.` : "none yet."}${input.teamTools && manifest.recruitment !== "unavailable" ? " recruit_agent creates a real teammate for a precise role; say who you created only once it returned." : ""}`);
+  work.push(`- Teammates: ${peers.length ? `${peers.join(", ")}${manifest.peers.length > peers.length ? ", …" : ""}. In a team thread, @Name hands work over.` : "none yet."}${input.teamTools && has("recruit_agent") && manifest.recruitment !== "unavailable" ? " recruit_agent creates a real teammate, even without a role catalog; create the specialists needed for the mission and say who you created only once it returned." : ""}`);
+  const available = ["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat", "list_accessible_computers", "bizos_email_send", "bizos_email_inbox", "bizos_site_publish", "bizos_image_generate", "computer_observe", "computer_act", "computer_download", "computer_request_handoff"].filter((tool) => (input.teamTools || !["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat"].includes(tool)) && (tool !== "recruit_agent" || manifest.recruitment !== "unavailable") && has(tool));
+  if (available.length) work.push(`- Mounted BizOS tools: ${available.join(", ")}. Call them for real effects; their availability may change with account linking and permissions.`);
   work.push("- To send the person somewhere in the app, name the place: Chats, Apps (their apps, Routines, Second brain), Settings → Plans & usage, Settings → Computer.");
   sections.push(work.join("\n"));
 

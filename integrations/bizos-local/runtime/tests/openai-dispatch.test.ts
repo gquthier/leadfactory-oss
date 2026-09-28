@@ -94,10 +94,12 @@ it("a plain API-backed bot recruits a teammate that immediately works on the sam
 
   const child = (await f.harness.bots.list()).find((bot) => bot.name === "Analyst");
   expect(child).toMatchObject({ title: "Market analyst", providerId: f.provider.id, model: "gemini-2.5-flash" });
-  const childRun = (await f.harness.runs.list()).find((run) => run.botId === child!.id);
-  expect(childRun).toBeDefined();
-  expect(await settled(f.harness, childRun!.id)).toMatchObject({ state: "completed", inference: { kind: "api", providerId: f.provider.id } });
+  const childRuns = (await f.harness.runs.list()).filter((run) => run.botId === child!.id);
+  expect(childRuns).toHaveLength(2);
+  for (const run of childRuns) expect(await settled(f.harness, run.id)).toMatchObject({ state: "completed", inference: { kind: "api", providerId: f.provider.id } });
   expect(f.requests.some((request) => String(request.body.messages.at(-1)?.content).includes("Child task: size the market"))).toBe(true);
+  expect(f.requests.some((request) => String(request.body.messages.at(-1)?.content).includes("Your teammate Ada has briefed you"))).toBe(true);
+  expect(JSON.stringify(await f.harness.threads.get({ botId: child!.id }))).toContain("Child answered");
   // The task and the answer live in the recruiter's team channel.
   const team = (await f.harness.groups.list()).find((group) => group.memberIds.includes(child!.id));
   expect(team).toBeDefined();

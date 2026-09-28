@@ -73,7 +73,7 @@ import {
   type VoiceCallState,
 } from "./voice-tasks.js";
 import { acquireStateLock, readStrictJson, repairStateLock } from "./sidecar-state.js";
-import { CONTEXT_TOOL_SPECS, LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
+import { BIZOS_TOOL_SPECS, CONTEXT_TOOL_SPECS, LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./local-team-mcp.js";
 import { ContextReferenceError } from "./harness/context-reference.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
@@ -2040,6 +2040,9 @@ export class CollaborationFacade {
         ? capability.botId
         : this.internalAgentId(requiredString(input.owner_agent_id, "owner_agent_id", 160));
       const bots = await this.invoke<Bot[]>("lbz:bots:list");
+      const actor = bots.find((bot) => bot.id === capability.botId && !bot.archived);
+      if (!actor || (ownerId !== capability.botId && !this.isCeoAgent(actor)))
+        throw new HttpError(403, "invalid_team_scope", "Only the CEO can set a teammate's routine.");
       if (!bots.some((bot) => bot.id === ownerId && !bot.archived)) throw new HttpError(404, "not_found", "That owner is not an active agent here.");
       // Keep the run lookup and session validation at the commit edge. Both
       // bot lookup and this facade's serializer can yield; STOP must win if
@@ -2070,6 +2073,41 @@ export class CollaborationFacade {
     });
   }
 
+  async listAgentRoutines(capability: TeamCapability): Promise<{ items: PublicRoutine[] }> {
+    const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
+    this.requireActiveTeamRun(run, capability, "Routines can be listed only during an active run.");
+    const bots = await this.invoke<Bot[]>("lbz:bots:list");
+    const actor = bots.find((bot) => bot.id === capability.botId && !bot.archived);
+    if (!actor) throw new HttpError(403, "invalid_team_scope", "Agent is unavailable.");
+    const ceo = this.isCeoAgent(actor);
+    const routines = await this.invoke<Routine[]>("lbz:routines:list", []);
+    return { items: routines.filter((routine) => ceo || routine.botId === actor.id)
+      .map((routine) => publicRoutine(routine, bots, (botId) => this.agentId(botId))) };
+  }
+
+  async cancelAgentRoutine(capability: TeamCapability, raw: unknown): Promise<{ removed: boolean }> {
+    return this.exclusive(async () => {
+      const input = objectBody(raw, ["routine_id"]);
+      const id = requiredString(input.routine_id, "routine_id", 160);
+      const bots = await this.invoke<Bot[]>("lbz:bots:list");
+      const actor = bots.find((bot) => bot.id === capability.botId && !bot.archived);
+      const ceo = this.isCeoAgent(actor);
+      const routines = await this.invoke<Routine[]>("lbz:routines:list", []);
+      const routine = routines.find((item) => item.id === id);
+      if (!routine) throw new HttpError(404, "not_found", "No such routine.");
+      if (!actor || (!ceo && routine.botId !== actor.id)) throw new HttpError(403, "invalid_team_scope", "This routine belongs to another agent.");
+      const run = await this.invoke<Run | null>("lbz:runs:get", [capability.runId]);
+      this.requireActiveTeamRun(run, capability, "Routine cancellation requires an active run.");
+      await this.invoke("lbz:routines:remove", [id]);
+      this.recordTeamEvent("routine.deleted", {
+        actorBotId: actor.id, ownerBotId: routine.botId, runId: this.runId(capability.runId),
+        threadId: this.publicThreadId(targetForThreadId(capability.threadId) ?? { botId: actor.id }),
+        changes: { ...this.routineChanges(routine), enabled: false, nextRunAt: null },
+      });
+      return { removed: true };
+    });
+  }
+
   private requireActiveTeamRun(run: Run | null, capability: TeamCapability, inactiveMessage: string): asserts run is Run {
     if (!run || run.botId !== capability.botId || run.threadId !== capability.threadId) {
       throw new HttpError(403, "invalid_team_scope", "The routine capability does not match this turn.");
@@ -2077,6 +2115,14 @@ export class CollaborationFacade {
     if (!(["queued", "working", "waiting_input"] as const).includes(run.state as "queued" | "working" | "waiting_input")) {
       throw new HttpError(409, "run_not_active", inactiveMessage);
     }
+  }
+
+  private isCeoAgent(bot: Bot | undefined): boolean {
+    if (!bot || !/\bCEO\b/i.test(bot.title ?? "")) return false;
+    // A recruited specialist cannot acquire CEO privileges by choosing that
+    // title; the durable recruitment ledger identifies its origin.
+    return !Object.values(this.index.recruitments).some((entry) =>
+      entry.state === "completed" && entry.result.agent.agentId === this.agentId(bot.id));
   }
 
   private async revalidateActiveTeamRun(capability: TeamCapability, inactiveMessage: string): Promise<Run> {
@@ -2340,6 +2386,7 @@ export class CollaborationFacade {
       const name = optionalString(input.name, "name", 60) ?? blueprint?.name;
       const title = optionalString(input.title, "title", 80) ?? blueprint?.title;
       if (!name || !title) throw new HttpError(400, "invalid_payload", "name and title are required for a custom recruit.");
+      if (/\bCEO\b/i.test(title)) throw new HttpError(403, "invalid_team_scope", "A specialist cannot be recruited as CEO.");
       if (/[\r\n]/.test(name) || /[\r\n]/.test(title)) throw new HttpError(400, "invalid_payload", "name and title must be one line.");
       const description = optionalString(input.description, "description", 600) ?? blueprint?.description ?? legacyMission ?? title;
       const context = optionalString(input.context, "context", 2_000) ?? legacyMission;
@@ -2538,12 +2585,31 @@ export class CollaborationFacade {
       this.persistIndex(this.index);
 
       const task = initialTask ?? `Introduce yourself briefly as ${appliedName}, confirm your bounded responsibility (${appliedDescription}), and state the first concrete step you can take.`;
+      // A recruit's own DM is visible to the person from its first turn. The
+      // model writes the greeting, so it can sound human and reflect its real
+      // brief. The stable id makes crash recovery refuse duplicate greetings.
+      const greetingId = `${planned.messageId}_intro`;
+      if ((createdNow || previous?.state === "pending") &&
+          !await this.harness.threads.message({ botId: bot.id }, greetingId)) {
+        await this.revalidateActiveTeamRun(capability, "Recruitment stopped before the introduction could start.");
+        const briefer = this.isCeoAgent(recruiter) ? `The CEO ${recruiter.name}` : `Your teammate ${recruiter.name}`;
+        try {
+          await this.harness.threads.dispatchChild(
+            { botId: capability.botId, threadId: capability.threadId, runId: capability.runId },
+            { botId: bot.id },
+            { text: `${briefer} has briefed you to work as ${appliedTitle}: ${appliedDescription}. Introduce yourself to the person in this direct chat in one short, warm, natural message. Say what you will work on and that they can ask you for help. Write in the person's language, defaulting to French when unknown. Write your own words; no fixed template.`, messageId: greetingId },
+          );
+        } catch {
+          // The task launch below still gets a truthful dispatch receipt.
+          // A failed model start cannot fabricate a greeting in the DM.
+        }
+      }
       let dispatch: RecruitmentResult["dispatch"];
       try {
         const launched = await this.harness.threads.dispatchChild(
           { botId: capability.botId, threadId: capability.threadId, runId: capability.runId },
           { botId: bot.id, groupId: group.id },
-          { text: `@${bot.name} ${task}`, messageId: planned.messageId },
+          { text: `@${bot.name} ${task}`, messageId: planned.messageId, allowPreviouslyVisited: true },
         );
         dispatch = {
           status: launched.state === "queued" ? "queued"
@@ -2633,6 +2699,8 @@ export class CollaborationFacade {
       const bots = await this.invoke<Bot[]>("lbz:bots:list");
       const targetBot = bots.find((candidate) => candidate.id === targetBotId);
       if (!targetBot) throw new HttpError(404, "not_found", "Managed agent does not exist.");
+      if (/\bCEO\b/i.test(targetBot.title ?? "") || (title && /\bCEO\b/i.test(title)))
+        throw new HttpError(403, "invalid_team_scope", "Agent management cannot change the CEO role.");
       let inScope = false;
       if (capability.threadId.startsWith("group:")) {
         const groupId = capability.threadId.slice(6);
@@ -2745,6 +2813,28 @@ async function serve(): Promise<void> {
   let packs: Packs | null = null;
   let cloud: CloudComputer | null = null;
   let cloudLink: CloudLink | null = null;
+  let nativeToolScope: { orgId: string; workspaceId: string } | null = null;
+  let nativeToolsTransport: ReturnType<typeof desktopContinuityTransport> | null = null;
+  const refreshNativeToolScope = async (): Promise<void> => {
+    if (!nativeToolsTransport) { nativeToolScope = null; return; }
+    try {
+      const status = await nativeToolsTransport<{ linked?: boolean; toolsAvailable?: boolean; orgId?: string; workspaceId?: string }>("status", {});
+      nativeToolScope = status.linked === true && status.toolsAvailable === true && typeof status.orgId === "string" && typeof status.workspaceId === "string"
+        ? { orgId: status.orgId, workspaceId: status.workspaceId } : null;
+    } catch { nativeToolScope = null; }
+  };
+  const bizosToolOperation: Record<string, string> = {
+    bizos_email_send: "tools/email-send", bizos_email_inbox: "tools/email-inbox",
+    bizos_site_publish: "tools/site-publish", bizos_image_generate: "tools/image-generate",
+  };
+  const invokeBizosTool = async (tool: string, raw: unknown): Promise<unknown> => {
+    if (!nativeToolsTransport || !bizosToolOperation[tool]) throw new HttpError(503, "bizos_tools_unavailable", "BizOS server tools are unavailable without the desktop bridge.");
+    await refreshNativeToolScope();
+    const scope = nativeToolScope;
+    if (!scope || scope.workspaceId !== `local:${id}:workspace`) throw new HttpError(403, "bizos_account_unlinked", "Sign in to BizOS and link this workspace to an organization to use this tool.");
+    const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    return nativeToolsTransport(bizosToolOperation[tool]!, { ...args, orgId: scope.orgId, workspaceId: scope.workspaceId });
+  };
   const packOf = (botId: string): PackService | null =>
     packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
   let origin = "";
@@ -2788,6 +2878,12 @@ async function serve(): Promise<void> {
           if (operation === "recruit") return facade!.recruit(capability,input);
           if (operation === "manage") return facade!.manageAgent(capability,input);
           if (operation === "routine") return facade!.scheduleRoutine(() => teamBroker.authorize(bearer),input);
+          if (operation === "list-routines") return facade!.listAgentRoutines(capability);
+          if (operation === "cancel-routine") return facade!.cancelAgentRoutine(capability,input);
+          if (operation === "bizos") {
+            if (!BIZOS_TOOL_SPECS.some(tool => tool.name === parsed.tool)) throw new HttpError(404, "unknown_tool", "Unknown BizOS server tool.");
+            return invokeBizosTool(String(parsed.tool), parsed.arguments);
+          }
           if (operation === "checkpoint") return facade!.checkpointTask(capability,input);
           if (operation === "send") return facade!.sendToChat(capability,input);
           if (operation === "quick-replies") return facade!.offerQuickReplies(capability,input);
@@ -3225,6 +3321,9 @@ async function serve(): Promise<void> {
   cloud = cloudComputer;
   const continuityTransport = nativeDescriptorPath
     ? desktopContinuityTransport(resolve(nativeDescriptorPath)) : undefined;
+  // The same signed bridge carries the BizOS server tools (email, inbox,
+  // landing publication, image generation) and the per-agent computer seat.
+  nativeToolsTransport = continuityTransport ?? null;
   let computerOrgId: string | null = null;
   let computerWorkspaceId = "";
   if (continuityTransport) {
@@ -3260,7 +3359,7 @@ async function serve(): Promise<void> {
     ...(serverComputer ? { computerBackend: serverComputer } : {}),
     baseUrl: origin,
     readSessionCookie: async () => "",
-    orgName: () => "Local workspace",
+    orgName: () => harness.workspaceTemplate.companyName() ?? cloudLink?.status().orgName ?? "Local workspace",
     execPath: process.execPath,
     packaged: false,
     runAsNodeAvailable: false,
@@ -3290,6 +3389,8 @@ async function serve(): Promise<void> {
           }
           if (tool.name === "schedule_routine") return facade.scheduleRoutine(() => teamBroker.authorize(session), argumentsValue);
           const capability = teamBroker.authorize(session);
+          if (tool.name === "list_routines") return facade.listAgentRoutines(capability);
+          if (tool.name === "cancel_routine") return facade.cancelAgentRoutine(capability, argumentsValue);
           if (tool.name === "recruit_agent") return facade.recruit(capability, argumentsValue);
           if (tool.name === "checkpoint_task") return facade.checkpointTask(capability, argumentsValue);
           if (tool.name === "send_to_chat") return facade.sendToChat(capability, argumentsValue);
@@ -3334,7 +3435,15 @@ async function serve(): Promise<void> {
             return harness.contextTool(capability.botId, tool.name, argumentsValue);
           },
         })) : [];
-      return [...teamTools, ...packTools, ...computerTools, ...contextTools];
+      const bizosTools = nativeToolScope
+        ? BIZOS_TOOL_SPECS.map((tool) => ({
+          name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
+          call: async (argumentsValue: unknown) => {
+            teamBroker.authorize(session);
+            return invokeBizosTool(tool.name, argumentsValue);
+          },
+        })) : [];
+      return [...teamTools, ...packTools, ...computerTools, ...contextTools, ...bizosTools];
     },
     // The same tools for Claude Code, which has no dynamic-tool slot:
     // a stdio MCP server, one per turn, holding a one-shot ticket that only
@@ -3345,7 +3454,7 @@ async function serve(): Promise<void> {
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
-        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}`,
+        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}${nativeToolScope ? ",bizos" : ""}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },
@@ -3373,7 +3482,13 @@ async function serve(): Promise<void> {
         ...(sharedBrainPath ? { sharedBrainPath } : {}),
         sandbox,
         supportedProviders: ["codex", "claude", "cursor", "ollama"],
-        peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name })),
+        peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name, ...(peer.title ? { title: peer.title } : {}) })),
+        mcpToolNames: [
+          ...LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (!serverComputer && localComputerEnabled())).map(tool => tool.name),
+          ...(harness.computerToolsAvailable() ? COMPUTER_TOOL_SPECS.map(tool => tool.name) : []),
+          ...(nativeToolScope ? BIZOS_TOOL_SPECS.map(tool => tool.name) : []),
+          ...(harness.continuity.linked(threadId) ? ["list_accessible_computers"] : []),
+        ],
         recruitment: "autonomous-local-tools",
       }),
   });
@@ -3402,9 +3517,12 @@ async function serve(): Promise<void> {
     ecommerce: new EcommerceService({ host: packHost, log }),
   };
   const localFacade = new CollaborationFacade(harness, id, teamBroker, index, packs);
+  await refreshNativeToolScope();
   await startLocalHarness(harness, existsSync(join(harnessRoot, "settings.json")), () => {
     facade = localFacade;
   });
+  const nativeToolPoll = setInterval(() => { void refreshNativeToolScope(); }, 10_000);
+  nativeToolPoll.unref();
   // One workspace identity: the phone sees exactly the workspace id the
   // desktop bootstrap reports. Without LOCALBIZOS_RELAY_URL the connector
   // stays disconnected — there is no default relay, cloud or otherwise.
@@ -3446,6 +3564,7 @@ async function serve(): Promise<void> {
     }
     connector?.stop();
     cloudLink?.stop();
+    clearInterval(nativeToolPoll);
     // Graceful close can hand off only while main's signer and this source
     // process are still available. A hard kill never fabricates quiescence.
     await harness.continuity.prepareShutdown().catch(error=>process.stderr.write(`[localbizos] continuity shutdown: ${String(error).slice(0,200)}\n`));
