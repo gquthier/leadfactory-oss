@@ -2597,7 +2597,7 @@ export class CollaborationFacade {
           await this.harness.threads.dispatchChild(
             { botId: capability.botId, threadId: capability.threadId, runId: capability.runId },
             { botId: bot.id },
-            { text: `${briefer} has briefed you to work as ${appliedTitle}: ${appliedDescription}. Introduce yourself to the person in this direct chat in one short, warm, natural message. Say what you will work on and that they can ask you for help. Write your own words; no fixed template.`, messageId: greetingId },
+            { text: `${briefer} has briefed you to work as ${appliedTitle}: ${appliedDescription}. Introduce yourself to the person in this direct chat in one short, warm, natural message. Say what you will work on and that they can ask you for help. Write in the person's language, defaulting to French when unknown. Write your own words; no fixed template.`, messageId: greetingId },
           );
         } catch {
           // The task launch below still gets a truthful dispatch receipt.
