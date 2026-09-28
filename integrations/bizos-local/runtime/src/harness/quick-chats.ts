@@ -71,7 +71,25 @@ export class QuickChatStore {
       return { id: row.id, title: "QuickChat", createdAt: row.createdAt, updatedAt,
         ...(lastMessageAt ? { lastMessageAt } : {}), ...(row.modelSelection ? { modelSelection: row.modelSelection } : {}), expiresAt: new Date(Date.parse(updatedAt) + QUICK_CHAT_TTL_MS).toISOString() };
     });
+    // UX-02 (.46): several QuickChats that never carried a message are one
+    // intention repeated. Keep the newest empty one; the others expire now and
+    // go through the same durable revocation and purge as a 24 h expiry.
+    const empties = this.chats.filter(row => this.isEmpty(row.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    for (const duplicate of empties.slice(1)) duplicate.expiresAt = duplicate.createdAt;
     if (JSON.stringify(raw) !== JSON.stringify(this.chats)) this.persist();
+  }
+
+  /** A chat with no conversation content yet (progress and control rows never count). */
+  private isEmpty(id: string): boolean {
+    const row = this.chats.find(chat => chat.id === id);
+    // A chat someone already configured (model choice) is theirs, not a blank one.
+    return (this.fingerprints.get(id)?.size ?? 0) === 0 && !row?.lastMessageAt && !row?.modelSelection;
+  }
+
+  /** The newest QuickChat nobody has written in yet, if any. */
+  emptyChat(): QuickChat | undefined {
+    this.sweep();
+    return this.chats.filter(row => this.isEmpty(row.id)).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(row => ({ ...row }))[0];
   }
 
   /** Bound after dispatcher/stores exist. Tombstones replay cleanup after a
@@ -126,6 +144,18 @@ export class QuickChatStore {
     if (this.expired.has(id)) throw new Error("QuickChat expired; create a new QuickChat with a new request id");
     const existing = this.chats.find(row => row.id === id);
     if (existing) return { ...existing };
+    // A new intention while an empty QuickChat is still open reuses it: the
+    // sidebar never shows two blank chats (UX-02). Once someone wrote in it, a
+    // new intention gets its own chat as before.
+    const blank = this.emptyChat();
+    if (blank) {
+      // A new intention is activity: the reused blank chat gets a fresh day.
+      const row = this.chats.find(chat => chat.id === blank.id)!;
+      row.updatedAt = this.clock.nowIso();
+      row.expiresAt = new Date(this.clock.now().getTime() + QUICK_CHAT_TTL_MS).toISOString();
+      this.persist(); this.schedule();
+      return { ...row };
+    }
     const now = this.clock.nowIso();
     const chat: QuickChat = { id, title: "QuickChat", createdAt: now, updatedAt: now, expiresAt: new Date(this.clock.now().getTime() + QUICK_CHAT_TTL_MS).toISOString() };
     this.chats.push(chat); this.persist(); this.schedule(); return { ...chat };

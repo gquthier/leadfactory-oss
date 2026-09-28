@@ -70,9 +70,10 @@ describe('workspace Quick chats', () => {
     const roots = await f.harness.brain.roots();
     const files = readdirSync(roots[0]!.path);
     const a = await f.harness.quickChats.create('create-a');
-    const b = await f.harness.quickChats.create('create-b');
-    expect(await f.harness.quickChats.create('create-a')).toEqual(a);
     await f.harness.quickChats.send(a.id, 'Alpha: private conversation A', 'send-a');
+    const b = await f.harness.quickChats.create('create-b');
+    expect(b.id).not.toBe(a.id);
+    expect(await f.harness.quickChats.create('create-a')).toEqual(await f.harness.quickChats.get(a.id).then(row => row.chat));
     await f.harness.quickChats.send(b.id, 'Beta: private conversation B', 'send-b');
     expect(f.turns).toHaveLength(2);
     expect(f.turns.map(t => t.cwd)).toEqual([roots[0]!.path, roots[0]!.path]);
@@ -113,8 +114,9 @@ describe('workspace Quick chats', () => {
 
   it('scopes STOP and approvals to their chat and preserves failure evidence', async () => {
     const f = fixture(); await f.harness.templates.apply("company-os", "new");
-    const a = await f.harness.quickChats.create('a'); const b = await f.harness.quickChats.create('b');
+    const a = await f.harness.quickChats.create('a');
     const runA = await f.harness.quickChats.send(a.id, 'Task A', 'a');
+    const b = await f.harness.quickChats.create('b');
     const runB = await f.harness.quickChats.send(b.id, 'Task B', 'b');
     f.turns[0]!.onEvent({ type: 'request.opened', requestId: 'approval-a', requestType: 'permission', tool: 'shell', summary: 'Allow command?', detail: 'touch result.txt' });
     const block = (await f.harness.quickChats.get(a.id)).messages.flatMap(m => m.blocks).find(block => block.kind === 'ask');
@@ -321,7 +323,10 @@ describe('QuickChat durable deletion projection', () => {
   it('revokes first and retries a failed unlink durably after restart', async () => {
     const clock = fixedClock(epoch); const f = fixture(undefined, clock);
     const chat = await f.harness.quickChats.create('failed-unlink');
+    await f.harness.quickChats.send(chat.id, 'Written, so a sibling is a new chat', 'written');
+    done(f.turns[0]!, 'Noted');
     const logPath = join(f.root, 'threads', `chat-${chat.id}.ndjson`);
+    rmSync(logPath, { recursive: true, force: true });
     mkdirSync(logPath);
     const events: string[] = [];
     f.harness.events.subscribe(event => events.push(event.type));
@@ -385,6 +390,42 @@ describe('QuickChat production conversation boundaries', () => {
     expect(JSON.parse(readFileSync(join(f.root, 'cursors.json'), 'utf8'))).toEqual({ [other]: 'keep-session' });
     expect(JSON.parse(readFileSync(join(f.root, 'approvals.json'), 'utf8'))).toEqual({ 'keep|permission|test': true });
     expect(JSON.parse(readFileSync(join(f.root, 'plans.json'), 'utf8')).routing.pins).toEqual({ [other]: 'plan' });
+  });
+
+  it('reuses the newest empty QuickChat for a new intention until someone writes in it (UX-02)', async () => {
+    const f = fixture(); await f.harness.templates.apply('company-os', 'new');
+    const first = await f.harness.quickChats.create('intent-1');
+    const again = await f.harness.quickChats.create('intent-2');
+    expect(again.id).toBe(first.id);
+    expect((await f.harness.quickChats.list()).chats).toHaveLength(1);
+    await f.harness.quickChats.send(first.id, 'Now it has content', 'send-1');
+    const second = await f.harness.quickChats.create('intent-3');
+    expect(second.id).not.toBe(first.id);
+    expect((await f.harness.quickChats.list()).chats.map(row => row.id).sort()).toEqual([first.id, second.id].sort());
+    // The original intention still maps to its own chat.
+    expect((await f.harness.quickChats.create('intent-1')).id).toBe(first.id);
+  });
+
+  it('purges older empty duplicates at startup and keeps the newest one and every written chat (UX-02)', async () => {
+    const clock = fixedClock(epoch); const f = fixture(undefined, clock);
+    await f.harness.templates.apply('company-os', 'new');
+    const written = await f.harness.quickChats.create('written');
+    await f.harness.quickChats.send(written.id, 'Keep me', 'keep');
+    done(f.turns[0]!, 'Kept');
+    f.harness.stop();
+    // Three blank chats left behind by an older build that created one per click.
+    const file = join(f.root, 'quick-chats.json');
+    const rows = JSON.parse(readFileSync(file, 'utf8')) as Array<Record<string, unknown>>;
+    const blank = (n: number) => {
+      const createdAt = new Date(epoch - (4 - n) * 60_000).toISOString();
+      return { id: `qchat_${String(n).repeat(32)}`, title: 'QuickChat', createdAt, updatedAt: createdAt, expiresAt: new Date(epoch - (4 - n) * 60_000 + DAY).toISOString() };
+    };
+    writeFileSync(file, JSON.stringify([...rows, blank(1), blank(2), blank(3)]));
+    const restored = fixture(f.root, clock);
+    const ids = (await restored.harness.quickChats.list()).chats.map(row => row.id).sort();
+    expect(ids).toEqual([written.id, blank(3).id].sort());
+    expect(JSON.parse(readFileSync(join(f.root, 'expired-quick-chats.json'), 'utf8')).sort()).toEqual([blank(1).id, blank(2).id].sort());
+    await expect(restored.harness.quickChats.get(blank(1).id)).rejects.toThrow('expired');
   });
 
   it('omits a chat expiring during async bootstrap without failing the workspace', async () => {
