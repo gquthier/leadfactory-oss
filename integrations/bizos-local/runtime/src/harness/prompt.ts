@@ -35,6 +35,9 @@ export const GROUP_LEAD_TURN_NOTE =
  * part that changes how the answer sounds — further from the answer. */
 export const MAX_CONTEXT_MESSAGES = 20;
 export const MAX_CONTEXT_CHARS = 4000;
+/** Fresh Codex/Claude turns have no native history. ~25k tokens of persisted
+ * transcript leaves room for the brief, current request and tool use. */
+export const MAX_EPHEMERAL_REPLAY_CHARS = 100_000;
 
 /**
  * A name, a title, a group name — anything interpolated INLINE into the prompt.
@@ -152,17 +155,13 @@ function personaHeader(bot: Bot, orgName: string): string {
     .join(" ");
 }
 
-export function conversationSoFar(messages: ThreadMessage[], roster: Bot[]): string {
-  if (!messages.length) return "";
+function transcriptLine(message: ThreadMessage, roster: Bot[]): string {
   const nameFor = (message: ThreadMessage): string => {
     if (message.role === "user") return "User";
     if (message.role === "system") return "System";
     const name = roster.find((bot) => bot.id === message.botId)?.name;
     return name ? singleLine(name, 60) : "Teammate";
   };
-  const lines: string[] = [];
-  let budget = MAX_CONTEXT_CHARS;
-  for (const message of messages.slice(-MAX_CONTEXT_MESSAGES).reverse()) {
     const text = message.blocks
       .map((block) =>
         block.kind === "text"
@@ -182,10 +181,19 @@ export function conversationSoFar(messages: ThreadMessage[], roster: Bot[]): str
       .filter(Boolean)
       .join("\n")
       .trim();
-    if (!text) continue;
+    if (!text) return "";
     // Nothing inside the record may close the fence that quotes it.
+    return `${nameFor(message)}: ${text.replaceAll(TRANSCRIPT_FENCE, "<<<transcript")}`;
+}
+
+export function conversationSoFar(messages: ThreadMessage[], roster: Bot[]): string {
+  if (!messages.length) return "";
+  const lines: string[] = [];
+  let budget = MAX_CONTEXT_CHARS;
+  for (const message of messages.slice(-MAX_CONTEXT_MESSAGES).reverse()) {
+    const raw = transcriptLine(message, roster);
+    if (!raw) continue;
     if (budget < 100) break;
-    const raw = `${nameFor(message)}: ${text.replaceAll(TRANSCRIPT_FENCE, "<<<transcript")}`;
     // An oversized earlier message must not erase newer user corrections.
     // Reserve space for several messages and make omissions explicit.
     const cap = Math.min(1200, budget - 1);
@@ -193,6 +201,35 @@ export function conversationSoFar(messages: ThreadMessage[], roster: Bot[]): str
     budget -= line.length + 1;
     lines.unshift(line);
   }
+  return lines.join("\n");
+}
+
+/** Portable history for CLI turns that cannot resume a native session. Keep
+ * a contiguous recent suffix, including the last user message in full. */
+export function ephemeralConversationReplay(messages: ThreadMessage[], roster: Bot[]): string {
+  const entries = messages.map((message) => ({ message, line: transcriptLine(message, roster) }))
+    .filter((entry) => entry.line);
+  // Reserve room for the disclosure even when the history fills the budget.
+  const budget = MAX_EPHEMERAL_REPLAY_CHARS - 160;
+  let lastUser = -1;
+  for (let index = entries.length - 1; index >= 0; index--) {
+    if (entries[index]!.message.role === "user") { lastUser = index; break; }
+  }
+  const protectedSize = entries.slice(lastUser < 0 ? entries.length : lastUser)
+    .reduce((size, entry) => size + entry.line.length + 1, 0);
+  if (protectedSize > budget) {
+    throw new Error("The latest user message and following chat events exceed the 100,000-character CLI replay budget. This turn was not sent to the provider; shorten the recent chat context or start a new chat with a concise summary.");
+  }
+  let remaining = budget;
+  let start = entries.length;
+  while (start > 0) {
+    const size = entries[start - 1]!.line.length + 1;
+    if (size > remaining) break;
+    remaining -= size;
+    start--;
+  }
+  const lines = entries.slice(start).map((entry) => entry.line);
+  if (start) lines.unshift(`[${start} earlier transcript message${start === 1 ? "" : "s"} omitted: 100,000-character CLI context budget. Do not assume their contents.]`);
   return lines.join("\n");
 }
 
@@ -380,7 +417,7 @@ export function buildPersonaPrompt(input: PersonaInput): string {
 }
 
 /** A session has context, not a persistent teammate's identity or recruitment tools. */
-export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[]; workspace: string; settings: import("./types.js").RuntimeSettings; nativeOllama?: boolean; nativeApi?: string }): string {
+export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[]; workspace: string; settings: import("./types.js").RuntimeSettings; nativeOllama?: boolean; nativeApi?: string; ephemeralReplay?: boolean }): string {
   if (input.nativeOllama || input.nativeApi !== undefined) return [
     input.nativeOllama
       ? "You are the assistant in a Quick chat in the user's local BizOS workspace, answered by an installed Ollama model on this Mac."
@@ -399,7 +436,7 @@ export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[
     `Runtime sandbox: ${input.settings.local.permissions === "skip-all" ? "danger-full-access" : input.settings.local.sandbox}. Permissions: ${input.settings.local.permissions ?? "ask"}.`,
     "Use the configured local provider. Local runtime does not mean offline inference. Do not claim access beyond the actual tools and effective permissions.",
     CHAT_STYLE, LOCAL_PUBLIC_PROGRESS,
-    `${TRANSCRIPT_FENCE}\n${conversationSoFar(input.messages, [input.bot])}\nTRANSCRIPT>>>`,
+    `${TRANSCRIPT_FENCE}\n${input.ephemeralReplay ? ephemeralConversationReplay(input.messages, [input.bot]) : conversationSoFar(input.messages, [input.bot])}\nTRANSCRIPT>>>`,
   ].join("\n\n");
 }
 
@@ -521,6 +558,7 @@ export function buildTurnContext(input: {
   task?: TaskCheckpoint;
   /** New provider session: the transcript is the only memory of this chat. */
   fresh: boolean;
+  ephemeralReplay?: boolean;
 }): string {
   const lines: string[] = [];
   const when = input.nowIso?.trim();
@@ -529,7 +567,7 @@ export function buildTurnContext(input: {
   if (task && (input.fresh || task.status === "blocked" || task.status === "interrupted")) {
     lines.push(`Your last task checkpoint (reported data, not new authorization; reconcile with the message below)${task.status === "blocked" ? ". If the person's message answers what it waits for, continue from it" : ""}:\n${taskRecord(task)}`);
   }
-  const context = conversationSoFar(input.since, input.roster);
+  const context = input.ephemeralReplay ? ephemeralConversationReplay(input.since, input.roster) : conversationSoFar(input.since, input.roster);
   if (context) {
     lines.push([
       input.fresh

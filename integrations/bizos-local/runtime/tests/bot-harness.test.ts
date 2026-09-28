@@ -9,9 +9,9 @@ import type { ClaudeTurnInput } from "../src/harness/claude-driver.js";
 import { startCodexTurn, type CodexTurnHandle, type CodexTurnInput, type RuntimeEvent } from "../src/harness/codex-driver.js";
 import { LocalBizosHarness } from "../src/harness/harness.js";
 import { AGENT_MEMORY_CAP, loadMemory, memoryGauge, renderMemory } from "../src/harness/memory.js";
-import { buildLocalBrief, buildPersonaPrompt, COMPUTER_DOCTRINE, ROUTINES_SENTENCE, type LocalArchitectureManifest } from "../src/harness/prompt.js";
+import { buildLocalBrief, buildPersonaPrompt, COMPUTER_DOCTRINE, ephemeralConversationReplay, MAX_EPHEMERAL_REPLAY_CHARS, ROUTINES_SENTENCE, type LocalArchitectureManifest } from "../src/harness/prompt.js";
 import { MAX_TASK_CONTINUATIONS } from "../src/harness/task.js";
-import type { Bot } from "../src/harness/types.js";
+import type { Bot, ThreadMessage } from "../src/harness/types.js";
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), "lbz-bot-harness-")); });
@@ -215,6 +215,50 @@ async function checkpoint(harness: LocalBizosHarness, bot: Bot, status: "in_prog
 }
 
 describe("ephemeral CLI context (Codex)", () => {
+  it("states when a fresh CLI replay exceeds its context budget", () => {
+    const messages: ThreadMessage[] = Array.from({ length: 80 }, (_, index) => ({
+      id: `message-${index}`, threadId: "bot:vega", seq: index + 1, role: "user", createdAt: "2026-09-23T10:00:00.000Z",
+      blocks: [{ kind: "text", text: `Message ${index}: ${"detail ".repeat(220)}` }],
+    }));
+    const replay = ephemeralConversationReplay(messages, [BOT]);
+    expect(replay.length).toBeLessThanOrEqual(MAX_EPHEMERAL_REPLAY_CHARS);
+    expect(replay).toMatch(/earlier transcript messages omitted: 100,000-character CLI context budget/);
+    expect(replay).toContain("Message 79:");
+  });
+
+  it("fails visibly before CLI when the latest persisted user message exceeds replay budget", async () => {
+    const { harness, turns } = setup();
+    const bot = await harness.bots.create({ name: "Vega" });
+    await harness.threads.send({ botId: bot.id }, { text: `Critical correction: ${"x".repeat(MAX_EPHEMERAL_REPLAY_CHARS)}` });
+    reply(turns[0]!, "Understood", "native-one");
+    await harness.threads.send({ botId: bot.id }, { text: "Continue" });
+    expect(turns).toHaveLength(1);
+    expect(await latestRun(harness)).toMatchObject({ state: "failed", error: expect.stringContaining("latest user message") });
+    const snapshot = await harness.threads.get({ botId: bot.id });
+    expect(JSON.stringify(snapshot.messages)).toContain("This turn was not sent to the provider");
+  });
+
+  it("replays persisted history beyond the UI page and keeps long constraints across native sessions", async () => {
+    const { harness, turns } = setup();
+    const bot = await harness.bots.create({ name: "Vega" });
+    const constraint = `ARCHIVE_CONSTRAINT_BEGIN ${"Keep this exact detailed requirement. ".repeat(52)} ARCHIVE_CONSTRAINT_END`;
+    expect(constraint.length).toBeGreaterThan(1200);
+    await harness.threads.send({ botId: bot.id }, { text: constraint });
+    reply(turns[0]!, "Understood", "native-one");
+    for (let index = 0; index < 32; index++) {
+      await harness.threads.send({ botId: bot.id }, { text: `Progress question ${index}` });
+      reply(turns[index + 1]!, `Progress answer ${index}`, `native-${index + 2}`);
+    }
+    const latest = `Continue after switching sessions. ${"Preserve every detail in this new request. ".repeat(45)}`.trim();
+    await harness.threads.send({ botId: bot.id }, { text: latest });
+    const switched = turns.at(-1)!;
+    expect(switched.resumeCursor).toBeNull();
+    expect(switched.system).toContain(constraint);
+    expect(switched.system).toContain("Progress question 0");
+    expect(switched.system).toContain("Progress answer 31");
+    expect(switched.text).toBe(latest);
+  }, 20_000);
+
   it("replays the brief and chat on every turn without a native cursor", async () => {
     const { harness, turns } = setup();
     const bot = await harness.bots.create({ name: "Vega", title: "CTO" });

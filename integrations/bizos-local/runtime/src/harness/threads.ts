@@ -141,6 +141,12 @@ export class ThreadStore {
     };
   }
 
+  /** Complete projected transcript for a fresh provider session. The same
+   * access check and duplicate-line collapse as snapshot apply here. */
+  transcript(target: ThreadTarget): ThreadMessage[] {
+    return this.rows(threadIdForTarget(target));
+  }
+
   page(target: ThreadTarget, before?: string): { messages: ThreadMessage[]; olderCursor: string | null } {
     const threadId = threadIdForTarget(target);
     const rows = this.rows(threadId);

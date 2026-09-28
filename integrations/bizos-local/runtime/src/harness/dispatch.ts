@@ -2217,7 +2217,9 @@ export class Dispatcher {
     if (!architecture || architecture.mode !== "local") return null;
     const settings = this.deps.settings();
     const target: ThreadTarget = threadId.startsWith("group:") ? { groupId: threadId.slice(6) } : { botId: bot.id };
-    const all = this.deps.threads.snapshot(target).messages.filter((row) => row.id !== runtime.excludeMessageId);
+    const ephemeralReplay = runtime.provider === "codex" || runtime.provider === "claude";
+    const all = (ephemeralReplay ? this.deps.threads.transcript(target) : this.deps.threads.snapshot(target).messages)
+      .filter((row) => row.id !== runtime.excludeMessageId);
     const lastOwn = [...all].reverse().find((row) => row.botId === bot.id);
     const keep = (row: ThreadMessage): boolean => row.id !== queued.triggerMessageId && row.blocks.length > 0;
     const group = threadId.startsWith("group:") ? this.deps.groups.get(threadId.slice(6)) : undefined;
@@ -2268,6 +2270,7 @@ export class Dispatcher {
       nowIso,
       ...(task ? { task } : {}),
       fresh,
+      ephemeralReplay,
     }), onboardingNote].filter(Boolean).join("\n\n");
 
     const key = runtime.cursorKey;
@@ -2336,10 +2339,13 @@ export class Dispatcher {
     executionPolicy?: TurnExecutionPolicy;
   }): string {
     if (threadId.startsWith("chat:")) {
-      const messages = this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages
+      const ephemeralReplay = runtime.provider === "codex" || runtime.provider === "claude";
+      const messages = (ephemeralReplay
+        ? this.deps.threads.transcript({ chatId: threadId.slice(5) })
+        : this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages)
         .filter(row => row.id !== runtime.excludeMessageId);
       return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings(), nativeOllama: runtime.provider === "ollama",
-        ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}) });
+        ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}), ephemeralReplay });
     }
     const target: ThreadTarget = threadId.startsWith("group:")
       ? { groupId: threadId.slice(6) }

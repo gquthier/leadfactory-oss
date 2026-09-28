@@ -41,6 +41,28 @@ afterEach(async () => { for (const { harness } of fixtures) harness.stop(); for 
 const done = (turn: CodexTurnInput, text: string) => { turn.onEvent({ type: 'content.delta', streamKind: 'assistant_text', delta: text }); turn.onEvent({ type: 'turn.completed', ok: true, stopReason: null }); };
 
 describe('workspace Quick chats', () => {
+  it('replays long archived constraints after more than one UI page and a fresh CLI session', async () => {
+    const f = fixture();
+    await f.harness.templates.apply('company-os', 'new');
+    const chat = await f.harness.quickChats.create('archive');
+    const constraint = `QUICK_ARCHIVE_BEGIN ${'Keep the precise original requirement. '.repeat(52)} QUICK_ARCHIVE_END`;
+    expect(constraint.length).toBeGreaterThan(1200);
+    await f.harness.quickChats.send(chat.id, constraint, 'archive-first');
+    done(f.turns[0]!, 'Understood');
+    for (let index = 0; index < 32; index++) {
+      await f.harness.quickChats.send(chat.id, `Progress ${index}`, `archive-${index}`);
+      done(f.turns[index + 1]!, `Answer ${index}`);
+    }
+    const latest = `Continue in the new session. ${'Preserve every detail in this new request. '.repeat(45)}`.trim();
+    await f.harness.quickChats.send(chat.id, latest, 'archive-last');
+    const switched = f.turns.at(-1)!;
+    expect(switched.resumeCursor).toBeNull();
+    expect(switched.system).toContain(constraint);
+    expect(switched.system).toContain('Progress 0');
+    expect(switched.system).toContain('Answer 31');
+    expect(switched.text).toBe(latest);
+  }, 20_000);
+
   it('shares the bound workspace, isolates histories and native sessions, creates no agents', async () => {
     const f = fixture();
     await f.harness.templates.apply("company-os", "new");
