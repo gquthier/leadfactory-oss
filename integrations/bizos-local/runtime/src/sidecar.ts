@@ -77,7 +77,7 @@ import { CONTEXT_TOOL_SPECS, LOCAL_TEAM_TOOL_SPECS, isCloudToolName } from "./lo
 import { ContextReferenceError } from "./harness/context-reference.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
-import { RemoteNativeComputerBackend } from "./computer/remote-native.js";
+import { RemoteServerComputerBackend } from "./computer/remote-server.js";
 import { Storage } from "./harness/storage.js";
 import { AgencyService } from "./harness/agency.js";
 import { EcommerceService } from "./harness/ecommerce.js";
@@ -3214,28 +3214,50 @@ async function serve(): Promise<void> {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Local sidecar did not bind a TCP port.");
   origin = `http://127.0.0.1:${address.port}`;
-  // The workspace's cloud computer exists before the harness: agents' computers
-  // are seats on it. Its plan check reads the harness lazily.
-  const cloudComputer: CloudComputer = new CloudComputer({
+  const nativeDescriptorPath = process.env[NATIVE_COMPUTER_DESCRIPTOR_VARIABLE]?.trim();
+  // A signed installation uses only the server seat. Do not even load the old
+  // local Boat configuration in that sidecar process.
+  const cloudComputer: CloudComputer | null = nativeDescriptorPath ? null : new CloudComputer({
     storage: new Storage(harnessRoot),
     isAllowed: async (): Promise<boolean> => (await harness.entitlement.get()).features.cloudComputer,
     log: (line) => process.stderr.write(`[localbizos] ${line}\n`),
   });
   cloud = cloudComputer;
-  let computerWorkspaceFor = (botId: string): string => join(harnessRoot, "workspaces", botId);
-  const nativeDescriptorPath = process.env[NATIVE_COMPUTER_DESCRIPTOR_VARIABLE]?.trim();
-  const nativeComputer = nativeDescriptorPath
-    ? new RemoteNativeComputerBackend({
-        descriptorPath: resolve(nativeDescriptorPath),
-        workspaceFor: (botId) => computerWorkspaceFor(botId),
-      })
+  const continuityTransport = nativeDescriptorPath
+    ? desktopContinuityTransport(resolve(nativeDescriptorPath)) : undefined;
+  let computerOrgId: string | null = null;
+  let computerWorkspaceId = "";
+  if (continuityTransport) {
+    const refreshComputerAvailability = async () => {
+      if (process.env.BIZOS_DESKTOP_COMPUTER_OPT_OUT === "true") {
+        process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false";
+        return;
+      }
+      try {
+        const scope = await continuityTransport<Record<string, unknown>>("status", {});
+        computerOrgId = scope.linked === true && typeof scope.orgId === "string" ? scope.orgId : null;
+        computerWorkspaceId = typeof scope.workspaceId === "string" ? scope.workspaceId : "";
+        if (!computerOrgId) { process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false"; return; }
+        const status = await continuityTransport<Record<string, unknown>>("computer/status", {
+          orgId: computerOrgId, workspaceId: computerWorkspaceId, agentId: "ceo",
+        });
+        process.env.BIZOS_LOCAL_COMPUTER_ENABLED = status.available === true && status.configured === true ? "true" : "false";
+      } catch {
+        process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false";
+      }
+    };
+    await refreshComputerAvailability();
+    setInterval(() => { void refreshComputerAvailability(); }, 60_000).unref();
+  }
+  const serverComputer = continuityTransport && nativeDescriptorPath
+    ? new RemoteServerComputerBackend(continuityTransport, () => computerOrgId, () => computerWorkspaceId)
     : undefined;
   const harness: LocalBizosHarness = new LocalBizosHarness({
     ...(managedEntitlement ? { managedEntitlementInstanceId: id } : {}),
     rootDir: harnessRoot,
-    ...(nativeDescriptorPath ? {continuityTransport: desktopContinuityTransport(resolve(nativeDescriptorPath))} : {}),
-    cloudComputer,
-    ...(nativeComputer ? { computerBackend: nativeComputer } : {}),
+    ...(continuityTransport ? { continuityTransport } : {}),
+    ...(cloudComputer ? { cloudComputer } : {}),
+    ...(serverComputer ? { computerBackend: serverComputer } : {}),
     baseUrl: origin,
     readSessionCookie: async () => "",
     orgName: () => "Local workspace",
@@ -3254,7 +3276,7 @@ async function serve(): Promise<void> {
       // Exchange the one-shot ticket inside the trusted host. Neither token
       // reaches Codex, its prompt, argv, environment, or the renderer.
       const session = teamBroker.exchange(teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }));
-      const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => localComputerEnabled() || !isCloudToolName(tool.name)).filter(tool => !tool.name.startsWith("read_conversation_")).map((tool) => ({
+      const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (!serverComputer && localComputerEnabled())).filter(tool => !tool.name.startsWith("read_conversation_")).map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -3358,7 +3380,6 @@ async function serve(): Promise<void> {
   teamBroker.setAuthorityCheck(capability => {
     if (harness.continuity.linked(capability.threadId)) harness.continuity.guard.assert(capability.threadId);
   });
-  computerWorkspaceFor = (botId) => harness.computerWorkspaceFor(botId);
   // The packs share this harness: their agents are roster bots the generic
   // installer made, their cockpits run on demand in the bound vault and
   // close with the sidecar.
@@ -3375,7 +3396,7 @@ async function serve(): Promise<void> {
       .map(([botId, affiliation]) => [affiliation.roleSlug, botId])),
   };
   const log = (line: string) => process.stderr.write(`[localbizos] ${line}\n`);
-  cloudComputer.start();
+  cloudComputer?.start();
   packs = {
     agency: new AgencyService({ host: packHost, log }),
     ecommerce: new EcommerceService({ host: packHost, log }),

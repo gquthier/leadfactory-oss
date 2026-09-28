@@ -215,6 +215,9 @@ export interface ManagedComputerBackend extends ComputerBackend {
   /** Take control the live way (see `ComputerControlSession`). A backend
    * without it is driven through `forwardInput` instead. */
   controlSession?(botId: string): Promise<ComputerControlSession>;
+  /** The server can hold the human gate independently of the local turn. */
+  requestServerHandoff?(botId: string, reason: string): Promise<string>;
+  waitForGiveBack?(botId: string, handoffId: string, signal: AbortSignal): Promise<void>;
 }
 
 /**
