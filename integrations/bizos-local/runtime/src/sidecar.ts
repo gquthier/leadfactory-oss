@@ -182,6 +182,7 @@ export interface CollaborationAsk {
 
 interface CollaborationMessage {
   deliveryState?: "complete";
+  setupError?: "ai-unavailable";
   id: string;
   threadId: string;
   role: "user" | "assistant";
@@ -1042,6 +1043,7 @@ export class CollaborationFacade {
       threadId: publicThreadId,
       role: message.role === "user" ? "user" : "assistant",
       content: textOf(publicBlocks, message.role === "user" ? Number.MAX_SAFE_INTEGER : 20_000),
+      ...(message.setupError ? { setupError: message.setupError } : {}),
       ...(message.deliveryState === "complete" ? { deliveryState: "complete" as const } : {}),
       createdAt: message.createdAt,
       senderType: message.role === "user" ? "human" : "chatId" in target ? "assistant" : "agent",
@@ -3608,7 +3610,7 @@ async function serve(): Promise<void> {
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
-        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}${nativeToolScope ? ",bizos" : ""}`,
+        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!serverComputer && localComputerEnabled() ? ",cloud" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}${nativeToolScope ? ",bizos" : ""}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },

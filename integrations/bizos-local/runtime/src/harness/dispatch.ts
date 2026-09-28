@@ -84,6 +84,7 @@ import {
 import { singleLine } from "./prompt.js";
 import { redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
+import { aiSetupRequired } from "./ai-setup-error.js";
 import { approvalTitle, labelForTool } from "./style.js";
 import { assessAsk } from "./ask-impact.js";
 import {
@@ -1606,6 +1607,16 @@ export class Dispatcher {
     this.deps.events.publish({ type: "thread.message.created", threadId, message });
   }
 
+  private aiSetupNote(threadId: string, botId: string, runId: string, reason: string): void {
+    if (!aiSetupRequired(reason)) return;
+    const message = this.deps.threads.append(threadId, {
+      role: "bot", deliveryState: "complete", setupError: "ai-unavailable",
+      blocks: [{ kind: "text", text: "An AI connection is needed to reply." }],
+      botId, runId,
+    });
+    this.deps.events.publish({ type: "thread.message.created", threadId, message });
+  }
+
   private noteQueueFull(threadId: string): void {
     this.note(threadId, QUEUE_FULL_NOTE);
   }
@@ -1780,6 +1791,7 @@ export class Dispatcher {
       blocks: [{ kind: "meta", text: reason }],
     });
     this.deps.events.publish({ type: "thread.message.created", threadId, message: note });
+    this.aiSetupNote(threadId, botId, queued.runId, reason);
     this.deps.events.publish({ type: "run.failed", runId: queued.runId, threadId, botId, error: reason });
     if (queued.routineId) this.deps.onRoutineIdle?.(queued.routineId, queued.runId);
     this.pump(threadId);
@@ -2896,6 +2908,9 @@ export class Dispatcher {
     } else {
       const error = state.failure ?? stopReason ?? "the turn failed";
       this.deps.runs.update(turn.runId, { state: "failed", error });
+      if (turn.publicMessagesEnabled && turn.publicMessages.size === 0) {
+        this.aiSetupNote(turn.threadId, bot.id, turn.runId, `${error} ${stopReason ?? ""}`);
+      }
       this.deps.events.publish({
         type: "run.failed",
         runId: turn.runId,

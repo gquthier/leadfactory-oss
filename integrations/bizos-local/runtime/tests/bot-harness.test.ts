@@ -236,6 +236,28 @@ async function checkpoint(harness: LocalBizosHarness, bot: Bot, status: "in_prog
 }
 
 describe("ephemeral CLI context (Codex)", () => {
+  it("emits a public setup card in the thread when the CLI is disconnected", async () => {
+    const { harness, turns } = setup();
+    const bot = await harness.bots.create({ name: "Vega" });
+    await harness.threads.send({ botId: bot.id }, { text: "Hello" });
+    emit(turns[0]!, { type: "runtime.error", message: "Authentication required. Please sign in to Codex." });
+    emit(turns[0]!, { type: "turn.completed", ok: false, stopReason: "auth_required" });
+    const snapshot = await harness.threads.get({ botId: bot.id });
+    expect(snapshot.messages).toContainEqual(expect.objectContaining({
+      role: "bot", deliveryState: "complete", setupError: "ai-unavailable",
+    }));
+    expect(await latestRun(harness)).toMatchObject({ state: "failed" });
+  });
+
+  it("emits the same setup card when no selected AI plan can start", async () => {
+    const { harness } = setup();
+    const bot = await harness.bots.create({ name: "Vega", planId: "pln_removed" });
+    await harness.threads.send({ botId: bot.id }, { text: "Hello" });
+    const snapshot = await harness.threads.get({ botId: bot.id });
+    expect(snapshot.messages).toContainEqual(expect.objectContaining({
+      role: "bot", deliveryState: "complete", setupError: "ai-unavailable",
+    }));
+  });
   it("states when a fresh CLI replay exceeds its context budget", () => {
     const messages: ThreadMessage[] = Array.from({ length: 80 }, (_, index) => ({
       id: `message-${index}`, threadId: "bot:vega", seq: index + 1, role: "user", createdAt: "2026-09-23T10:00:00.000Z",

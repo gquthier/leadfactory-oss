@@ -183,6 +183,7 @@ export class ThreadStore {
     input: {
       role: MessageRole;
       deliveryState?: "control" | "complete";
+      setupError?: ThreadMessage["setupError"];
       blocks: MessageBlock[];
       botId?: string;
       runId?: string;
@@ -202,6 +203,7 @@ export class ThreadStore {
       seq: this.nextSeq(threadId, tail?.seq),
       role: input.role,
       ...(input.deliveryState ? { deliveryState: input.deliveryState } : {}),
+      ...(input.setupError ? { setupError: input.setupError } : {}),
       blocks: input.blocks,
       ...(input.botId ? { botId: input.botId } : {}),
       ...(input.runId ? { runId: input.runId } : {}),

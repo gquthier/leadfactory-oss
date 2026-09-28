@@ -402,6 +402,8 @@ export type MessageRole = "user" | "bot" | "system";
 export interface ThreadMessage {
   /** Control records stay private; completed public text is immutable. */
   deliveryState?: "control" | "complete";
+  /** A recoverable missing AI connection, rendered as a localized setup card. */
+  setupError?: "ai-unavailable";
   id: string;
   threadId: string;
   seq: number;

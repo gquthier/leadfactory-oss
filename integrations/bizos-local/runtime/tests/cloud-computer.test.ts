@@ -356,7 +356,7 @@ describe("cloud computer helpers and transport", () => {
     const cloud = vi.fn(async (input: Record<string, unknown>) => ({ exitCode: 0, echoed: input }));
     const result = await handleLocalTeamMessage(
       { id: 1, method: "tools/call", params: { name: "cloud_computer_run", arguments: { command: "ls" } } },
-      undefined, undefined, undefined, undefined, { cloud },
+      undefined, undefined, undefined, undefined, { cloud, toolsets: new Set(["team", "cloud"]) },
     );
     expect(cloud).toHaveBeenCalledWith({ tool: "cloud_computer_run", arguments: { command: "ls" } });
     expect(JSON.stringify(result)).toContain("exitCode");

@@ -367,7 +367,7 @@ export async function handleLocalTeamMessage(
   if (method === "notifications/initialized" || method === "notifications/cancelled") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") {
-    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => localComputerEnabled() || !isCloudToolName(tool.name)).filter(tool => !toolsets.has("continuity") || !["recruit_agent","cloud_computer_run","schedule_routine"].includes(tool.name)).map((tool) => ({
+    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (localComputerEnabled() && toolsets.has("cloud"))).filter(tool => !toolsets.has("continuity") || !["recruit_agent","cloud_computer_run","schedule_routine"].includes(tool.name)).map((tool) => ({
       ...tool,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: isCloudToolName(tool.name) },
     }));
@@ -408,7 +408,7 @@ export async function handleLocalTeamMessage(
       if (params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
       if (params.name === "offer_quick_replies") return reply(textResult(await invokeQuickReplies((params.arguments ?? {}) as Json)));
       if (params.name === "propose_company_name") return reply(textResult(await invokeProposeName((params.arguments ?? {}) as Json)));
-      if (isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
+      if (toolsets.has("cloud") && isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
       if (toolsets.has("computer") && isComputerToolName(params.name)) {
         return reply(computerResult(await invokeComputer({ tool: params.name, arguments: params.arguments ?? {} })));
       }

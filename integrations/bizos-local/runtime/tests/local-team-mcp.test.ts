@@ -1,7 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS } from "../src/local-team-mcp.js";
+import { handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS, toolsetsFromArgv } from "../src/local-team-mcp.js";
 
 describe("local team MCP", () => {
+  it("matches the sidecar's computer seats and never advertises cloud tools on a server seat", async () => {
+    const old = process.env.BIZOS_LOCAL_COMPUTER_ENABLED;
+    process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "true";
+    try {
+      const computer = vi.fn(async () => ({ ok: true, text: "screen ready" }));
+      const serverSeat = { toolsets: toolsetsFromArgv(["--toolset=team,computer"]), computer };
+      const listed = await handleLocalTeamMessage({ id: 1, method: "tools/list" }, undefined, undefined, undefined, undefined, serverSeat);
+      expect(JSON.stringify(listed)).toContain("computer_observe");
+      expect(JSON.stringify(listed)).not.toContain("cloud_computer_run");
+      const called = await handleLocalTeamMessage({ id: 2, method: "tools/call", params: { name: "computer_observe", arguments: {} } }, undefined, undefined, undefined, undefined, serverSeat);
+      expect(computer).toHaveBeenCalledWith({ tool: "computer_observe", arguments: {} });
+      expect(JSON.stringify(called)).toContain("screen ready");
+      const cloudOnly = { toolsets: toolsetsFromArgv(["--toolset=team,cloud"]) };
+      const cloudList = await handleLocalTeamMessage({ id: 3, method: "tools/list" }, undefined, undefined, undefined, undefined, cloudOnly);
+      expect(JSON.stringify(cloudList)).toContain("cloud_computer_run");
+      expect(JSON.stringify(cloudList)).not.toContain("computer_observe");
+    } finally {
+      if (old === undefined) delete process.env.BIZOS_LOCAL_COMPUTER_ENABLED;
+      else process.env.BIZOS_LOCAL_COMPUTER_ENABLED = old;
+    }
+  });
   it("explains custom recruitment without requiring a prepared role catalog", () => {
     const recruit = LOCAL_TEAM_TOOL_SPECS.find((tool) => tool.name === "recruit_agent")!;
     expect(recruit.description).toContain("name, title, description, context and initial_task");
