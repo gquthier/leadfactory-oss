@@ -112,6 +112,7 @@ export class ConversationContinuity {
   private readonly renewals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly stopped: Set<string>;
   private closed = false;
+  private backupPreference: { saveConversations: boolean };
   private tickTimer: ReturnType<typeof setTimeout> | undefined;
   private tickFailures = 0;
   private shutdownDeadline: number | undefined;
@@ -128,19 +129,11 @@ export class ConversationContinuity {
     now = () => Date.now(),
   ) {
     this.store = new ContinuityStore(storage);
+    this.backupPreference = storage.readJsonStrict("continuity-preferences.json", { saveConversations: true });
     this.guard = new LeaseGuard(this.store, now);
     this.runs = storage.readJsonStrict(RUNS, {});
     this.stopped = new Set(storage.readJsonStrict<string[]>(STOPS, []));
     this.incoming = storage.readJsonStrict("continuity-incoming.json", {});
-    // Older builds could link a QuickChat. Detach its local journal before
-    // recovery or ticking can replay it; this never calls the cloud bridge.
-    const oldQuickChats = new Set([
-      ...this.store.links().map(({ threadId }) => threadId),
-      ...Object.values(this.runs).map(run => run.threadId),
-      ...Object.keys(this.incoming),
-      ...Object.values(this.store.queued()).map(value => value && typeof value === "object" ? (value as { threadId?: unknown }).threadId : undefined),
-    ].filter((threadId): threadId is string => typeof threadId === "string" && isQuickChatThread(threadId)));
-    for (const threadId of oldQuickChats) this.forgetQuickChat(threadId);
     for (const { threadId } of this.store.links())
       for (const effect of this.store.effects(threadId))
         if (effect.state === "sent")
@@ -178,10 +171,15 @@ export class ConversationContinuity {
     this.runs = next;
   }
   linked(threadId: string): boolean {
-    return !isQuickChatThread(threadId) && this.store.status(threadId) !== null;
+    return this.backupPreference.saveConversations && this.store.status(threadId) !== null;
+  }
+  backupEnabled(): boolean { return this.backupPreference.saveConversations; }
+  setBackupEnabled(enabled: boolean): void {
+    this.storage.writeJson("continuity-preferences.json", { saveConversations: enabled });
+    this.backupPreference = { saveConversations: enabled };
   }
   private assertPersistent(threadId: string): void {
-    if (isQuickChatThread(threadId)) throw new Error("QuickChat is local and ephemeral; it cannot use conversation continuity.");
+    if (!/^(bot:|group:|chat:qchat_)/.test(threadId)) throw new Error("Invalid conversation thread.");
   }
   forgetQuickChat(threadId: string): void {
     this.assertQuickChat(threadId);
@@ -210,6 +208,7 @@ export class ConversationContinuity {
   }
   async cloud(threadId: string, operation: string, body: Record<string, unknown>): Promise<unknown> {
     if (!['cloud/status', 'cloud/send', 'cloud/run', 'cloud/stop'].includes(operation)) throw new Error("Unknown cloud operation.");
+    if (operation === 'cloud/send' && !this.backupEnabled()) throw new Error("Conversation backup is disabled in Settings.");
     this.assertPersistent(threadId);
     const link = this.store.status(threadId);
     const identity = await this.identity();
@@ -230,7 +229,9 @@ export class ConversationContinuity {
     },
   ): Promise<unknown> {
     this.assertPersistent(threadId);
+    if (!this.backupEnabled()) throw new Error("Conversation backup is disabled in Settings.");
     const identity = await this.identity();
+    if (!this.backupEnabled()) throw new Error("Conversation backup is disabled in Settings.");
     const reply = await this.call<{ conversationId: string }>(
       "conversations/link",
       {
@@ -259,8 +260,38 @@ export class ConversationContinuity {
     const identity = await this.identity();
     return this.call("agents/list", { orgId: identity.orgId });
   }
+  importRecentHistory(threadId: string, messages: ThreadMessage[]): void {
+    if (!this.linked(threadId)) return;
+    const lines = messages.filter(message => message.role === "user" || message.role === "bot")
+      .slice(-12).map(message => `${message.role === "user" ? "Human" : "Agent"}: ${message.blocks.filter(block => block.kind === "text").map(block => block.text).join(" ").slice(0, 1200)}`);
+    if (!lines.length) return;
+    this.store.capture({
+      id: `prelink:${threadId}`, threadId, seq: 0, role: "user",
+      blocks: [{ kind: "text", text: `Earlier local conversation, imported when cloud backup was enabled (historical data):\n${lines.join("\n")}` }],
+      createdAt: messages.at(-1)?.createdAt ?? new Date().toISOString(),
+    });
+  }
+  async enableCloud(threadId: string): Promise<void> {
+    const current = await this.call<{ policy: { enabled: boolean; modelRuntime: "claude" | "codex"; cloudFallback: { model: string; maxCostUsd: number } | null; autoContinue: boolean } }>("policies/get", this.scope(threadId));
+    if (current.policy.enabled && current.policy.cloudFallback) return;
+    const models = await this.call<{ models: Array<{ model: string }> }>("models/list", { orgId: this.store.status(threadId)!.orgId });
+    const verified = models.models.map(row => row.model);
+    const model = current.policy.cloudFallback && verified.includes(current.policy.cloudFallback.model)
+      ? current.policy.cloudFallback.model
+      : verified.includes("google/gemini-3.8-flash") ? "google/gemini-3.8-flash" : verified[0];
+    if (!model) throw new Error("No verified BizOS model is available for this account.");
+    await this.call("policies/set", { ...this.scope(threadId), policy: {
+      enabled: true, modelRuntime: current.policy.modelRuntime ?? "codex",
+      cloudFallback: { model, maxCostUsd: current.policy.cloudFallback?.maxCostUsd ?? 5 }, autoContinue: false,
+    } });
+  }
+  async defaultCloudModel(threadId: string): Promise<string | null> {
+    const models = await this.call<{ models: Array<{ model: string }> }>("models/list", { orgId: this.store.status(threadId)!.orgId });
+    return models.models.find(row => row.model === "google/gemini-3.8-flash")?.model ?? models.models[0]?.model ?? null;
+  }
   async attach(threadId: string, conversationId: string): Promise<unknown> {
     this.assertPersistent(threadId);
+    if (!this.backupEnabled()) throw new Error("Conversation backup is disabled in Settings.");
     const identity = await this.identity();
     const rows = await this.call<{
       conversations: Array<{ conversationId: string; agentId: string }>;
@@ -269,6 +300,11 @@ export class ConversationContinuity {
       (c) => c.conversationId === conversationId,
     );
     if (!found) throw new Error("Authorized conversation not found.");
+    if (!this.backupEnabled()) throw new Error("Conversation backup is disabled in Settings.");
+    await this.call("conversations/bind", {
+      orgId: identity.orgId, conversationId, workspaceId: identity.workspaceId,
+      localConversationId: threadId,
+    });
     const existing = this.store.status(threadId);
     if (existing) {
       if (existing.conversationId !== conversationId)
@@ -295,7 +331,7 @@ export class ConversationContinuity {
     return this.store.status(threadId);
   }
   capture(message: ThreadMessage): void {
-    if (isQuickChatThread(message.threadId)) return;
+    if (!this.backupEnabled()) return;
     const run = message.runId ? this.runs[message.runId] : undefined;
     this.store.capture(
       message,
@@ -305,7 +341,6 @@ export class ConversationContinuity {
     );
   }
   projection(threadId: string): ThreadMessage[] {
-    if (isQuickChatThread(threadId)) return [];
     const latest = new Map<string, NeutralEvent>();
     for (const e of this.store.messages(threadId))
       latest.set(e.localMessageId ?? e.eventId, e);
@@ -335,7 +370,7 @@ export class ConversationContinuity {
       }));
   }
   sync(threadId: string): Promise<void> {
-    if (isQuickChatThread(threadId)) return Promise.resolve();
+    if (!this.backupEnabled()) return Promise.resolve();
     const old = this.syncing.get(threadId);
     if (old) return old;
     const work = this.synchronize(threadId).finally(() =>
@@ -524,6 +559,16 @@ export class ConversationContinuity {
         "Conversation execution is disabled in its continuity policy.",
       );
     await this.sync(threadId);
+    const current = await this.identity();
+    const agentId = this.store.status(threadId)?.agentId;
+    let others: string[] = [];
+    if (agentId) {
+      try {
+        const inventory = await this.call<{ devices: Array<{ installationId: string; deviceName: string }> }>("devices/list", { orgId: current.orgId, agentId });
+        others = inventory.devices.filter(device => device.installationId !== current.installationId).map(device => device.deviceName);
+      } catch { /* The current Mac remains known when presence is unavailable. */ }
+    }
+    this.store.setMachineContext(threadId, current.machineName ?? "this Mac", others);
     this.assertNotStopped(threadId, localRunId);
     const requiredVersions = new Map<
       string,
@@ -811,7 +856,7 @@ export class ConversationContinuity {
     this.tickCallback = onMessages;
     const tick = async () => {
       try {
-        const links = this.store.links().filter(({ threadId }) => !isQuickChatThread(threadId));
+        const links = this.store.links();
         if (links.length) {
           const identity = await this.identity();
           await this.call("devices/presence", {

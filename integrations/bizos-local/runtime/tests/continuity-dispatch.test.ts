@@ -95,6 +95,7 @@ async function backend() {
           },
         };
       else if (op === "conversations/link") result = { conversationId };
+      else if (op === "conversations/bind") result = { conversationId };
       else if (op === "conversations/list")
         result = {
           conversations: [

@@ -11,6 +11,7 @@ export interface ContinuityIdentity {
   userId: string;
   orgId: string;
   workspaceId: string;
+  machineName?: string;
 }
 export class ContinuityBridgeError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly requestRejected = false) {
