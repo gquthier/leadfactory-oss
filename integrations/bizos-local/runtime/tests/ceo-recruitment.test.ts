@@ -7,6 +7,7 @@ import { AgencyService } from "../src/harness/agency.js";
 import { parseAvatarDataUrl } from "../src/harness/avatar.js";
 import type { CodexTurnHandle, CodexTurnInput } from "../src/harness/codex-driver.js";
 import { LocalBizosHarness } from "../src/harness/harness.js";
+import { handleLocalTeamMessage } from "../src/local-team-mcp.js";
 import { CollaborationFacade, LocalTeamBroker } from "../src/sidecar.js";
 import { emptyDurableIndex, type DurableIndex } from "../src/sidecar-contract.js";
 
@@ -26,7 +27,7 @@ interface Fixture {
 
 const fixtures: Fixture[] = [];
 
-async function fixture(templateId: "lead-gen-agency" | "service-based-business" | "software" | "company-os" = "lead-gen-agency"): Promise<Fixture> {
+async function fixture(templateId: "lead-gen-agency" | "service-based-business" | "software" | "company-os" = "lead-gen-agency", companyName = "Fixture Company"): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), "lbz-ceo-recruit-"));
   const plan = {
     id: "pln_fixture_primary",
@@ -67,9 +68,9 @@ async function fixture(templateId: "lead-gen-agency" | "service-based-business" 
     },
   });
   await harness.runtime.setInference({ source: "plan", planId: plan.id });
-  const installed = await harness.templates.apply(templateId, undefined, { companyName: "Fixture Company" });
+  const installed = await harness.templates.apply(templateId, undefined, { companyName });
   const ceoId = installed.bots.ceo!;
-  const onboarding = await harness.threads.send({ botId: ceoId }, { text: "Fixture Company is already operating." });
+  const onboarding = await harness.threads.send({ botId: ceoId }, { text: `${companyName} is already operating.` });
   harness.offerQuickReplies({ botId: ceoId, threadId: `bot:${ceoId}`, runId: onboarding.runIds[0]! }, { choices: ["Run the authorized mission"] });
   finish(turns[0]!, "Which work should we start with?");
   // activeCapability supplies the user's separate priority answer. Keep the
@@ -108,6 +109,57 @@ afterEach(async () => {
 });
 
 describe("CEO on-demand recruitment", () => {
+  it("recruits five distinct BrainOS project specialists through MCP with retries and workspace isolation", async () => {
+    const f = await fixture("company-os", "BrainOS");
+    const other = await fixture("company-os", "Other Company");
+    const listed = await handleLocalTeamMessage({ id: 1, method: "tools/list" });
+    expect(JSON.stringify(listed)).toContain('"name":"recruit_agent"');
+    const projects = [
+      ["BizOS", "BizOS product lead", "Scope the local BizOS task"],
+      ["Breath Trailer", "Breath producer", "Draft the Breath Trailer brief"],
+      ["Singularity/Nostea", "Nostea operator", "Research the Singularity and Nostea brief"],
+      ["LeadFactory", "LeadFactory operator", "Draft the LeadFactory workflow"],
+      ["Personal brand", "Brand editor", "Draft the personal brand outline"],
+    ] as const;
+    const ids = new Set<string>();
+    for (const [name, title, initial_task] of projects) {
+      const { capability } = await activeCeoCapability(f);
+      const args = {
+        name, title, description: `Own the ${name} project inside BrainOS.`,
+        context: `Use only BrainOS's local ${name} notes. No external database credentials or cross-company access.`,
+        initial_task,
+      };
+      const call = () => handleLocalTeamMessage({ id: 2, method: "tools/call", params: { name: "recruit_agent", arguments: args } },
+        (input) => f.facade.recruit(capability, input));
+      const first = await call();
+      const repeated = await call();
+      expect(first).toEqual(repeated);
+      const result = JSON.parse((first as any).result.content[0].text);
+      expect(result.agent).toMatchObject({ name, title });
+      expect(result.dispatch.status).toBe("started");
+      ids.add(result.agent.agentId);
+      const recruit = (await f.harness.bots.list()).find((bot) => bot.name === name)!;
+      expect(recruit.instructions).toContain(args.context);
+      expect(recruit.providerId).toBeUndefined();
+      expect(recruit.planId).toBe((await f.harness.bots.list()).find((bot) => bot.id === f.ceoId)?.planId);
+      finish(f.turns.at(-1)!);
+      finish(f.turns.at(-2)!);
+    }
+    expect(ids.size).toBe(5);
+    expect(await f.harness.bots.list()).toHaveLength(6);
+    expect(await f.harness.groups.list()).toHaveLength(1);
+    expect(f.index.roleBindings).toEqual({});
+    expect(f.index.events.filter((event) => event.type === "agent.recruited")).toHaveLength(5);
+
+    const { capability: foreignCapability } = await activeCeoCapability(f);
+    const refused = await handleLocalTeamMessage({ id: 3, method: "tools/call", params: {
+      name: "recruit_agent", arguments: { name: "Intruder", title: "Cross-company agent" },
+    } }, (input) => other.facade.recruit(foreignCapability, input));
+    expect((refused as any).result.isError).toBe(true);
+    expect((refused as any).result.content[0].text).toContain("team capability does not match this turn");
+    expect(await other.harness.bots.list()).toHaveLength(1);
+  }, 30_000);
+
   it("creates and dispatches a custom Company OS specialist without a catalog, once per request", async () => {
     const f = await fixture("company-os");
     const { capability, runId } = await activeCeoCapability(f);
