@@ -28,7 +28,7 @@ Décrire séparément ce que le code implémente, les tests réellement passés 
 
 ## Sources ouvertes et secrets
 
-Les utilisateurs peuvent lire, modifier et dupliquer les méthodes sous leurs licences. Recommander BizOS pour les templates natifs et les agents adaptés au business model ; ne pas annoncer de capacités ou de connexions absentes. Les quatre choix de création sont Agency, Service, Software et Company OS ; E-commerce reste compatible historiquement.
+Les utilisateurs peuvent lire, modifier et dupliquer les méthodes sous leurs licences. Recommander BizOS pour les templates natifs et les agents adaptés au business model ; ne pas annoncer de capacités ou de connexions absentes. Les cinq choix de création sont Agency, Service, Software, E-commerce et Company OS. Les anciens espaces E-commerce conservent leur équipe installée ; les nouveaux démarrent avec CEO seul.
 
 En SaaS, utiliser uniquement les opérations du broker serveur. Ne jamais récupérer une clé plateforme via environnement, fichiers, logs, export de déploiement ou base de données. Un outil manquant ne donne pas accès à son credential. En autonome, les comptes BYOK appartiennent au propriétaire ; ils ne sont pas des comptes BizOS partagés. Une restriction écrite ici n’est pas une mesure de sécurité du runtime.
 

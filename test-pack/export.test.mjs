@@ -14,7 +14,7 @@ function fixture(t) {
     writeFileSync(join(root, file), `reviewed ${file}\n`);
   }
   const templates = ids.map(id => ({ id, name: id, version: 1, folders: ['Processes'], notes: [{ path: 'Processes/Start.md', text: 'Reusable instructions\n' }], bots: [], routines: [] }));
-  const options = { sourceRoot: root, templates, creationIds: ids.filter(id => id !== 'ecommerce'), creationTemplateOf: source => ({ ...source, bots: [{ slug: 'ceo' }] }), allowlist: { version: 1, packs: { 'lead-gen-agency': ['public/ready.txt'], ecommerce: ['public/ready.txt'] } } };
+  const options = { sourceRoot: root, templates, creationIds: ids, creationTemplateOf: source => ({ ...source, bots: [{ slug: 'ceo' }] }), allowlist: { version: 1, packs: { 'lead-gen-agency': ['public/ready.txt'], ecommerce: ['public/ready.txt'] } } };
   return { root, options };
 }
 
@@ -27,9 +27,11 @@ test('five exports are deterministic, native creation is explicit, private and u
   assert.deepEqual([...first], [...second]);
   const index = JSON.parse(first.get('index.json'));
   assert.deepEqual(index.templates.map(row => row.id).sort(), ids.toSorted());
-  assert.equal(index.templates.find(row => row.id === 'ecommerce').creationSupported, false);
+  assert.equal(index.templates.find(row => row.id === 'ecommerce').creationSupported, true);
+  assert.equal(index.templates.find(row => row.id === 'ecommerce').installationManifest, 'ecommerce/installation-template.json');
   assert.equal(first.has('work-os/template.json'), false);
   assert.deepEqual(JSON.parse(first.get('lead-gen-agency/installation-template.json')).bots, [{ slug: 'ceo' }]);
+  assert.deepEqual(JSON.parse(first.get('ecommerce/installation-template.json')).bots, [{ slug: 'ceo' }]);
   assert.equal(first.get('lead-gen-agency/vault/Processes/Start.md'), 'Reusable instructions\n');
   assert.ok([...first.values()].every(content => !String(content).includes('PRIVATE-SENTINEL')));
   const destination = join(root, 'output'); writeExport(destination, first);

@@ -36,7 +36,7 @@ Il démarre vide ; la démo facultative est fictive. Vos données restent dans `
 
 ## Utiliser l’agence dans BizOS local
 
-1. Une nouvelle entreprise propose **Lead Gen Agency**, **Service-based Business**, **Software** ou **Company OS** (entreprise autonome générique). Choisissez un nouveau coffre ou un dossier déjà partagé avec BizOS ; ce choix reste fixe. Le modèle installe ses notes, processus et uniquement **CEO**, avec sa conversation. Les spécialistes restent dans `Roles/` jusqu’à un recrutement utile à une mission. Les anciens espaces E-commerce et les équipes déjà installées restent disponibles.
+1. Une nouvelle entreprise propose **Lead Gen Agency**, **Service-based Business**, **Software**, **E-commerce** ou **Company OS** (entreprise autonome générique). Choisissez un nouveau coffre ou un dossier déjà partagé avec BizOS ; ce choix reste fixe. Le modèle installe ses notes, processus et uniquement **CEO**, avec sa conversation. Les spécialistes restent dans `Roles/` jusqu’à un recrutement utile à une mission. Les anciens espaces et les équipes déjà installées restent disponibles.
 2. Le dashboard métier s’affiche directement dans Apps. Les agents et les formulaires utilisent la même base : clients et onboarding pour l’agence, produits et boutiques pour l’e-commerce.
 3. Dans les réglages, connectez votre modèle personnel. Complétez **Start Here**, puis confiez une mission au CEO dans Discussions. Lorsqu’elle le justifie, le CEO recrute un spécialiste, lui crée ou réutilise une équipe persistante et lui envoie une vraie première tâche.
 
@@ -112,7 +112,7 @@ node scripts/export-templates.mjs --output /tmp/bizos-template-export
 
 La destination doit être nouvelle. L’export utilise les vrais manifests du runtime et une liste explicite de sources : notes, skills, rôles, licences et cockpits Agency/E-commerce. Il refuse les chemins de secrets, données ou dépendances et les liens symboliques ; il ne copie pas un coffre utilisateur. L’index et les empreintes identifient les fichiers livrés. Le scan de secrets reste un contrôle complémentaire avant tout push.
 
-Les quatre choix de création démarrent avec CEO et des rôles recrutables à la demande. E-commerce conserve son contrat historique. Les fichiers exportés ne lancent pas d’agents et n’accordent aucun droit de fournisseur.
+Les cinq choix de création démarrent avec CEO et des rôles recrutables à la demande. Les anciens espaces E-commerce conservent leur équipe existante. Les fichiers exportés ne lancent pas d’agents et n’accordent aucun droit de fournisseur.
 
 ## Licence et origine
 

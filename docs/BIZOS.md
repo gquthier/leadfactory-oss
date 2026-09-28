@@ -1,8 +1,8 @@
 # Templates d’entreprise dans BizOS local
 
-État au **26 septembre 2026** : le runtime source propose quatre choix pour une nouvelle entreprise : **Lead Gen Agency** (`lead-gen-agency`), **Service-based Business** (`service-based-business`), **Software** (`software`) et **Company OS** (`company-os`). **E-commerce** reste reconnu pour les espaces historiques.
+État au **29 septembre 2026** : le runtime source propose cinq choix pour une nouvelle entreprise : **Lead Gen Agency** (`lead-gen-agency`), **Service-based Business** (`service-based-business`), **Software** (`software`), **E-commerce** (`ecommerce`) et **Company OS** (`company-os`).
 
-La release publique v0.3.0-preview.2 décrite ci-dessous est plus ancienne : son application empaquetée expose encore Agency et E-commerce. Elle ne prouve pas le parcours empaqueté des quatre choix actuels, de QuickChat ou de la continuité. Le dépôt source courant reste privé pendant cette préversion. Le runtime possède ses tests TypeScript ; une validation de l’application empaquetée reste une preuve séparée.
+La release publique v0.3.0-preview.2 décrite ci-dessous est plus ancienne. Elle ne prouve pas le parcours empaqueté des cinq choix actuels, de QuickChat ou de la continuité. Le dépôt source courant reste privé pendant cette préversion. Le runtime possède ses tests TypeScript ; une validation de l’application empaquetée reste une preuve séparée.
 
 ## Télécharger BizOS ou compiler ses sources
 
@@ -28,11 +28,11 @@ Pendant une tâche, **Stop remplace le bouton emoji** dans la zone de message. I
 
 ## Choisir son template et son coffre
 
-Pour une nouvelle entreprise, les sources actuelles proposent **Lead Gen Agency**, **Service-based Business**, **Software** et **Company OS**. Dans **Apps**, choisissez le modèle puis un nouveau coffre ou un dossier déjà partagé. La liaison est enregistrée avant le premier effet de l’installation et reste fixe pour cet espace ; un autre modèle ou coffre est refusé, y compris via l’API. Après une interruption entre la liaison et le journal d’installation, le redémarrage reprend le même modèle dans le même coffre. Un coffre déplacé, illisible ou remplacé par un lien symbolique ne provoque ni repli vers un autre dossier ni autorisation plus large.
+Pour une nouvelle entreprise, les sources actuelles proposent **Lead Gen Agency**, **Service-based Business**, **Software**, **E-commerce** et **Company OS**. Dans **Apps**, choisissez le modèle puis un nouveau coffre ou un dossier déjà partagé. La liaison est enregistrée avant le premier effet de l’installation et reste fixe pour cet espace ; un autre modèle ou coffre est refusé, y compris via l’API. Après une interruption entre la liaison et le journal d’installation, le redémarrage reprend le même modèle dans le même coffre. Un coffre déplacé, illisible ou remplacé par un lien symbolique ne provoque ni repli vers un autre dossier ni autorisation plus large.
 
 Chaque nouveau clone installe **un seul CEO et son DM**, sans autre agent ni groupe. Lead Gen Agency fournit 26 skills ; Service-based Business, Software et Company OS installent leurs notes et rôles adaptés. Les rôles spécialistes sont conservés sous `Roles/<slug>/role.json` et `system.md` ; `source.md` archive les prompts originaux. Le CEO choisit un rôle quand une mission l’exige. Aucun compte, connecteur ou planning ne devient actif par clonage. Les anciennes installations et les journaux d’installation antérieurs conservent leur équipe complète. Les fichiers sont visibles dans **Second cerveau → Dossier**, notamment `Agents/`, `Processes/`, `Clients/`, `Projects/`, `Deliverables/`, `knowledge/`, `scripts/` ou les dossiers propres au modèle. Une reprise ajoute les fichiers manquants et conserve les éditions de l’utilisateur.
 
-Les anciens espaces Company OS et E-commerce conservent leur identifiant, leur coffre, leurs agents et leurs données. E-commerce n’est pas proposé comme nouveau choix de création.
+Les anciens espaces Company OS et E-commerce conservent leur identifiant, leur coffre, leurs agents et leurs données. Une nouvelle installation E-commerce démarre avec CEO seul et conserve les spécialistes comme rôles recrutables.
 
 ## Dashboard intégré et agents
 
@@ -52,7 +52,7 @@ enregistrées, exécutions du jour, en cours et en file, dernier échec), le pla
 ou fournisseur actif et son usage, le mode de permissions et les étapes de mise
 en route.
 
-Lead Gen Agency conserve son cockpit métier intégré ; les anciens espaces E-commerce conservent le leur. Service-based Business et Software fonctionnent avec CEO, les spécialistes recrutés au besoin et **Second cerveau → Dossier** ; ce lot ne leur invente pas de CRM ou de dashboard métier. Leur note **Start here** recueille les faits de l’activité. Configurez votre modèle personnel dans les réglages BizOS puis donnez une mission à CEO dans Discussions.
+Lead Gen Agency et E-commerce utilisent leur cockpit métier intégré. Service-based Business et Software fonctionnent avec CEO, les spécialistes recrutés au besoin et **Second cerveau → Dossier** ; ce lot ne leur invente pas de CRM ou de dashboard métier. Leur note **Start here** recueille les faits de l’activité. Configurez votre modèle personnel dans les réglages BizOS puis donnez une mission à CEO dans Discussions.
 
 Dans un coffre lié, chaque agent démarre dans `Agents/<Nom>` et reçoit le chemin vérifié du coffre commun comme racine de travail partagée. Un agent recruté rejoint ce même coffre même si un ancien dossier de travail global est configuré. Cette autorisation concerne uniquement le coffre explicitement lié à cet OS local ; aucun autre coffre historique ni la racine d’état du runtime n’est ajouté.
 
