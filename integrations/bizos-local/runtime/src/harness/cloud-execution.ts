@@ -17,7 +17,7 @@ interface State {
 }
 const FILE = 'cloud-execution.json';
 const active = (run: CloudRun) => run.state === 'queued' || run.state === 'running';
-/** Only linked durable DMs use this route. No local files or credentials are
+/** Only linked conversations use this route. No local files or credentials are
  * copied, and no unsuccessful cloud request falls back to a personal driver. */
 export class CloudExecution {
   private state: State;
@@ -27,8 +27,8 @@ export class CloudExecution {
   private save() { this.storage.writeJson(FILE, this.state); }
   private binding(threadId: string): Binding {
     const link = this.continuity.store.status(threadId);
-    if (!/^bot:(?!qchat_)[^:]+$/.test(threadId) || !link)
-      throw new Error('BizOS execution requires a linked, durable agent conversation. QuickChat stays ephemeral.');
+    if (!/^(?:bot:[^:]+|group:[^:]+|chat:qchat_[a-f0-9]{32})$/.test(threadId) || !link)
+      throw new Error('BizOS execution requires a saved conversation.');
     return { accountId: link.accountId, orgId: link.orgId, conversationId: link.conversationId, installationId: link.installationId };
   }
   private assertBinding(threadId: string, expected: Binding) {
@@ -40,21 +40,31 @@ export class CloudExecution {
   }
   async status(threadId: string) {
     const destination = this.destination(threadId);
+    if (!this.continuity.backupEnabled()) return { destination: 'personal' as const, available: false, reason: 'Conversation backup is disabled in Settings.' };
     try {
       this.binding(threadId);
       const saved = this.state.selections[threadId];
       if (saved) this.assertBinding(threadId, saved.binding);
-      const result = await this.continuity.cloud(threadId, 'cloud/status', {}) as { available: boolean; active: boolean; model: string };
+      const result = await this.continuity.cloud(threadId, 'cloud/status', {}) as { available: boolean; active: boolean; model: string; reason?: string };
+      if (!result.available && result.reason === 'policy_changed') {
+        const model = await this.continuity.defaultCloudModel(threadId).catch(() => null);
+        if (model) return { destination, available: true, active: result.active, model, setupRequired: true };
+      }
       return { destination, ...result };
     } catch (error) {
       return { destination, available: false, reason: error instanceof Error ? error.message : 'BizOS is unavailable.' };
     }
   }
   async select(threadId: string, destination: 'personal' | 'bizos') {
+    if (destination === 'bizos' && !this.continuity.backupEnabled()) throw new Error('Enable conversation backup in Settings before selecting BizOS.');
     if (destination === 'personal' && !this.state.selections[threadId]) return { destination, available: false };
     if (Object.values(this.state.requests).some(request => request.threadId === threadId && !request.result && !request.rejected))
       throw new Error('Retry the unconfirmed cloud message before changing execution.');
-    const status = await this.status(threadId);
+    let status = await this.status(threadId);
+    if (destination === 'bizos' && ((status as { setupRequired?: boolean }).setupRequired || (!status.available && status.reason === 'policy_changed'))) {
+      await this.continuity.enableCloud(threadId);
+      status = await this.status(threadId);
+    }
     if (!status.available && !(destination === 'personal' && 'active' in status)) throw new Error(status.reason ?? 'BizOS is unavailable.');
     if ('active' in status && status.active) throw new Error('Stop the active run before changing execution.');
     await this.continuity.sync(threadId);
@@ -63,6 +73,18 @@ export class CloudExecution {
     return { ...status, destination };
   }
   ownsRun(runId: string): boolean { return Object.hasOwn(this.state.runs, runId); }
+  async disableBackup(): Promise<void> {
+    if (Object.values(this.state.requests).some(request => !request.result && !request.rejected))
+      throw new Error('Retry the unconfirmed cloud message before disabling conversation backup.');
+    for (const [id, saved] of Object.entries(this.state.runs))
+      if (active(saved.run)) await this.run(id, true);
+    for (const [threadId, selected] of Object.entries(this.state.selections)) {
+      const status = await this.status(threadId);
+      if ('active' in status && status.active) throw new Error('Stop the active BizOS run before disabling conversation backup.');
+      this.state.selections[threadId] = { ...selected, destination: 'personal' };
+    }
+    this.save();
+  }
   ownsRequest(clientMessageId: string): boolean { return Object.hasOwn(this.state.requests, clientMessageId) && !this.state.requests[clientMessageId]?.rejected; }
   async send(threadId: string, clientMessageId: string, content: string): Promise<CloudSend> {
     if (!content.trim() || content.trim().length > 10_000) throw new Error('A cloud message must contain 1 to 10000 characters.');

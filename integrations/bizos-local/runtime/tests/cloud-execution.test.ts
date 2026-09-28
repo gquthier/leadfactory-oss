@@ -15,8 +15,9 @@ function fixture() {
   const response = {eventId:'event',duplicate:false,runs:[{runId:'run',threadId:'canonical',agentId:'marketing',triggerMessageId:'1',state:'queued',error:null,createdAt:'now',updatedAt:'now'}]};
   const state = {available:true,active:false,model:'policy-model'};
   const cloud = vi.fn(async (_thread:string,operation:string) => operation==='cloud/status' ? state : response);
-  const continuity = {store:{status:()=>link},sync:vi.fn(async()=>{}),cloud} as unknown as ConversationContinuity;
-  return {manager:new CloudExecution(storage,continuity),storage,continuity,cloud,link,response,state};
+  const enabled = {value:true};
+  const continuity = {store:{status:()=>link},sync:vi.fn(async()=>{}),cloud,backupEnabled:()=>enabled.value} as unknown as ConversationContinuity;
+  return {manager:new CloudExecution(storage,continuity),storage,continuity,cloud,link,response,state,enabled};
 }
 it('selection persists and makes no inference request',async()=>{
   const f=fixture(); await f.manager.select('bot:marketing','bizos');
@@ -28,6 +29,7 @@ it('a lost send blocks switching, retains the retry identity and never falls bac
   f.cloud.mockRejectedValueOnce(new Error('offline'));
   await expect(f.manager.send('bot:marketing','message','hello')).rejects.toThrow('offline');
   await expect(f.manager.select('bot:marketing','personal')).rejects.toThrow('unconfirmed');
+  await expect(f.manager.disableBackup()).rejects.toThrow('unconfirmed');
   await expect(f.manager.send('bot:marketing','message','different')).rejects.toThrow('already used');
   await f.manager.send('bot:marketing','message','hello');
   expect(f.cloud.mock.calls.filter(call=>call[1]==='cloud/send')).toHaveLength(2);
@@ -37,10 +39,17 @@ it('another account or canonical conversation cannot reuse the saved selection',
   await expect(f.manager.send('bot:marketing','message','hello')).rejects.toThrow('another account');
   expect(f.cloud.mock.calls.map(call=>call[1])).toEqual(['cloud/status']);
 });
-it('QuickChat and groups remain local even with a fabricated binding',async()=>{
+it('QuickChat and groups may use a saved conversation binding',async()=>{
   const f=fixture();
-  for(const thread of ['chat:qchat_a','bot:qchat_a','group:a']) expect((await f.manager.status(thread)).available).toBe(false);
-  expect(f.cloud).not.toHaveBeenCalled();
+  for(const thread of [`chat:qchat_${'a'.repeat(32)}`,'group:a']) expect((await f.manager.status(thread)).available).toBe(true);
+  expect(f.cloud).toHaveBeenCalledTimes(2);
+});
+it('turning backup off clears the BizOS execution choice',async()=>{
+  const f=fixture();await f.manager.select('bot:marketing','bizos');
+  await f.manager.disableBackup();f.enabled.value=false;
+  expect(f.manager.destination('bot:marketing')).toBe('personal');
+  expect((await f.manager.status('bot:marketing')).available).toBe(false);
+  await expect(f.manager.select('bot:marketing','bizos')).rejects.toThrow('Enable conversation backup');
 });
 it('personal remains selectable after cloud policy withdrawal when no work is active',async()=>{
   const f=fixture(); await f.manager.select('bot:marketing','bizos'); f.state.available=false;

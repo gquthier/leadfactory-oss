@@ -59,16 +59,31 @@ it("preserves a linked user message beyond the former 20k character cap", () => 
   expect(store.pending("bot:a")).toHaveLength(1);
   expect(store.pending("bot:a")[0]?.content).toBe(text);
 });
-it("refuses QuickChat link and attach before any bridge request", async () => {
+it("permits QuickChat continuity through the enrolled bridge", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
   const calls: string[] = [];
   const continuity = new ConversationContinuity(storage, async operation => { calls.push(operation); throw new Error("Fixture bridge called"); });
   const threadId = `chat:qchat_${"a".repeat(32)}`;
-  await expect(continuity.link(threadId, { agentId: "agent", audience: "private", title: "QuickChat" })).rejects.toThrow(/QuickChat/);
-  await expect(continuity.attach(threadId, "conversation")).rejects.toThrow(/QuickChat/);
-  expect(calls).toEqual([]);
+  await expect(continuity.link(threadId, { agentId: "agent", audience: "private", title: "QuickChat" })).rejects.toThrow(/Fixture bridge/);
+  await expect(continuity.attach(threadId, "conversation")).rejects.toThrow(/Fixture bridge/);
+  expect(calls).toEqual(["status", "status"]);
   expect(continuity.store.status(threadId)).toBeNull();
+  continuity.close();
+});
+it("persists the opt-out and refuses new cloud links or transcript capture", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const transport = vi.fn(async () => { throw new Error("unexpected cloud request"); });
+  const continuity = new ConversationContinuity(storage, transport);
+  continuity.store.link("bot:a", binding);
+  continuity.setBackupEnabled(false);
+  continuity.capture(message(1, "private after opt-out"));
+  expect(continuity.store.pending("bot:a")).toHaveLength(0);
+  await expect(continuity.link("bot:b", { agentId: "ceo", audience: "private", title: "B" })).rejects.toThrow(/disabled/);
+  await expect(continuity.attach("bot:b", "conversation-1")).rejects.toThrow(/disabled/);
+  expect(transport).not.toHaveBeenCalled();
+  expect(new ConversationContinuity(storage).backupEnabled()).toBe(false);
   continuity.close();
 });
 it("does not advance memory after disk failure or silently reset a corrupt continuity ledger", () => {
@@ -112,7 +127,10 @@ it("portable context retains old correction, revisions and file hashes, and neve
     name: "Brief.md",
     available: true,
   });
+  store.setMachineContext("bot:a", "Studio Mac", ["Travel Mac"]);
   const context = store.context("bot:a");
+  expect(context).toContain("Current Mac: Studio Mac");
+  expect(context).toContain("Other accessible Macs: Travel Mac");
   expect(context).toContain("EUR 9");
   expect(context).not.toContain("EUR 7");
   expect(context).toContain(payloadHash("new file"));

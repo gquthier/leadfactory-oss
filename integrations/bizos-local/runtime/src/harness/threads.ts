@@ -119,6 +119,7 @@ export class ThreadStore {
 
   hasUnlinkedHistory(target: ThreadTarget): boolean {
     const threadId = threadIdForTarget(target);
+    if (this.continuity?.store.hasImportedHistory(threadId)) return false;
     const canonical = new Set((this.continuity?.projection(threadId) ?? []).map(row => row.id));
     this.hooks?.assertAccessible(threadId);
     return this.storage.readNdjson<unknown>(this.storage.threadPath(threadId)).filter(isMessage)

@@ -149,6 +149,14 @@ See [the runtime changelog](../CHANGELOG.md) and the desktop
 
 ## Workspace QuickChat retention (2026-09-26)
 
+In Simple .46, an authenticated installation backs up QuickChat to the
+account's BizOS continuity journal by default, alongside agent DMs and groups.
+The 24-hour cleanup below removes the local QuickChat and its local link; it
+does not delete the saved cloud conversation. Settings can disable future
+backup. A linked agent receives a bounded resume digest plus the last 12
+messages, and can use `read_conversation_archive` for exact older events and
+`list_accessible_computers` for the current account's machine inventory.
+
 QuickChat is a workspace conversation, not an agent. Its display name is
 always **QuickChat**, including historical auto-titles. It shares the selected
 company workspace but never owns that workspace or its business deliverables.

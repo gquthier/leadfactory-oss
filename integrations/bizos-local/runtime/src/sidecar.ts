@@ -1,8 +1,7 @@
 import { CloudExecution } from "./harness/cloud-execution.js";
 import { localComputerEnabled } from "./computer/release.js";
-import { desktopContinuityTransport } from "./continuity-bridge.js";
+import { ContinuityBridgeError, desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
-import { isQuickChatThread } from "./harness/continuity.js";
 import { cliCredentialPaths, runtimeProtectedPaths } from "./harness/secret-shield.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
@@ -395,6 +394,11 @@ function requestError(response: ServerResponse, error: unknown): void {
     sendJson(response, 402, { error: "pro_required", feature: error.feature, message: error.message });
     return;
   }
+  if (error instanceof ContinuityBridgeError) {
+    const message = error.code === "budget_exhausted" ? "Your BizOS credit is insufficient for this run." : error.message;
+    sendJson(response, error.status, { error: { code: error.code, message: message.slice(0, 500) } });
+    return;
+  }
   const failure = error instanceof HttpError
     ? error
     : new HttpError(500, "local_runtime_error", error instanceof Error ? error.message : String(error));
@@ -737,6 +741,7 @@ export class CollaborationFacade {
     return this.cloudController ??= new CloudExecution(this.harness.storage, this.harness.continuity);
   }
   private mutationTail: Promise<unknown> = Promise.resolve();
+  private readonly importedRemote: Set<string>;
   private quickChatIndexDirty = false;
   readonly userId: string;
   readonly workspaceId: string;
@@ -750,6 +755,7 @@ export class CollaborationFacade {
     private readonly persistIndex: (value: DurableIndex) => void = saveIndex,
   ) {
     this.handlers = buildHandlers(harness);
+    this.importedRemote = new Set(harness.storage.readJsonStrict<string[]>("continuity-imported-remote.json", []));
     this.userId = `local:${instanceId}:user`;
     this.workspaceId = `local:${instanceId}:workspace`;
     // Routine events are recorded whether or not a desktop is listening; the
@@ -1156,6 +1162,104 @@ export class CollaborationFacade {
     return { threads: (await this.bootstrap()).threads };
   }
 
+  private async ensureAutoLinked(target: ThreadTarget): Promise<boolean> {
+    const continuity = this.harness.continuity;
+    if (!continuity.backupEnabled()) return false;
+    const localId = threadIdForTarget(target);
+    if (continuity.store.status(localId)) return true;
+    const identity = await continuity.identity();
+    if (!identity.orgId || !identity.userId) return false;
+    const bots = await this.invoke<Bot[]>("lbz:bots:list");
+    const groups = await this.invoke<Group[]>("lbz:groups:list");
+    const title = "botId" in target ? bots.find(bot => bot.id === target.botId)?.name
+      : "groupId" in target ? groups.find(group => group.id === target.groupId)?.name
+      : (await this.harness.quickChats.get(target.chatId)).chat.title;
+    if (!title) return false;
+    const roster = await continuity.agents() as { agents: Array<{ agentId: string; name: string }> };
+    const agentId = roster.agents.find(agent => agent.name.toLocaleLowerCase() === title.toLocaleLowerCase())?.agentId ?? "ceo";
+    const history = this.harness.threads.transcript(target);
+    const listing = await continuity.list() as { conversations: Array<{ conversationId: string; agentId: string; title: string }> };
+    const attached = new Set(continuity.store.links().map(link => link.link.conversationId));
+    const candidates = listing.conversations.filter(row => row.agentId === agentId && row.title === title && !attached.has(row.conversationId));
+    if (candidates.length === 1) await continuity.attach(localId, candidates[0]!.conversationId);
+    else await continuity.link(localId, { agentId, audience: "private", title: title.slice(0, 80) });
+    continuity.importRecentHistory(localId, history);
+    await continuity.sync(localId);
+    return true;
+  }
+
+  async autoLinkAll(): Promise<{ linked: number; failed: number }> {
+    return this.exclusive(async () => {
+      if (!this.harness.continuity.backupEnabled()) return { linked: 0, failed: 0 };
+      let linked = 0, failed = 0;
+      // A new Mac has no local threads yet. Materialize the account's saved
+      // conversations in the normal list before linking work created here.
+      try {
+        const continuity = this.harness.continuity;
+        const listing = await continuity.list() as { conversations: Array<{
+          conversationId: string; agentId: string; audience: string; title: string; localConversationId: string | null;
+        }> };
+        const seen = new Set<string>();
+        const bots = await this.invoke<Bot[]>("lbz:bots:list");
+        for (const row of listing.conversations) {
+          const remoteThreadId = row.localConversationId ?? "";
+          if (seen.has(row.conversationId) || row.audience !== "private"
+            || !/^(?:bot:[^:]+|group:[^:]+|chat:qchat_[a-f0-9]{32})$/.test(remoteThreadId)) continue;
+          seen.add(row.conversationId);
+          if (this.importedRemote.has(row.conversationId)) continue;
+          if (continuity.store.links().some(link => link.link.conversationId === row.conversationId)) continue;
+          try {
+            let threadId: string;
+            if (remoteThreadId.startsWith("bot:")) {
+              let bot = bots.find(candidate => !candidate.archived && candidate.name === row.title
+                && !continuity.store.status(`bot:${candidate.id}`));
+              if (!bot) {
+                bot = await this.invoke<Bot>("lbz:bots:create", [{ name: row.title }]);
+                bots.push(bot);
+              }
+              threadId = `bot:${bot.id}`;
+            } else if (remoteThreadId.startsWith("group:")) {
+              const groups = await this.invoke<Group[]>("lbz:groups:list");
+              let group = groups.find(candidate => !candidate.archived && candidate.name === row.title
+                && !continuity.store.status(`group:${candidate.id}`));
+              group ??= await this.invoke<Group>("lbz:groups:create", [{ name: row.title, memberIds: [] }]);
+              threadId = `group:${group.id}`;
+            } else {
+              const chat = await this.invoke<{ id: string }>("lbz:quickChats:create", [{ requestId: `cloud:${row.conversationId}` }]);
+              threadId = `chat:${chat.id}`;
+            }
+            await continuity.attach(threadId, row.conversationId);
+            await continuity.sync(threadId);
+            this.importedRemote.add(row.conversationId);
+            this.harness.storage.writeJson("continuity-imported-remote.json", [...this.importedRemote]);
+            linked++;
+          } catch { failed++; }
+        }
+      } catch { /* An offline account must not block local conversations. */ }
+      const [bots, groups, chats] = await Promise.all([
+        this.invoke<Bot[]>("lbz:bots:list"), this.invoke<Group[]>("lbz:groups:list"), this.harness.quickChats.list(),
+      ]);
+      const targets: ThreadTarget[] = [
+        ...bots.filter(bot => !bot.archived && !bot.id.startsWith("qchat_")).map(bot => ({ botId: bot.id })),
+        ...groups.filter(group => !group.archived).map(group => ({ groupId: group.id })),
+        ...chats.chats.map(chat => ({ chatId: chat.id })),
+      ];
+      for (const target of targets) {
+        try { if (await this.ensureAutoLinked(target)) linked++; }
+        catch { failed++; }
+      }
+      return { linked, failed };
+    });
+  }
+
+  async setConversationBackup(enabled: boolean): Promise<void> {
+    await this.exclusive(async () => {
+      if (!enabled) await this.cloud.disableBackup();
+      this.harness.continuity.setBackupEnabled(enabled);
+      if (enabled) void this.autoLinkAll().catch(() => {});
+    });
+  }
+
   async createGroup(raw: unknown): Promise<{ status: number; body: unknown }> {
     return this.exclusive(async () => {
       const input = objectBody(raw, ["clientRequestId", "name", "humanUserIds", "agentIds"]);
@@ -1268,6 +1372,7 @@ export class CollaborationFacade {
   async postMessage(threadId: string, raw: unknown): Promise<{ status: number; body: unknown }> {
     return this.exclusive(async () => {
       const target = this.target(threadId);
+      await this.ensureAutoLinked(target).catch(() => false);
       if ("chatId" in target) await this.harness.quickChats.get(target.chatId);
       const input = objectBody(raw, ["clientMessageId", "content", "mentionAgentIds"]);
       const clientMessageId = uuid(input.clientMessageId, "clientMessageId");
@@ -1282,7 +1387,7 @@ export class CollaborationFacade {
       }
       const localThreadId = threadIdForTarget(target);
       if (this.cloud.ownsRequest(clientMessageId) || (this.cloud.destination(localThreadId) === "bizos" && !this.index.messages[clientMessageId])) {
-        if (!("botId" in target) || mentionAgentIds.length) throw new HttpError(422, "invalid_agent_target", "Cloud execution uses the linked conversation agent.");
+        if (mentionAgentIds.length) throw new HttpError(422, "invalid_agent_target", "Cloud execution uses the linked conversation agent.");
         const sent = await this.cloud.send(localThreadId, clientMessageId, content);
         this.index.messages[clientMessageId] = {
           state: "completed", fingerprint: JSON.stringify({ threadId, content, mentionAgentIds: [] }),
@@ -1572,14 +1677,16 @@ export class CollaborationFacade {
   private async cloudRun(id: string, stop = false) {
     const saved = await this.cloud.run(id, stop);
     const target = targetForThreadId(saved.threadId);
-    if (!target || !("botId" in target)) throw new Error("Cloud thread unavailable.");
+    if (!target) throw new Error("Cloud thread unavailable.");
     return { ...saved.run, runId: this.runId(id), threadId: this.publicThreadId(target),
-      agentId: this.agentId(target.botId), triggerMessageId: this.messageId(saved.eventId) };
+      agentId: "botId" in target ? this.agentId(target.botId) : null, triggerMessageId: this.messageId(saved.eventId) };
   }
 
   async executionDestination(threadId: string, destination?: 'personal' | 'bizos') {
     return this.exclusive(async () => {
       const target = this.target(threadId), localId = threadIdForTarget(target);
+      try { await this.ensureAutoLinked(target); }
+      catch (error) { if (destination === 'bizos') throw error; }
       const runs = await this.invoke<Run[]>("lbz:runs:list", [{ limit: 200 }]);
       const running = runs.some(run => run.threadId === localId && ['queued', 'working', 'waiting_input'].includes(run.state));
       if (destination && running) throw new HttpError(409, "run_active", "Stop the active run before changing execution.");
@@ -2923,6 +3030,17 @@ async function serve(): Promise<void> {
         return sendJson(response, operation === "recruit" || operation === "routine" ? 201 : 200, result);
       }
       if (!secureEqual(authorization, `Bearer ${token}`)) throw new HttpError(401, "unauthorized", "Local bearer token required.");
+      if (url.pathname === "/api/local/continuity/preference") {
+        if (method === "GET") return sendJson(response, 200, { saveConversations: harness.continuity.backupEnabled() });
+        if (method === "POST") {
+          const input = objectBody(await bodyOf(request), ["saveConversations"]);
+          if (typeof input.saveConversations !== "boolean") throw new HttpError(400, "invalid_body", "Choose whether to save conversations.");
+          await facade.setConversationBackup(input.saveConversations);
+          return sendJson(response, 200, { saveConversations: input.saveConversations });
+        }
+      }
+      if (url.pathname === "/api/local/continuity/auto-link" && method === "POST")
+        return sendJson(response, 200, await facade.autoLinkAll());
       if (url.pathname === "/api/local/execution-destination") {
         if (method === "GET") {
           const threadId = url.searchParams.get("threadId");
@@ -2951,7 +3069,6 @@ async function serve(): Promise<void> {
         const input = objectBody(await bodyOf(request), ["threadId", "agentId", "audience", "cloudThreadId", "title", "conversationId", "artifactId", "version", "previousHash", "name", "mimeType", "contentBase64", "transferId", "destination", "summary", "runId", "epoch", "checkpointId", "expectedHead", "manifestHash", "modelRuntime"]);
         if (typeof input.threadId !== "string" || input.threadId.length > 128 || !/^(bot|group|chat):/.test(input.threadId)) throw new HttpError(400,"invalid_body","A local conversation is required.");
         const threadId = input.threadId;
-        if (isQuickChatThread(threadId)) throw new HttpError(400,"invalid_body","QuickChat is local and ephemeral; it cannot use conversation continuity.");
         if (url.pathname.endsWith("/link")) {
           if (typeof input.agentId !== "string" || !["private","thread"].includes(String(input.audience)) || typeof input.title !== "string") throw new HttpError(400,"invalid_body","Choose an authorized cloud agent and conversation audience.");
           return sendJson(response, 200, await harness.continuity.link(threadId,{agentId:input.agentId,audience:input.audience as "private"|"thread",title:input.title,...(typeof input.cloudThreadId === "string" ? {threadId:input.cloudThreadId}: {})}));
@@ -3552,6 +3669,9 @@ async function serve(): Promise<void> {
   });
   const nativeToolPoll = setInterval(() => { void refreshNativeToolScope(); }, 10_000);
   nativeToolPoll.unref();
+  const autoLinkTimer = setInterval(() => { void localFacade.autoLinkAll().catch(() => {}); }, 30_000);
+  autoLinkTimer.unref();
+  void localFacade.autoLinkAll().catch(() => {});
   // One workspace identity: the phone sees exactly the workspace id the
   // desktop bootstrap reports. Without LOCALBIZOS_RELAY_URL the connector
   // stays disconnected — there is no default relay, cloud or otherwise.
@@ -3587,6 +3707,7 @@ async function serve(): Promise<void> {
   const stop = async (): Promise<void> => {
     if (stopping) return;
     stopping = true;
+    clearInterval(autoLinkTimer);
     const current = readDescriptor();
     if (current?.pid === process.pid && current.instanceId === id) {
       try { unlinkSync(descriptorPath); } catch {}
