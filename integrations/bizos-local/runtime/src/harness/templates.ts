@@ -68,9 +68,9 @@ import type { Bot } from "./types.js";
 import { contextNotes, parseCreationContext, type ContextReference, type CreationContext } from "./onboarding.js";
 import { DEFAULT_KIT_ROOT, kitPresent, loadKit } from "./pack-kit.js";
 
-/** Every id this runtime must continue to understand on disk. E-commerce is a
- * legacy creation choice; Company OS also backs new context imports. Existing
- * bindings/installations still open unchanged. New companies use the ids in
+/** Every id this runtime must continue to understand on disk. Company OS also
+ * backs new context imports. Existing bindings/installations open unchanged.
+ * New companies use the ids in
  * `CREATION_TEMPLATE_IDS`. `TEMPLATE_IDS` remains the known-id alias for old
  * imports that use it as a registry/workspace whitelist. */
 export const KNOWN_TEMPLATE_IDS = ["company-os", "lead-gen-agency", "ecommerce", "service-based-business", "software"] as const;
@@ -78,7 +78,7 @@ export const TEMPLATE_IDS = KNOWN_TEMPLATE_IDS;
 export type TemplateId = (typeof KNOWN_TEMPLATE_IDS)[number];
 
 /** The exact, ordered choices for creating a new company. */
-export const CREATION_TEMPLATE_IDS = ["lead-gen-agency", "service-based-business", "software", "company-os"] as const;
+export const CREATION_TEMPLATE_IDS = ["lead-gen-agency", "service-based-business", "software", "ecommerce", "company-os"] as const;
 export type CreationTemplateId = (typeof CREATION_TEMPLATE_IDS)[number];
 
 /** Marks the new-company layout introduced for on-demand teams. Journals
@@ -121,6 +121,7 @@ export const CREATION_TEMPLATE_LABELS: Readonly<Record<CreationTemplateId, Reado
   "lead-gen-agency": { fr: "Agence de prospection", en: "Lead generation agency" },
   "service-based-business": { fr: "Entreprise de services", en: "Service business" },
   software: { fr: "Logiciel", en: "Software" },
+  ecommerce: { fr: "E-commerce", en: "E-commerce" },
   "company-os": { fr: "Entreprise autonome", en: "Autonomous Company" },
 };
 
@@ -241,6 +242,12 @@ export function creationTemplateOf(source: CompanyTemplate, options: CreationOpt
   const notes = source.notes
     .filter((note) => !note.path.startsWith("Agents/") && note.path !== "Team.md")
     .map((note) => ({ ...note, text: note.path === "Company.md" ? withOwner(adapt(note.text), options) : adapt(note.text) }));
+  // The E-commerce source names its owner brief Business.md. The shared CEO
+  // onboarding contract reads Company.md, so add a small index without
+  // replacing or rewriting the original business brief.
+  if (source.id === "ecommerce" && !notes.some((note) => note.path === "Company.md")) {
+    notes.push({ path: "Company.md", text: withOwner("# Company\n\n- Company name: TODO\n- Owner and preferred address: TODO\n- Working language and time zone: TODO\n- Product and audience: TODO\n\nRead Business.md for the detailed product, market, budget and authorization brief. Unknown facts stay TODO.\n", options) });
+  }
   if (options.context) notes.push(...contextNotes(options.context));
   const rootAgent = notes.find((note) => note.path === "AGENTS.md");
   if (rootAgent) rootAgent.text = `${bootstrap}\n\n${delegation}\n\n${rootAgent.text}`;

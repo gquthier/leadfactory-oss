@@ -1,6 +1,6 @@
 # Contrat des templates métier locaux
 
-Contrat relu le **26 septembre 2026**. Le runtime connaît cinq identifiants : Agency (`lead-gen-agency`), Service (`service-based-business`), Software (`software`), Company OS (`company-os`) et E-commerce (`ecommerce`). Les quatre premiers sont des choix de création courants ; E-commerce conserve la compatibilité des espaces existants. « Work OS » ne crée aucun identifiant supplémentaire.
+Contrat actualisé le **29 septembre 2026**. Le runtime connaît cinq identifiants : Agency (`lead-gen-agency`), Service (`service-based-business`), Software (`software`), Company OS (`company-os`) et E-commerce (`ecommerce`). Tous sont des choix de création courants ; E-commerce conserve aussi la compatibilité des espaces existants. « Work OS » ne crée aucun identifiant supplémentaire.
 
 Les nouvelles créations installent uniquement CEO et sa conversation ; les spécialistes restent dans `Roles/` et sont recrutés à la demande. Les anciens espaces conservent leur équipe. Les cockpits dédiés ci-dessous concernent Agency et E-commerce ; ne pas annoncer ces écrans dans les autres packs.
 

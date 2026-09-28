@@ -122,13 +122,14 @@ describe.skipIf(!built)("the e-commerce routes of a running sidecar", () => {
       skillsCount: before.body.skillsCount,
     });
     expect(installed.body.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    expect(installed.body.bots).toHaveLength(6);
+    expect(installed.body.bots).toHaveLength(1);
+    expect(installed.body.bots[0].name).toBe("CEO");
     const prefix = `local:${descriptor.instanceId}:`;
     for (const bot of installed.body.bots as Array<{ id: string; name: string; slug: string; threadId: string }>) {
       expect(bot.id.startsWith(`${prefix}agent:`)).toBe(true);
       expect(bot.threadId).toBe(`${prefix}thread:bot:${bot.id.slice(`${prefix}agent:`.length)}`);
     }
-    expect(installed.body.teamThreadId.startsWith(`${prefix}thread:group:`)).toBe(true);
+    expect(installed.body.teamThreadId).toBeNull();
     expect(JSON.stringify({ ...installed.body, vaultPath: null })).not.toContain(temp);
     // The pack's own vault, with the skills its agents read from there.
     expect(existsSync(join(vault, "AGENTS.md"))).toBe(true);

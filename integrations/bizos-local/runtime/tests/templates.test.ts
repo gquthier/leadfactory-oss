@@ -104,7 +104,7 @@ function registryOf(): TemplateRegistry {
 describe("the Lead Gen Agency pack", () => {
   it("is in the catalogue as shipped: six agents within the roster's limits, one welcome, no routine, no team", () => {
     expect(TEMPLATE_IDS).toEqual(["company-os", "lead-gen-agency", "ecommerce", "service-based-business", "software"]);
-    expect(CREATION_TEMPLATE_IDS).toEqual(["lead-gen-agency", "service-based-business", "software", "company-os"]);
+    expect(CREATION_TEMPLATE_IDS).toEqual(["lead-gen-agency", "service-based-business", "software", "ecommerce", "company-os"]);
     expect(Object.keys(TEMPLATE_CATALOG)).toEqual(TEMPLATE_IDS);
     expect(TEMPLATE_CATALOG["lead-gen-agency"]).toBe(LEAD_GEN_AGENCY);
     expect(TEMPLATE_CATALOG["service-based-business"]).toBe(SERVICE_BASED_BUSINESS);
@@ -184,7 +184,7 @@ function legacyPendingAgency(): void {
 }
 
 describe("harness.templates.list", () => {
-  it("lists exactly the four ordered creation choices on a fresh state", async () => {
+  it("lists exactly the five ordered creation choices on a fresh state", async () => {
     const harness = harnessFor();
     const { templates } = await harness.templates.list();
     expect(templates.map((row) => row.id)).toEqual(CREATION_TEMPLATE_IDS);
@@ -233,14 +233,20 @@ describe("harness.templates.list", () => {
     expect((await harness.templates.list()).templates.find((row) => row.id === "company-os")?.installed).toBeUndefined();
   });
 
-  it("keeps a legacy ecommerce binding and installation visible without offering it as a new-company choice", async () => {
+  it("offers ecommerce while preserving an older full-roster installation", async () => {
+    const source = templateOf("ecommerce");
+    new Storage(stateOf()).writeJson(TEMPLATES_FILE, {
+      version: 1, installations: {},
+      pending: { ecommerce: { id: "ecommerce", version: source.version, startedAt: "2026-09-21T00:00:00Z", bots: {}, welcomes: {} } },
+    });
     const installed = await harnessFor().templates.apply("ecommerce");
+    expect(Object.keys(installed.bots)).toHaveLength(source.bots.length);
     const reopened = harnessFor();
     const projection = await reopened.workspaceTemplate.get();
     expect(projection.binding).toMatchObject({ templateId: "ecommerce", rootId: "vault:ecommerce" });
     expect(projection.templates.map((row) => row.id)).toEqual(CREATION_TEMPLATE_IDS);
     const listed = await reopened.templates.list();
-    expect(listed.templates.map((row) => row.id)).toEqual([...CREATION_TEMPLATE_IDS, "ecommerce"]);
+    expect(listed.templates.map((row) => row.id)).toEqual(CREATION_TEMPLATE_IDS);
     expect(listed.templates.find((row) => row.id === "ecommerce")!.installed).toMatchObject({
       rootId: "vault:ecommerce",
       bots: Object.keys(installed.bots).length,
@@ -1006,7 +1012,7 @@ describe("the bridge and the sidecar", () => {
     const handlers = buildHandlers(harness);
     const listed = (await runHandler(handlers["lbz:brain:templates"]!, [])) as IpcEnvelope;
     expect(listed.ok).toBe(true);
-    if (listed.ok) expect((listed.value as { templates: unknown[] }).templates).toHaveLength(4);
+    if (listed.ok) expect((listed.value as { templates: unknown[] }).templates).toHaveLength(5);
     const applied = (await runHandler(handlers["lbz:brain:applyTemplate"]!, ["lead-gen-agency"])) as IpcEnvelope;
     expect(applied.ok).toBe(true);
     if (applied.ok) expect(applied.value).toMatchObject({ rootId: "vault:lead-gen-agency", created: true });

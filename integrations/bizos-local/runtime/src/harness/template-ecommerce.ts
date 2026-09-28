@@ -1,4 +1,4 @@
-// The E-commerce pack — the third row of the catalogue.
+// The E-commerce pack — usable for new CEO-only companies and historical installs.
 //
 // The pack proper is authored in the public kit (`agency-kit/ecommerce/`:
 // `template.json` in `CompanyTemplate` form, `vault/`, `skills/`, and the
