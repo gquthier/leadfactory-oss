@@ -361,7 +361,7 @@ async function computer(
   const bot = await harness.bots.create({ name: "CEO" });
   return { harness, bot, turns, threadId: `bot:${bot.id}` };
 }
-it("bypass transitions preserve linked Claude restrictions and stop the linked run on revocation", async () => {
+it("linked Claude stays manually approved while bypass changes for ordinary local turns", async () => {
   const b = await backend();
   const a = await computer("A", "claude", b.transport("install-a"), true);
   await a.harness.continuity.link(a.threadId, { agentId: "cloud-agent", audience: "private", title: "Synthetic bypass mission" });
@@ -369,8 +369,9 @@ it("bypass transitions preserve linked Claude restrictions and stop the linked r
   const { runIds } = await a.harness.threads.send({ botId: a.bot.id }, { text: "Synthetic task" });
   await until(() => a.turns.length === 1);
   expect(a.turns[0]).toMatchObject({ boundedTools: true, skipPermissions: false, sandbox: "read-only" });
-  await expect(a.harness.runtime.setPermissions({ permissions: "ask" })).resolves.toMatchObject({ permissionTransition: { effect: "revoked", stoppedRunIds: runIds } });
-  expect((await a.harness.runs.get(runIds[0]!))!.state).toBe("cancelled");
+  expect(a.turns[0]!.isAlwaysAllowed!({ requestType: "permission", tool: "shell", detail: "synthetic" })).toBe(false);
+  await expect(a.harness.runtime.setPermissions({ permissions: "ask" })).resolves.toMatchObject({ permissionTransition: { effect: "revoked", stoppedRunIds: [] } });
+  expect((await a.harness.runs.get(runIds[0]!))!.state).toBe("working");
   expect(a.turns[0]!.isAlwaysAllowed!({ requestType: "permission", tool: "shell", detail: "synthetic" })).toBe(false);
   expect(a.turns).toHaveLength(1);
 });

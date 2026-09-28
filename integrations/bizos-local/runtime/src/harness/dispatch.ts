@@ -1835,6 +1835,9 @@ export class Dispatcher {
 
     const continuity = this.deps.continuity;
     const linked = continuity?.linked(threadId) === true;
+    // A linked Claude turn is always host bounded and manually approved,
+    // even when this workspace enables bypass for ordinary local agents.
+    const effectiveSkipPermissions = skipPermissions && !(linked && provider === "claude");
     if (linked && !options.linkedReady && !continuity!.guard.get(threadId)) {
       this.preparing.set(threadId, queued);
       void continuity!.prepare(threadId, queued.runId, provider, () => {
@@ -1883,7 +1886,7 @@ export class Dispatcher {
       blocks: [
         ...(provider === "cursor"
           ? [{ kind: "meta" as const, text: cursorPermissionNote(settings.local.permissions) }]
-          : skipPermissions ? [{ kind: "meta" as const, text: SKIPPED_PERMISSIONS_NOTE }] : []),
+          : effectiveSkipPermissions ? [{ kind: "meta" as const, text: SKIPPED_PERMISSIONS_NOTE }] : []),
       ],
       botId: bot.id,
       runId: queued.runId,
@@ -1965,7 +1968,7 @@ export class Dispatcher {
     }
     const turn: ActiveTurn = {
       ...queued,
-      skipPermissions,
+      skipPermissions: effectiveSkipPermissions,
       ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
       ...(external?.kind === "api" ? { apiBinding: { providerId: external.providerId, model: model! } } : {}),
       policyFingerprint,
@@ -2006,7 +2009,7 @@ export class Dispatcher {
         ? { effort: bot.thinking ?? settings.local.reasoningEffort }
         : {}),
       sandbox: settings.local.sandbox,
-      skipPermissions,
+      skipPermissions: effectiveSkipPermissions,
       resumeCursor,
       ...(Object.keys(environment).length ? { environment } : {}),
       ...(this.deps.retryScale ? { retryScale: this.deps.retryScale } : {}),
@@ -2065,7 +2068,7 @@ export class Dispatcher {
         // In `skip-all` a request should never arrive; if one does (an MCP
         // elicitation, a tool the CLI still guards), it is accepted rather
         // than left hanging against a card nobody was told to expect.
-        isAlwaysAllowed: (request) => !turn.cancelled && !turn.discarded && (skipPermissions
+        isAlwaysAllowed: (request) => !turn.cancelled && !turn.discarded && (effectiveSkipPermissions
           ? this.deps.settings().local.permissions === "skip-all"
           : this.isPreApproved(approvalKey(bot.id, request.requestType, request.tool, approvalDetailFor(request.tool, request.detail)))),
       });
