@@ -19,7 +19,7 @@ describe("new company operating context", () => {
     expect(created.notes.find((note) => note.path === "Team.md")!.text).toContain("STOP limits");
   });
 
-  it.each(["lead-gen-agency", "service-based-business", "software"] as const)("keeps %s recruitment tied to its prepared role blueprints", (id) => {
+  it.each(["lead-gen-agency", "service-based-business", "software", "ecommerce"] as const)("keeps %s recruitment tied to its prepared role blueprints", (id) => {
     const created = creationTemplateOf(templateOf(id));
     expect(created.notes.some((note) => note.path.endsWith("/role.json"))).toBe(true);
     expect(created.bots[0]!.instructions).toContain("with the closest role_slug");

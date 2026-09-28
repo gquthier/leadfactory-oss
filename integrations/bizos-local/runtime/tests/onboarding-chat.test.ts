@@ -207,6 +207,8 @@ describe("the CEO's welcome in a new company", () => {
       .toBe("Salut 👋 Je suis ton CEO. Tu as choisi « Entreprise de services ». Dis-moi en une phrase ce que tu vends et à qui, je m’occupe du reste.");
     expect(creationWelcome("software", { owner: { name: "Ada Lovelace" }, language: "en" }))
       .toBe("Hi Ada 👋 I'm your CEO. You picked “Software”. Tell me in one sentence what you sell and to whom, I'll take it from there.");
+    expect(creationWelcome("ecommerce", { owner: { name: "Ada Lovelace" }, language: "en" }))
+      .toBe("Hi Ada 👋 I'm your CEO. You picked “E-commerce”. Tell me in one sentence what you sell and to whom, I'll take it from there.");
     expect(creationWelcome("lead-gen-agency", { language: "en" }))
       .toBe("Hi 👋 I'm your CEO. You picked “Lead generation agency”. Tell me in one sentence what you sell and to whom, I'll take it from there.");
     for (const id of CREATION_TEMPLATE_IDS) expect(creationWelcome(id).length).toBeLessThan(160);

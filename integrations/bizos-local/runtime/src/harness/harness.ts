@@ -2556,9 +2556,10 @@ export class LocalBizosHarness {
       const registry = readTemplateRegistry(this.storage, binding);
       const roster = this.botStore.list();
       const ids: TemplateId[] = [...CREATION_TEMPLATE_IDS];
-      // Old Company OS / E-commerce workspaces remain inspectable and
-      // reopenable, but neither appears as a fresh-company choice.
+      // Installed historical templates outside the current creation choices
+      // remain inspectable and reopenable.
       for (const legacy of ["company-os", "ecommerce"] as const) {
+        if ((CREATION_TEMPLATE_IDS as readonly string[]).includes(legacy)) continue;
         if (this.installationOf(registry, legacy)) ids.push(legacy);
       }
       return {
