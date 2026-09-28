@@ -112,6 +112,7 @@ function fakeHarness() {
       modelCatalogs: record("runtime.modelCatalogs", { codex: { models: [], source: "static" }, claude: { models: [], source: "static" } }),
       toolsStatus: record("runtime.toolsStatus", { available: true, launcher: "electron" }),
       codexCandidates: record("runtime.codexCandidates", { candidates: [], active: "" }),
+      selectModel: record("runtime.selectModel", { selection: { source: "plan", model: "" } }),
       setInference: record("runtime.setInference", { mode: "local" }),
       setPermissions: record("runtime.setPermissions", { mode: "local" }),
     },
@@ -264,6 +265,22 @@ describe("handlers", () => {
     if (surprise.ok === false) expect(surprise.error.message).toMatch(/does not accept somethingElse/);
   });
 
+  it("passes long chat text intact through both internal send paths", async () => {
+    const { harness, calls } = fakeHarness();
+    const handlers = buildHandlers(harness);
+    const text = "Long brief line. ".repeat(5_000);
+    const sent = await runHandler(handlers["lbz:threads:send"]!, [
+      { botId: "bot_1" }, { text },
+    ]);
+    expect(sent).toMatchObject({ ok: true });
+    expect(calls.at(-1)?.args[1]).toMatchObject({ text });
+    const quick = await runHandler(handlers["lbz:quickChats:send"]!, [
+      "qchat_123", { text, requestId: "long-brief" },
+    ]);
+    expect(quick).toMatchObject({ ok: true });
+    expect(calls.at(-1)?.args[1]).toBe(text);
+  });
+
   it("takes an allowlist on EVERY channel, not only on the patches", async () => {
     const { harness } = fakeHarness();
     const handlers = buildHandlers(harness);
@@ -389,6 +406,7 @@ describe("handlers", () => {
       "lbz:inference:update": ["prv_abc123def456", { label: "Router", apiKey: "" }],
       "lbz:inference:remove": ["prv_abc123def456"],
       "lbz:inference:test": ["prv_abc123def456"],
+      "lbz:runtime:selectModel": [{ scope: { kind: "workspace" }, selection: { source: "plan", planId: "pln_test_abc123", model: "" } }],
       "lbz:runtime:setInference": [{ source: "provider", providerId: "prv_abc123def456" }],
       "lbz:runtime:setPermissions": [{ permissions: "ask" }],
       "lbz:brain:roots": [],

@@ -3,6 +3,7 @@
 // this Mac is read, and no CLI on PATH. Skipped when `dist/` is not built
 // (`npm run build` first).
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -141,5 +142,22 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
     expect((await api("GET", "/api/collaboration/runs")).body.runs.every((run: any) => run.agentId === null)).toBe(true);
     expect((await api("POST", `/api/local/quick-chats/${id}/stop`, {})).status).toBe(200);
     expect((await api("POST", `/api/local/quick-chats/${id}/answer`, { runId: "wrong-run", askId: "wrong-ask", answer: { kind: "allow_once" } })).status).toBe(400);
+  });
+
+  it("keeps a pasted chat message above the old 20k and 64 KiB limits intact", async () => {
+    const created = await api("POST", "/api/local/quick-chats", { requestId: "quick-long-message" });
+    expect(created.status).toBe(201);
+    const path = `/api/collaboration/threads/${encodeURIComponent(created.body.thread.id)}/messages`;
+    const content = "Long brief line. ".repeat(5_000);
+    const body = { content, clientMessageId: "019a1551-7642-7000-8123-123456789abd" };
+    const sent = await api("POST", path, body);
+    expect(sent.status).toBe(201);
+    const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+    expect(sent.body.message.content.length).toBe(content.trim().length);
+    expect(sha256(sent.body.message.content)).toBe(sha256(content.trim()));
+    expect((await api("GET", path)).body.messages.some((message: any) => sha256(message.content) === sha256(content.trim()))).toBe(true);
+    for (const run of sent.body.runs) {
+      await api("POST", `/api/collaboration/runs/${encodeURIComponent(run.runId)}/cancel`, {});
+    }
   });
 });

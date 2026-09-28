@@ -224,7 +224,7 @@ export class ContinuityStore {
       .map((b) => b.text)
       .join("\n\n");
     if (!content.trim() || !["user", "bot"].includes(message.role)) return;
-    if (content.length > 20_000 || Buffer.byteLength(content) > 128 * 1024)
+    if (Buffer.byteLength(content) > 128 * 1024)
       throw new Error(
         "message exceeds continuity limit; save a bounded artifact",
       );

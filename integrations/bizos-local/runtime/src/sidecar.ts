@@ -110,6 +110,9 @@ const logPath = join(stateRoot, "sidecar.log");
 const lockPath = join(stateRoot, "sidecar.lock");
 const action = process.argv[2] ?? "status";
 const MAX_BODY_BYTES = 64 * 1024;
+// Chat text is separate from the small control API payloads. Keep a transport
+// safety bound while avoiding the old 20,000-character product limit.
+const MAX_COLLABORATION_MESSAGE_BYTES = 32 * 1024 * 1024;
 const NATIVE_COMPUTER_DESCRIPTOR_VARIABLE = "LOCALBIZOS_NATIVE_COMPUTER_DESCRIPTOR";
 
 interface Descriptor {
@@ -522,14 +525,14 @@ async function descriptorHealthy(descriptor: Descriptor): Promise<boolean> {
   }
 }
 
-function textOf(blocks: readonly MessageBlock[]): string {
+function textOf(blocks: readonly MessageBlock[], maxChars = 20_000): string {
   return blocks.flatMap((block) => {
     if (block.kind === "text" || block.kind === "meta") return [block.text];
     if (block.kind === "card") return [[block.title, block.body].filter(Boolean).join("\n")];
     if (block.kind === "ask") return [block.summary];
     if (block.kind === "progress") return [[block.phase, block.detail].filter(Boolean).join(": ")];
     return [];
-  }).filter(Boolean).join("\n\n").slice(0, 20_000);
+  }).filter(Boolean).join("\n\n").slice(0, maxChars);
 }
 
 /** `/api/local/attachments/<id>`, relative to this sidecar's origin. */
@@ -1021,7 +1024,7 @@ export class CollaborationFacade {
       id: this.messageId(message.id),
       threadId: publicThreadId,
       role: message.role === "user" ? "user" : "assistant",
-      content: textOf(publicBlocks),
+      content: textOf(publicBlocks, message.role === "user" ? Number.MAX_SAFE_INTEGER : 20_000),
       ...(message.deliveryState === "complete" ? { deliveryState: "complete" as const } : {}),
       createdAt: message.createdAt,
       senderType: message.role === "user" ? "human" : "chatId" in target ? "assistant" : "agent",
@@ -1257,7 +1260,7 @@ export class CollaborationFacade {
       if ("chatId" in target) await this.harness.quickChats.get(target.chatId);
       const input = objectBody(raw, ["clientMessageId", "content", "mentionAgentIds"]);
       const clientMessageId = uuid(input.clientMessageId, "clientMessageId");
-      const content = requiredString(input.content, "content", 20_000);
+      const content = requiredString(input.content, "content", Number.MAX_SAFE_INTEGER);
       const mentionAgentIds = stringList(input.mentionAgentIds ?? [], "mentionAgentIds", 32);
       const requestedBotIds = mentionAgentIds.map((id) => this.internalAgentId(id));
       const allowedBotIds = "chatId" in target ? [] : "botId" in target
@@ -2996,7 +2999,7 @@ async function serve(): Promise<void> {
       const messageThreadId = routeId(url.pathname, /^\/api\/collaboration\/threads\/([^/]+)\/messages$/);
       if (messageThreadId && method === "GET") return sendJson(response, 200, await facade.messagePage(messageThreadId, url));
       if (messageThreadId && method === "POST") {
-        const result = await facade.postMessage(messageThreadId, await bodyOf(request));
+        const result = await facade.postMessage(messageThreadId, await bodyOf(request, MAX_COLLABORATION_MESSAGE_BYTES));
         return sendJson(response, result.status, result.body);
       }
       if (method === "GET" && url.pathname === "/api/collaboration/runs") {

@@ -51,6 +51,14 @@ it("unlinked threads do not create an outbox; linked commits survive reconstruct
     store.accept("bot:a", [{ ...first[0]!, seq: 1, hash: "wrong" }]),
   ).toThrow();
 });
+it("preserves a linked user message beyond the former 20k character cap", () => {
+  const { store } = fixture();
+  store.link("bot:a", binding);
+  const text = "long context ".repeat(2_500);
+  store.capture(message(1, text));
+  expect(store.pending("bot:a")).toHaveLength(1);
+  expect(store.pending("bot:a")[0]?.content).toBe(text);
+});
 it("refuses QuickChat link and attach before any bridge request", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");

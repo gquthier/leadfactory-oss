@@ -65,6 +65,17 @@ export function asString(value: unknown, field: string, max = 200): string {
   return value.trim();
 }
 
+// The sidecar accepts chat messages up to its transport safety bound. Keep
+// the internal IPC path consistent; silently slicing here loses user text.
+const MAX_CHAT_TEXT_BYTES = 32 * 1024 * 1024;
+function asChatText(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new PayloadError(`${field} must be a non-empty string`);
+  if (Buffer.byteLength(value, "utf8") > MAX_CHAT_TEXT_BYTES) {
+    throw new PayloadError(`${field} exceeds the message transport size`);
+  }
+  return value;
+}
+
 /**
  * A field the user is allowed to EMPTY.
  *
@@ -977,7 +988,7 @@ export function buildHandlers(
     "lbz:quickChats:messages": args => harness.quickChats.messages(asString(at(args, 0), "id", 64), asOptionalString(at(args, 1), "before", 64)),
     "lbz:quickChats:send": args => {
       const input = asStrictRecord(at(args, 1), "input", ["text", "requestId"] as const);
-      return harness.quickChats.send(asString(at(args, 0), "id", 64), asString(input.text, "text", 20_000), asString(input.requestId, "requestId", 128));
+      return harness.quickChats.send(asString(at(args, 0), "id", 64), asChatText(input.text, "text"), asString(input.requestId, "requestId", 128));
     },
     "lbz:quickChats:stop": args => { asStrictRecord(at(args, 1), "input", []); return harness.quickChats.stop(asString(at(args, 0), "id", 64)); },
     "lbz:quickChats:answer": args => {
@@ -1002,7 +1013,7 @@ export function buildHandlers(
       const input = asStrictRecord(at(args, 1), "input", SEND_KEYS);
       const attachments = asAttachments(input.attachments);
       return harness.threads.send(asThreadTarget(at(args, 0)), {
-        text: typeof input.text === "string" ? input.text.slice(0, 20_000) : "",
+        text: input.text === undefined ? "" : asChatText(input.text, "input.text"),
         mentionBotIds: asIdList(input.mentionBotIds, "input.mentionBotIds"),
         ...(attachments.length ? { attachments } : {}),
         ...(asOptionalString(input.replyToMessageId, "input.replyToMessageId", 64)
