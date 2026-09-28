@@ -26,7 +26,7 @@ interface Fixture {
 
 const fixtures: Fixture[] = [];
 
-async function fixture(templateId: "lead-gen-agency" | "service-based-business" | "software" = "lead-gen-agency"): Promise<Fixture> {
+async function fixture(templateId: "lead-gen-agency" | "service-based-business" | "software" | "company-os" = "lead-gen-agency"): Promise<Fixture> {
   const root = mkdtempSync(join(tmpdir(), "lbz-ceo-recruit-"));
   const plan = {
     id: "pln_fixture_primary",
@@ -108,6 +108,31 @@ afterEach(async () => {
 });
 
 describe("CEO on-demand recruitment", () => {
+  it("creates and dispatches a custom Company OS specialist without a catalog, once per request", async () => {
+    const f = await fixture("company-os");
+    const { capability, runId } = await activeCeoCapability(f);
+    const request = {
+      name: "Support",
+      title: "Support specialist",
+      description: "Draft answers from the supplied product knowledge.",
+      context: "Use the fixture knowledge only; no external messages or refunds.",
+      initial_task: "Draft one answer and cite the supplied knowledge.",
+    };
+    const first = await f.facade.recruit(capability, request);
+    const repeated = await f.facade.recruit(capability, request);
+    expect(repeated).toEqual(first);
+    expect(first.agent).toMatchObject({ name: request.name, title: request.title, description: request.description });
+    expect(first.dispatch).toMatchObject({ status: "started", runId: expect.any(String), messageId: expect.any(String), parentRunId: `local:${INSTANCE}:run:${runId}` });
+    const bots = await f.harness.bots.list();
+    expect(bots).toHaveLength(2);
+    expect(bots.find((bot) => bot.name === request.name)!.instructions).toContain(request.context);
+    expect(await f.harness.groups.list()).toHaveLength(1);
+    expect(f.turns).toHaveLength(2);
+    expect(f.turns[1]!.text).toContain(request.initial_task);
+    expect(f.index.events.filter((event) => event.type === "agent.recruited")).toHaveLength(1);
+    expect(f.index.roleBindings).toEqual({});
+  });
+
   it("loads a bound role blueprint, creates one persistent peer and dispatches its initial task in the parent chain", async () => {
     const f = await fixture();
     const { capability, runId: parentRunId } = await activeCeoCapability(f);

@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleLocalTeamMessage } from "../src/local-team-mcp.js";
+import { handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS } from "../src/local-team-mcp.js";
 
 describe("local team MCP", () => {
+  it("explains custom recruitment without requiring a prepared role catalog", () => {
+    const recruit = LOCAL_TEAM_TOOL_SPECS.find((tool) => tool.name === "recruit_agent")!;
+    expect(recruit.description).toContain("name, title, description, context and initial_task");
+    expect(recruit.description).toContain("without role_slug");
+    expect(recruit.inputSchema.anyOf).toEqual([
+      { required: ["role_slug"] }, { required: ["name", "title"] },
+    ]);
+  });
+
   it("mounts bounded context tools only for an explicitly scoped local toolset", async () => {
     const ordinary = await handleLocalTeamMessage({ id: 1, method: "tools/list" });
     expect(JSON.stringify(ordinary)).not.toContain("read_context_file");

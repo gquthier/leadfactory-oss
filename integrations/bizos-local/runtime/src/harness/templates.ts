@@ -180,8 +180,13 @@ export function creationTemplateOf(source: CompanyTemplate, options: CreationOpt
   const director = source.bots[0];
   if (!director) throw new BrainError(`${source.name} has no CEO role`);
   const specialists = source.bots.slice(1);
-  const delegation = "From the CEO DM, use recruit_agent with role_slug and a bounded initial_task to create or reuse a specialist and dispatch real work. A team group appears on the first recruitment. An @Name handoff works only inside an existing group containing that agent. Check the actual tool result; a role file or inbox memo never executes work.";
-  const bootstrap = "Only CEO is active at bootstrap, with one direct conversation and no team group. Specialist roles are saved under Roles/ and are recruited only when an authorized mission needs them.";
+  const recruit = specialists.length
+    ? "From the CEO DM, use recruit_agent with role_slug and a bounded initial_task to create or reuse a specialist and dispatch real work."
+    : "From the CEO DM, use recruit_agent directly with name, title, description, context and initial_task, without role_slug, to create a custom specialist and dispatch real work. An empty role catalog does not prevent custom recruitment; use this tool instead of the New agent UI when it is available.";
+  const delegation = `${recruit} A team group appears on the first recruitment. An @Name handoff works only inside an existing group containing that agent. Check the actual tool result; a role file or inbox memo never executes work.`;
+  const bootstrap = "Only CEO is active at bootstrap, with one direct conversation and no team group. " + (specialists.length
+    ? "Specialist roles are saved under Roles/ and are recruited only when an authorized mission needs them."
+    : "No prepared specialist blueprints are installed. Create a custom bounded role only when an authorized mission needs one.");
   const adapt = (text: string): string => {
     let result = text
       .replaceAll("A direct chat cannot silently hand work to the preinstalled group; tell the user to open the team chat when collaboration is needed.", delegation)
@@ -221,9 +226,11 @@ export function creationTemplateOf(source: CompanyTemplate, options: CreationOpt
   const customRoleLibrary = customRoleIndex >= 0 ? originalTeam!.slice(customRoleIndex) : "";
   const catalog = [
     "# Available specialist roles", "", bootstrap,
-    "Choose the closest blueprint for the authorized mission. A role definition is not an active agent. Use a custom bounded role only when no blueprint fits.", "",
-    "| role_slug | Role | Responsibility | Prompt |", "|---|---|---|---|",
-    ...specialists.map((role) => `| ${role.slug} | ${role.name} | ${role.description.replaceAll("|", "\\|")} | Roles/${role.slug}/system.md |`),
+    ...(specialists.length ? [
+      "Choose the closest blueprint for the authorized mission. A role definition is not an active agent. Use a custom bounded role only when no blueprint fits.", "",
+      "| role_slug | Role | Responsibility | Prompt |", "|---|---|---|---|",
+      ...specialists.map((role) => `| ${role.slug} | ${role.name} | ${role.description.replaceAll("|", "\\|")} | Roles/${role.slug}/system.md |`),
+    ] : []),
     "", delegation, "",
     "Codex and Claude receive these tools when exposed by the runtime. Cursor has no injected recruitment tools. Use the company's connected plan and current runtime permissions; recruitment does not grant new access, spending or publication authority.",
     "Supply a description, bounded context and initial_task. A profile photo is optional raster image data, not a generated-image promise. Report started only when a real run ID is returned; otherwise report the recorded failure or queued state.",
@@ -272,7 +279,9 @@ export function creationTemplateOf(source: CompanyTemplate, options: CreationOpt
     instructions: [
       "You are CEO. " + bootstrap, delegation,
       "Before working, read system.md in your working folder (Agents/CEO), ../../AGENTS.md and ../../Roles/README.md. system.md contains your full company-specific role; source.md is a legacy archive, not current operating instructions.",
-      "Recruit only when useful for an already-authorized mission, with the closest role_slug, concrete initial_task and needed context. That operational delegation needs no second ceremonial approval. It grants no new files, spending, publishing or external-action authority. Inspect tool results and actual run status before claiming that work started or finished.",
+      (specialists.length
+        ? "Recruit only when useful for an already-authorized mission, with the closest role_slug, concrete initial_task and needed context."
+        : "Recruit only when useful for an already-authorized mission, with a custom bounded role and concrete initial_task as described above.") + " That operational delegation needs no second ceremonial approval. It grants no new files, spending, publishing or external-action authority. Inspect tool results and actual run status before claiming that work started or finished.",
       "The runtime manifest is authoritative. Use the user's connected plan and existing permission settings. Do not invent tools, teammates, photo generation, messages or outcomes. Unknown facts stay TODO; preserve owner files and verify deliverables.",
       FIRST_REPLY,
     ].join("\n\n"),

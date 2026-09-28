@@ -44,7 +44,7 @@ export const CONTEXT_TOOL_SPECS = [{
 }] as const;
 export const LOCAL_TEAM_TOOL_SPECS = [{
   name: "recruit_agent",
-  description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain.",
+  description: "Create or reuse one persistent Local BizOS specialist for this active mission, add it to the durable company team, and dispatch a real initial native-plan task in the current mission chain. Use role_slug for an installed blueprint. When no blueprint fits or the role catalog is empty, supply name, title, description, context and initial_task without role_slug to create a custom specialist directly; the catalog is not required.",
   inputSchema: {
     type: "object",
     properties: {
