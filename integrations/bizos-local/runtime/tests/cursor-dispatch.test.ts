@@ -76,6 +76,8 @@ describe("Cursor dispatch MCP surface", () => {
         sandbox: input.sandbox,
         supportedProviders: ["cursor"],
         peers: input.peers.map(peer => ({ agentId: peer.id, name: peer.name })),
+        // The sidecar names the exact tools it mounts; the brief lists only those.
+        mcpToolNames: ["checkpoint_task", "recruit_agent", "send_to_chat", "schedule_routine"],
         recruitment: "autonomous-local-tools",
       }),
     });

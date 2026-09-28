@@ -347,7 +347,7 @@ describe("ComputerManager on the cloud computer", () => {
     const manager = new ComputerManager({ approvals: approvals().value, workspaceFor: () => "/unused", nowIso: () => "now", publish: () => undefined, backend: boat });
     const saved = await handleComputerCall(manager, "bot_a", { op: "download", url: "https://example.com/file.pdf" });
     expect((saved.payload as { text: string }).text).toContain("/home/user/bizos/agents/bot_a/Downloads/file.pdf");
-    expect((saved.payload as { text: string }).text).toContain("cloud computer");
+    expect((saved.payload as { text: string }).text).toContain("virtual computer");
   });
 });
 

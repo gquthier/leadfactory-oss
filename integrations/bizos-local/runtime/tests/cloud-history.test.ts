@@ -16,7 +16,7 @@ for (const count of [0,60,130]) it(`refuses local pre-link context outside the $
   const row=(id:string,seq:number,text:string):ThreadMessage=>({id,seq,threadId:thread,role:'user',blocks:[{kind:'text',text}],createdAt:'2026-09-28T00:00:00Z'});
   storage.appendNdjson(storage.threadPath(thread),row('private-before-link',1,'Approved price is 79 EUR.'));
   const canonical=Array.from({length:count},(_,i)=>row(`canonical-${i}`,i+2,`linked text ${i}`));
-  const continuity={projection:()=>canonical,store:{projectionAnchor:()=>undefined}} as unknown as ConversationContinuity;
+  const continuity={projection:()=>canonical,backupEnabled:()=>false,store:{projectionAnchor:()=>undefined,hasImportedHistory:()=>false,status:()=>undefined}} as unknown as ConversationContinuity;
   const threads=new ThreadStore(storage,systemClock,continuity);
   let selected=false;
   const facade=Object.create(CollaborationFacade.prototype) as CollaborationFacade;

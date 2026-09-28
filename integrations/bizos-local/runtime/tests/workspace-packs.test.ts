@@ -54,11 +54,11 @@ describe("one business template per vault", () => {
     const service = s[kind];
     const installed = await service.install();
     expect(installed.status).toBe("ready");
-    expect(installed.bots).toHaveLength(kind === "agency" ? 1 : 6);
-    if (kind === "agency") {
-      expect(installed.bots[0]!.name).toBe("CEO");
-      expect(installed.groupId).toBeNull();
-    } else expect(installed.groupId).toBeTruthy();
+    // Both templates start with the CEO alone; e-commerce keeps its five
+    // roles dormant until recruitment and creates no team group (lot F).
+    expect(installed.bots).toHaveLength(1);
+    expect(installed.bots[0]!.name).toBe("CEO");
+    expect(installed.groupId).toBeNull();
     const vault = installed.vaultPath!;
     const skill = kind === "agency" ? "client-onboarding" : "shopify-setup";
     const actualSkill = kind === "agency" ? "onboarding-client" : skill;

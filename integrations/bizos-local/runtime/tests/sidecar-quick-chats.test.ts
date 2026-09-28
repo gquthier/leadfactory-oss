@@ -102,12 +102,14 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
     expect(readFileSync(join(temp, "state", "runtime", "expired-quick-chats.json"), "utf8")).toContain(expiredId);
   });
 
-  it("rejects continuity link and attach for QuickChat at the HTTP boundary", async () => {
+  it("answers 404 to continuity link and attach for an expired QuickChat at the HTTP boundary", async () => {
+    // A live QuickChat can be saved like any conversation (lot A); an expired
+    // one is gone and must be refused before any continuity state is touched.
     for (const operation of ["link", "attach"]) {
       const result = await api("POST", `/api/local/continuity/${operation}`, {
         threadId: `chat:${expiredId}`, agentId: "agent", audience: "private", title: "QuickChat", conversationId: "conversation",
       });
-      expect(result.status).toBe(400);
+      expect(result.status).toBe(404);
     }
   });
 

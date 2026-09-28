@@ -3069,6 +3069,14 @@ async function serve(): Promise<void> {
         const input = objectBody(await bodyOf(request), ["threadId", "agentId", "audience", "cloudThreadId", "title", "conversationId", "artifactId", "version", "previousHash", "name", "mimeType", "contentBase64", "transferId", "destination", "summary", "runId", "epoch", "checkpointId", "expectedHead", "manifestHash", "modelRuntime"]);
         if (typeof input.threadId !== "string" || input.threadId.length > 128 || !/^(bot|group|chat):/.test(input.threadId)) throw new HttpError(400,"invalid_body","A local conversation is required.");
         const threadId = input.threadId;
+        if (threadId.startsWith("chat:")) {
+          // A QuickChat is saved like any conversation, but only while it exists.
+          try { await harness.quickChats.get(threadId.slice("chat:".length)); }
+          catch (error) {
+            if (error instanceof HttpError) throw error;
+            throw new HttpError(404, "not_found", "That QuickChat is no longer available.");
+          }
+        }
         if (url.pathname.endsWith("/link")) {
           if (typeof input.agentId !== "string" || !["private","thread"].includes(String(input.audience)) || typeof input.title !== "string") throw new HttpError(400,"invalid_body","Choose an authorized cloud agent and conversation audience.");
           return sendJson(response, 200, await harness.continuity.link(threadId,{agentId:input.agentId,audience:input.audience as "private"|"thread",title:input.title,...(typeof input.cloudThreadId === "string" ? {threadId:input.cloudThreadId}: {})}));

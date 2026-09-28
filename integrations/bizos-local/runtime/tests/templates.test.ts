@@ -1026,6 +1026,7 @@ describe("the bridge and the sidecar", () => {
     const calls: string[] = [];
     const facade = new CollaborationFacade(
       {
+        storage: { readJsonStrict: (_file: string, fallback: unknown) => fallback },
         templates: {
           list: async () => {
             calls.push("list");
@@ -1054,7 +1055,10 @@ describe("the bridge and the sidecar", () => {
   it("validates vault-root reveal at the HTTP facade before invoking IPC", async () => {
     const calls: unknown[][] = [];
     const facade = new CollaborationFacade(
-      { brain: { open: async (...args: unknown[]) => { calls.push(args); return { ok: true }; } } } as unknown as LocalBizosHarness,
+      {
+        storage: { readJsonStrict: (_file: string, fallback: unknown) => fallback },
+        brain: { open: async (...args: unknown[]) => { calls.push(args); return { ok: true }; } },
+      } as unknown as LocalBizosHarness,
       "test",
       {} as never,
       emptyDurableIndex(),

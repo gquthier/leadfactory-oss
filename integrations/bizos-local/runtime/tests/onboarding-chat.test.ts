@@ -265,6 +265,7 @@ describe("POST /api/local/brain/templates/apply", () => {
   function facadeWith(calls: unknown[][]) {
     return new CollaborationFacade(
       {
+        storage: { readJsonStrict: (_file: string, fallback: unknown) => fallback },
         templates: {
           apply: async (...args: unknown[]) => {
             calls.push(args);
