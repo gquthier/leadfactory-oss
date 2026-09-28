@@ -25,6 +25,7 @@ import {
 } from "./codex-driver.js";
 import { augmentedPath } from "./env-path.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
+import { claudeDenySettings, seatbeltDenyReadProfile, seatbeltLaunch, secretShieldEnabled } from "./secret-shield.js";
 import { redactSecrets, redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
 import type { ReasoningEffort, SandboxMode } from "./types.js";
@@ -57,6 +58,9 @@ export interface ClaudeTurnInput {
   isAlwaysAllowed?: CodexTurnInput["isAlwaysAllowed"];
   /** Settings → Plans & usage said "never ask anyone": see `buildClaudeArgs`. */
   skipPermissions?: boolean;
+  /** Paths the agent's tools may never read (`secret-shield.ts`): deny rules
+   * through `--settings`, plus an outer seatbelt in bypass mode. */
+  protectedPaths?: string[];
   /** Test seam; production uses the same 15-minute deadline as Codex. */
   approvalTimeoutMs?: number;
 }
@@ -150,6 +154,8 @@ export function buildClaudeArgs(input: {
    * blocking on a prompt channel this harness never opened.
    */
   skipPermissions?: boolean;
+  /** Runtime/desktop secrets: `permissions.deny` rules for the path tools. */
+  protectedPaths?: string[];
 }): string[] {
   const bypass = input.skipPermissions && !input.boundedTools;
   const args = [
@@ -169,6 +175,7 @@ export function buildClaudeArgs(input: {
     ...[...new Set([input.cwd, ...(input.additionalDirectories ?? [])])].flatMap((directory) => ["--add-dir", directory]),
   ];
   if (input.boundedTools) args.push("--restricted", "--safe-mode", "--tools", "", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--settings", JSON.stringify({disableAllHooks:true}));
+  else if (input.protectedPaths?.length) args.push("--settings", JSON.stringify(claudeDenySettings(input.protectedPaths)));
   if (input.model) args.push("--model", input.model);
   if (input.systemPromptPath) args.push("--append-system-prompt-file", input.systemPromptPath);
   if (input.effort) args.push("--effort", input.effort);
@@ -331,9 +338,15 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
       ...(state.mcpConfigPath ? { mcpConfigPath: state.mcpConfigPath } : {}),
       ...(allowedTools.length ? { allowedTools } : {}),
       ...(input.skipPermissions ? { skipPermissions: true } : {}),
+      ...(input.protectedPaths?.length && secretShieldEnabled() ? { protectedPaths: input.protectedPaths } : {}),
     });
     setupStage = "CLI spawn";
-    child = spawnCli(input.cli, args, {
+    // Bypass mode applies no sandbox of its own: the whole process tree gets
+    // one outer seatbelt denying the protected paths (macOS only).
+    const shielded = input.skipPermissions && !input.boundedTools && input.protectedPaths?.length && secretShieldEnabled()
+      ? seatbeltLaunch(input.cli, args, seatbeltDenyReadProfile(input.protectedPaths))
+      : { command: input.cli, args, sandboxed: false };
+    child = spawnCli(shielded.command, shielded.args, {
       cwd: input.cwd,
       env: environment as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],

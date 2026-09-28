@@ -21,6 +21,7 @@ import { cleanChildEnvironment } from "./child-env.js";
 import { augmentedPath } from "./env-path.js";
 import type { CodexModelProvider } from "./inference.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
+import { codexShieldConfig, seatbeltDenyReadProfile, seatbeltLaunch, secretShieldEnabled } from "./secret-shield.js";
 import { redactSecretsInText } from "./redact.js";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.js";
 import { isRichToolResult, toolResultText } from "./tool-result.js";
@@ -136,6 +137,8 @@ export interface CodexDynamicTool {
 
 export type RuntimeEvent =
   | { type: "turn.started" }
+  /** How the secret shield applies to this turn (`secret-shield.ts`). */
+  | { type: "runtime.shield"; mode: "profile" | "seatbelt" | "none" }
   | { type: "context.sent" }
   | { type: "context.confirmed" }
   | { type: "capabilities.verified"; supervised: boolean; tools: string[] }
@@ -210,6 +213,10 @@ export interface CodexTurnInput {
    * `approvalPolicy: "never"` and `sandbox: "danger-full-access"`, and every
    * turn carries the `dangerFullAccess` sandbox policy. */
   skipPermissions?: boolean;
+  /** Paths the agent's commands may never read (`secret-shield.ts`): a codex
+   * permission profile in sandboxed modes, an outer seatbelt in
+   * `danger-full-access`. */
+  protectedPaths?: string[];
   /** Extra `turn/start` input items — materialized attachments, as
    * `{type:"localImage", path}`. Verified against the app-server v2 schema
    * (`UserInput`), so an image the user attached is really seen. */
@@ -352,6 +359,15 @@ export function buildAppServerArgs(mcpServers: Record<string, McpServerSpec>, mo
   const args = ["app-server"];
   if (modelProvider) args.push(...modelProviderArgs(modelProvider));
   for (const [name, server] of Object.entries(mcpServers)) args.push(...mcpServerArgs(name, server));
+  // The forwarded secrets live in the codex PROCESS environment (that is how
+  // `env_vars` reaches each MCP server). The agent's shell commands must not
+  // inherit them: codex's own `shell_environment_policy` strips them by name
+  // (verified with `codex sandbox` on codex-cli 0.155.1).
+  const secretNames = [...new Set([
+    ...Object.values(mcpServers).flatMap((server) => Object.keys(server.forwarded)),
+    ...(modelProvider?.apiKey ? [modelProvider.envKey] : []),
+  ])];
+  if (secretNames.length) args.push("-c", `shell_environment_policy.exclude=${tomlStringArray(secretNames)}`);
   return args;
 }
 
@@ -497,7 +513,14 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
       input.pathOverride ?? augmentedPath(input.environment as NodeJS.ProcessEnv | undefined),
       input.modelProvider,
     );
-    const child = spawnCli(input.cli, buildAppServerArgs(mcpServers, input.modelProvider), {
+    const shield = input.protectedPaths?.length && secretShieldEnabled() ? input.protectedPaths : null;
+    // `danger-full-access` applies no sandbox of its own: the whole process
+    // tree gets one outer seatbelt denying the protected paths (macOS only).
+    // Sandboxed modes cannot be nested, so they use the profile below instead.
+    const spawnPlan = shield && input.skipPermissions
+      ? seatbeltLaunch(input.cli, buildAppServerArgs(mcpServers, input.modelProvider), seatbeltDenyReadProfile(shield))
+      : { command: input.cli, args: buildAppServerArgs(mcpServers, input.modelProvider), sandboxed: false };
+    const child = spawnCli(spawnPlan.command, spawnPlan.args, {
       cwd: input.cwd,
       env: environment,
       stdio: ["pipe", "pipe", "pipe"],
@@ -918,6 +941,39 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
         });
         send({ jsonrpc: "2.0", method: "initialized", params: {} });
 
+        // Writable roots only mean something in a write sandbox: in
+        // `read-only` the user's shared folders are named to the bot and
+        // readable by the tools, and nothing is writable — saying otherwise
+        // would be a permission the runtime does not grant.
+        //
+        // The policy is sent on every workspace-write turn, empty roots
+        // included. A new ephemeral thread never inherits old folder grants.
+        const writableRoots = input.sandbox === "workspace-write" ? (input.writableRoots ?? []) : [];
+        const sandboxPolicy: WorkspaceWritePolicy | ReadOnlyPolicy | DangerFullAccessPolicy =
+          input.skipPermissions
+            ? { type: "dangerFullAccess" }
+            : input.sandbox === "workspace-write"
+              ? await workspaceWritePolicy(request, input.cwd, writableRoots)
+              : { type: "readOnly" };
+        // Sandboxed modes carry the shield as a codex permission profile: the
+        // same roots and network as the policy above, plus the denied paths.
+        // The profile then IS the sandbox, so no per-turn policy overrides it.
+        const shieldConfig = shield && !input.skipPermissions && sandboxPolicy.type !== "dangerFullAccess"
+          ? codexShieldConfig({
+            cwd: input.cwd,
+            sandbox: sandboxPolicy.type === "workspaceWrite" ? "workspace-write" : "read-only",
+            ...(sandboxPolicy.type === "workspaceWrite" ? {
+              writableRoots: sandboxPolicy.writableRoots,
+              networkAccess: sandboxPolicy.networkAccess,
+              excludeSlashTmp: sandboxPolicy.excludeSlashTmp,
+              excludeTmpdirEnvVar: sandboxPolicy.excludeTmpdirEnvVar,
+              ...(typeof environment.TMPDIR === "string" ? { tmpdir: environment.TMPDIR } : {}),
+            } : {}),
+            protectedPaths: shield,
+          })
+          : null;
+        emit({ type: "runtime.shield", mode: shieldConfig ? "profile" : spawnPlan.sandboxed ? "seatbelt" : "none" });
+
         const started = (await request("thread/start", {
           cwd: input.cwd,
           ...(input.model ? { model: input.model } : {}),
@@ -925,6 +981,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
           // approvals, for every agent at once.
           sandbox: input.skipPermissions ? "danger-full-access" : input.sandbox,
           approvalPolicy: input.skipPermissions ? "never" : "on-request",
+          ...(shieldConfig ? { config: shieldConfig } : {}),
           ephemeral: true,
           ...(input.dynamicTools?.length ? {
             dynamicTools: input.dynamicTools.map(({ name, description, inputSchema }) => ({
@@ -941,21 +998,6 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
         emit({ type: "session.started", sessionId: null, model: startedModel ?? input.model ?? null, resumed: false });
         const prefix = input.system;
 
-        // Writable roots only mean something in a write sandbox: in
-        // `read-only` the user's shared folders are named to the bot and
-        // readable by the tools, and nothing is writable — saying otherwise
-        // would be a permission the runtime does not grant.
-        //
-        // The policy is sent on every workspace-write turn, empty roots
-        // included. A new ephemeral thread never inherits old folder grants.
-        const writableRoots = input.sandbox === "workspace-write" ? (input.writableRoots ?? []) : [];
-        const sandboxPolicy: WorkspaceWritePolicy | ReadOnlyPolicy | DangerFullAccessPolicy =
-          input.skipPermissions
-            ? { type: "dangerFullAccess" }
-            : input.sandbox === "workspace-write"
-              ? await workspaceWritePolicy(request, input.cwd, writableRoots)
-              : { type: "readOnly" };
-
         emit({ type: "context.sent" });
         await request("turn/start", {
           threadId: codexThreadId,
@@ -971,7 +1013,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
           // turning bypass off restores native approval prompts immediately
           // on the next turn, rather than keeping a previous `never` policy.
           approvalPolicy: input.skipPermissions ? "never" : "on-request",
-          sandboxPolicy,
+          ...(shieldConfig ? {} : { sandboxPolicy }),
         });
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : String(caught);

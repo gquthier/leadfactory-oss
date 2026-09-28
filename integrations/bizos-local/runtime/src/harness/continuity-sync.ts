@@ -34,6 +34,8 @@ interface CanonicalEvent {
   sequence: string;
   contentHash: string;
   createdAt: string;
+  authorUserId?: string | null;
+  originInstallationId?: string | null;
 }
 interface LinkedRun {
   requestId: string;
@@ -322,6 +324,14 @@ export class ConversationContinuity {
         role: e.author === "human" ? "user" : "bot",
         blocks: [
           { kind: "text", text: e.content },
+          ...(e.author === "human" && !this.store.ownerAuthored(threadId, e)
+            ? [
+                {
+                  kind: "meta" as const,
+                  text: "From another workspace member (shared conversation).",
+                },
+              ]
+            : []),
           ...(e.seq === undefined
             ? [
                 {
@@ -466,8 +476,13 @@ export class ConversationContinuity {
           JSON.stringify(wireEvent(local)) !== JSON.stringify(wireEvent(e))
         )
           throw new Error("Canonical event differs from the durable outbox.");
+        const { authorUserId, originInstallationId, ...rest } = e;
         return {
-          ...e,
+          ...rest,
+          ...(typeof authorUserId === "string" ? { authorUserId } : {}),
+          ...(typeof originInstallationId === "string"
+            ? { originInstallationId }
+            : {}),
           seq: Number(e.sequence),
           hash: local?.hash ?? payloadHash(e),
           ...(local?.localMessageId

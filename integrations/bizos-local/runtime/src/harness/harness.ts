@@ -307,6 +307,8 @@ export interface HarnessOptions {
    * `settings.json` and every transcript live.
    */
   deniedDirs?: string[];
+  /** Paths no agent command may read, per provider turn (`secret-shield.ts`). */
+  protectedPaths?: DispatchDependencies["protectedPaths"];
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
   startOpenAiTurn?: DispatchDependencies["startOpenAiTurn"];
@@ -724,6 +726,7 @@ export class LocalBizosHarness {
         options.onLocalRunStopped?.(runId);
       },
       workspaceFor: (bot) => this.workspaceFor(bot),
+      ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
       ...(options.linkPreviews !== undefined ? { linkPreviews: options.linkPreviews } : {}),
       ...(options.fetchLinkPreview ? { fetchLinkPreview: options.fetchLinkPreview } : {}),
       // Only a build with a machine tells its bots they have one.

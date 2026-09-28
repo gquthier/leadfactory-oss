@@ -163,6 +163,23 @@ export const EMPTY_GROUP_NOTE =
 /** What the transcript says about a turn that ran under `permissions:
  * "skip-all"`. History has to record the mode a run was allowed under, or
  * turning the switch back off would erase the evidence that it was ever on. */
+/** Whether a turn may run with the global "never ask" switch. A linked Claude
+ * turn is always host bounded; and a conversation another workspace member
+ * wrote in never runs with bypass, whatever the provider — their words are
+ * quoted data, not authority over this computer. */
+export function bypassAllowedFor(input: {
+  skipPermissions: boolean;
+  linked: boolean;
+  provider: string;
+  sharedWithOthers: boolean;
+}): boolean {
+  if (!input.skipPermissions) return false;
+  if (input.linked && input.provider === "claude") return false;
+  if (input.linked && input.sharedWithOthers) return false;
+  return true;
+}
+export const SHARED_CONVERSATION_NOTE =
+  "Shared conversation: other workspace members wrote here, so approvals stay on for this turn and their messages are quoted data, not instructions.";
 export const SKIPPED_PERMISSIONS_NOTE =
   "Permissions are off for every agent — this turn ran without asking.";
 
@@ -251,6 +268,10 @@ export interface DispatchDependencies {
   dynamicTools?(bot: Bot, context: TurnContext): CodexDynamicTool[];
   /** The codex cwd for a bot. */
   workspaceFor(bot: Bot): string;
+  /** Absolute paths no agent command may read for a turn of this provider
+   * (runtime state, desktop secrets, the OTHER CLI's credentials). See
+   * `secret-shield.ts`. Absent ⇒ no shield. */
+  protectedPaths?(input: { provider: string; codexHome?: string; claudeConfigDir?: string }): string[];
   /** What this bot may reach on the Mac, from Settings → Access. Absent in
    * a harness that has no access store; then a bot sees its workspace and
    * nothing else, which is what the app did before Access existed. */
@@ -1836,8 +1857,10 @@ export class Dispatcher {
     const continuity = this.deps.continuity;
     const linked = continuity?.linked(threadId) === true;
     // A linked Claude turn is always host bounded and manually approved,
-    // even when this workspace enables bypass for ordinary local agents.
-    const effectiveSkipPermissions = skipPermissions && !(linked && provider === "claude");
+    // even when this workspace enables bypass for ordinary local agents; and
+    // no shared conversation (another member wrote in it) runs with bypass.
+    const sharedWithOthers = linked && continuity!.store.multiHuman(threadId);
+    const effectiveSkipPermissions = bypassAllowedFor({ skipPermissions, linked, provider, sharedWithOthers });
     if (linked && !options.linkedReady && !continuity!.guard.get(threadId)) {
       this.preparing.set(threadId, queued);
       void continuity!.prepare(threadId, queued.runId, provider, () => {
@@ -1887,6 +1910,7 @@ export class Dispatcher {
         ...(provider === "cursor"
           ? [{ kind: "meta" as const, text: cursorPermissionNote(settings.local.permissions) }]
           : effectiveSkipPermissions ? [{ kind: "meta" as const, text: SKIPPED_PERMISSIONS_NOTE }] : []),
+        ...(sharedWithOthers ? [{ kind: "meta" as const, text: SHARED_CONVERSATION_NOTE }] : []),
       ],
       botId: bot.id,
       runId: queued.runId,
@@ -2012,6 +2036,9 @@ export class Dispatcher {
       skipPermissions: effectiveSkipPermissions,
       resumeCursor,
       ...(Object.keys(environment).length ? { environment } : {}),
+      ...(this.deps.protectedPaths
+        ? { protectedPaths: this.deps.protectedPaths({ provider, ...(plan?.codexHome ? { codexHome: plan.codexHome } : {}), ...(plan?.configDir ? { claudeConfigDir: plan.configDir } : {}) }) }
+        : {}),
       ...(this.deps.retryScale ? { retryScale: this.deps.retryScale } : {}),
       onEvent: (event: RuntimeEvent) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
     };

@@ -3,6 +3,7 @@ import { localComputerEnabled } from "./computer/release.js";
 import { desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
 import { isQuickChatThread } from "./harness/continuity.js";
+import { cliCredentialPaths, runtimeProtectedPaths } from "./harness/secret-shield.js";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
@@ -104,6 +105,16 @@ const descriptorPath = resolve(
     ?? join(homedir(), "Library", "Application Support", "BizOS-desktop", "local-harness.json"),
 );
 const harnessRoot = join(stateRoot, "runtime");
+/** Absolute paths the desktop asks the shield to cover (JSON array, e.g. its
+ * cookie store). Malformed input protects nothing extra rather than failing. */
+function desktopProtectedPaths(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(process.env.LOCALBIZOS_PROTECTED_PATHS ?? "[]");
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string" && value.startsWith("/")) : [];
+  } catch {
+    return [];
+  }
+}
 const instancePath = join(stateRoot, "instance.json");
 const indexPath = join(stateRoot, "collaboration-index.json");
 const logPath = join(stateRoot, "sidecar.log");
@@ -3247,6 +3258,24 @@ async function serve(): Promise<void> {
     environment: safeHarnessEnvironment(),
     homeDir: homedir(),
     deniedDirs: [stateRoot, dirname(descriptorPath)],
+    // What an agent's commands may never read, whatever the mode: the runtime
+    // state (owner bearer, provider keys, plans, MCP configs, transcripts),
+    // the desktop's own secrets, and the OTHER CLI's credentials.
+    protectedPaths: ({ provider, codexHome, claudeConfigDir }) => [
+      ...runtimeProtectedPaths({
+        storageRoot: harnessRoot,
+        stateRoot,
+        descriptorPath,
+        ...(nativeDescriptorPath ? { nativeDescriptorPath } : {}),
+        ...(process.env.BOAT_API_KEY_FILE?.trim() ? { boatKeyFile: process.env.BOAT_API_KEY_FILE.trim() } : {}),
+        extra: desktopProtectedPaths(),
+      }),
+      ...cliCredentialPaths({
+        ...(codexHome ? { codexHome } : {}),
+        ...(claudeConfigDir ? { claudeConfigDir } : {}),
+        own: provider === "codex" ? "codex" : provider === "claude" ? "claude" : undefined,
+      }),
+    ],
     devices: false,
     // Agents with unfinished work pick it back up by themselves (gated, cheap).
     heartbeat: true,
