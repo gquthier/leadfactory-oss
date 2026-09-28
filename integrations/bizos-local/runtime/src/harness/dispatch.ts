@@ -367,6 +367,8 @@ interface ActiveTurn extends QueuedTurn {
   sessionContext?: SessionContext;
   /** Sandbox, roots, model, cwd and plan this turn ran under — see `policyKey`. */
   policyFingerprint: string;
+  /** Permission snapshot shared by native drivers and host-owned tools. */
+  skipPermissions: boolean;
   handle: CodexTurnHandle;
   message: ThreadMessage;
   publicMessages: Set<string>;
@@ -764,6 +766,27 @@ export class Dispatcher {
     for (const chainId of chainIds) this.cancelChain(chainId);
   }
 
+  permissionRunIds(): string[] {
+    return [...this.active.values()].map(turn => turn.runId);
+  }
+
+  /** The caller has already persisted `ask`, so no new bypass turn can start.
+   * STOP cancels each affected mission, including queued descendants; never
+   * turn a revoked task into an automatic retry under different permissions. */
+  async revokeBypass(): Promise<string[]> {
+    const chains = new Set([...this.active.values()].filter(turn => turn.skipPermissions).map(turn => turn.chainId));
+    const turns = [...this.active.values()].filter(turn => chains.has(turn.chainId));
+    const retrying = turns.filter(turn => turn.cancelled);
+    for (const chain of chains) this.cancelChain(chain);
+    for (const turn of retrying) turn.handle.stop();
+    const deadline = Date.now() + 10_000;
+    while (turns.some(turn => !turn.handle.settled() || this.active.get(turn.threadId) === turn)) {
+      if (Date.now() >= deadline) throw new Error("Could not confirm permission revocation: an agent has not stopped. Retry stopping it.");
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return turns.map(turn => turn.runId);
+  }
+
   /** Cancel one run without stopping unrelated work queued on the same
    * thread. Voice STOP uses this exact ownership boundary. */
   cancelRun(runId: string): boolean {
@@ -977,7 +1000,7 @@ export class Dispatcher {
   answer(input: { runId: string; askId: string; answer: AskAnswer }): void {
     const turn = [...this.active.values()].find((candidate) => candidate.runId === input.runId);
     if (!turn && this.answerExpired(input)) return;
-    if (!turn) throw new Error("that request is no longer open");
+    if (!turn || turn.cancelled || turn.discarded) throw new Error("that request is no longer open");
     const local = turn.localAsks.get(input.askId);
     if (local) {
       const allowed = input.answer.kind === "allow_once" || input.answer.kind === "allow_always";
@@ -1053,13 +1076,13 @@ export class Dispatcher {
     detailText?: string;
     approvalKey: string;
   }): Promise<boolean> {
-    if (this.approvals[input.approvalKey] === true) return Promise.resolve(true);
     const turn = this.findActiveTurnFor(input);
     if (!turn) return Promise.resolve(false);
-    // `skip-all` is ONE global switch for every permission, whichever process
-    // asks: the CLIs never raise a card under it, and neither does this one.
+    if (this.approvals[input.approvalKey] === true) return Promise.resolve(true);
+    // Like native drivers, host tools use the policy at the start of the turn.
+    // Revocation closes the active scope; enabling never grants an older turn.
     // (A question to the person is not a permission and still goes through.)
-    if (this.deps.settings().local.permissions === "skip-all") return Promise.resolve(true);
+    if (turn.skipPermissions && this.deps.settings().local.permissions === "skip-all") return Promise.resolve(true);
     const askId = newAskId();
     return new Promise<boolean>((resolve) => {
       let settled = false;
@@ -1942,6 +1965,7 @@ export class Dispatcher {
     }
     const turn: ActiveTurn = {
       ...queued,
+      skipPermissions,
       ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
       ...(external?.kind === "api" ? { apiBinding: { providerId: external.providerId, model: model! } } : {}),
       policyFingerprint,
@@ -2041,9 +2065,9 @@ export class Dispatcher {
         // In `skip-all` a request should never arrive; if one does (an MCP
         // elicitation, a tool the CLI still guards), it is accepted rather
         // than left hanging against a card nobody was told to expect.
-        isAlwaysAllowed: skipPermissions
-          ? () => true
-          : (request) => this.isPreApproved(approvalKey(bot.id, request.requestType, request.tool, approvalDetailFor(request.tool, request.detail))),
+        isAlwaysAllowed: (request) => !turn.cancelled && !turn.discarded && (skipPermissions
+          ? this.deps.settings().local.permissions === "skip-all"
+          : this.isPreApproved(approvalKey(bot.id, request.requestType, request.tool, approvalDetailFor(request.tool, request.detail)))),
       });
     } else {
       const start = this.deps.startTurn ?? defaultStartCodexTurn;
@@ -2057,17 +2081,16 @@ export class Dispatcher {
         ...(external?.kind === "codex" ? { modelProvider: external } : {}),
         mcpServers: dynamicTools ? codexServers : mountedServers,
         ...(dynamicTools ? { dynamicTools } : {}),
-        isAlwaysAllowed: skipPermissions
-          ? () => true
-          : (request) =>
-              this.isPreApproved(
-                approvalKey(
-                  bot.id,
-                  request.requestType,
-                  request.tool,
-                  approvalDetailFor(request.tool, request.detail),
-                ),
+        isAlwaysAllowed: (request) => !turn.cancelled && !turn.discarded && (skipPermissions
+          ? this.deps.settings().local.permissions === "skip-all"
+          : this.isPreApproved(
+              approvalKey(
+                bot.id,
+                request.requestType,
+                request.tool,
+                approvalDetailFor(request.tool, request.detail),
               ),
+            )),
       });
     }
     turn.handle = handle;

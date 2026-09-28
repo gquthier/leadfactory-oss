@@ -9,10 +9,19 @@ export type RuntimeMode = "cloud" | "local";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 export type SandboxMode = "read-only" | "workspace-write";
 
-/** Whether a CLI still asks before it acts. `ask` is the product: every
- * permission request becomes an approval card. `skip-all` is the dangerous
- * global escape hatch — nobody is asked, for ANY agent, Claude or Codex. */
+/** Permission policy for new turns in this runtime. Enabling `skip-all`
+ * bypasses native approvals; linked Claude retains its bounded tool surface.
+ * Disabling it stops active bypass missions before revocation is confirmed. */
 export type PermissionPolicy = "ask" | "skip-all";
+
+/** Runtime-only acknowledgement; never persisted as a permission grant. */
+export interface PermissionTransition {
+  effect: "new-turns" | "revoking" | "revoked" | "revocation-failed";
+  /** Previous-process identities are unavailable; an in-process retry cannot prove exit. */
+  manualReviewRequired?: boolean;
+  continuingRunIds: string[];
+  stoppedRunIds: string[];
+}
 
 /** Light, dark, or whatever this Mac is set to. Mirrors
  * `src/lib/localbizos/theme.ts` — the renderer's name for the same three. */

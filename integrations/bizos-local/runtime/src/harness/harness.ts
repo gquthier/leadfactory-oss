@@ -1,4 +1,6 @@
 import { selectionBotFields, type ModelSelectionInput } from "./model-selection.js";
+import { waitForCliShutdown } from "./procs.js";
+import type { PermissionTransition } from "./types.js";
 import { localComputerEnabled, assertLocalComputerEnabled } from "../computer/release.js";
 import { ConversationContinuity } from "./continuity-sync.js";
 import type { ContinuityTransport } from "../continuity-bridge.js";
@@ -509,6 +511,8 @@ export interface ModelsResponse {
   provider?: PlanProvider;
 }
 
+export const PERMISSION_REVOCATION_FILE = "permission-revocation.json";
+
 export class LocalBizosHarness {
   readonly continuity: ConversationContinuity;
   private readonly quickChatStore: QuickChatStore;
@@ -533,6 +537,9 @@ export class LocalBizosHarness {
   /** Canonical identity captured before a later filesystem swap can occur. */
   private readonly storageRootRealPath: string;
   private readonly dispatcher: Dispatcher;
+  private permissionChanges: Promise<void> = Promise.resolve();
+  private permissionTransition: PermissionTransition | undefined;
+  private readonly inheritedPermissionRevocation: boolean;
   private readonly scheduler: Scheduler;
   private readonly heartbeat: Heartbeat;
   private readonly launcher: McpLauncher | null;
@@ -573,6 +580,13 @@ export class LocalBizosHarness {
         options.deniedDirs ?? [],
       ),
     );
+    // Presence is enough to fail closed, including a damaged marker. A new
+    // process has no proof of the identities its predecessor was stopping.
+    this.inheritedPermissionRevocation = existsSync(join(this.storage.layout.root, PERMISSION_REVOCATION_FILE));
+    if (this.inheritedPermissionRevocation) {
+      this.settingsStore.set({ local: { permissions: "ask" } });
+      this.permissionTransition = { effect: "revocation-failed", manualReviewRequired: true, continuingRunIds: [], stoppedRunIds: [] };
+    }
     this.quickChatStore = new QuickChatStore(this.storage, this.clock);
     this.botStore = new BotStore(this.storage, this.clock);
     this.botStore.resetTransient();
@@ -1053,7 +1067,7 @@ export class LocalBizosHarness {
     if (this.options.devices !== false) this.deviceAgent.start();
     // Tasks an app shutdown cut mid-flight continue once from their
     // checkpoint (local runtime only; the dispatcher guards the rest).
-    this.dispatcher.resumeInterruptedTasks();
+    if (!this.inheritedPermissionRevocation) this.dispatcher.resumeInterruptedTasks();
   }
 
   /** Import ~/.codex, ~/.claude and the machine's Cursor account as
@@ -1288,6 +1302,59 @@ export class LocalBizosHarness {
 
   // ── bridge surface ────────────────────────────────────────────────────
 
+  private settingsWithPermissionTransition(): RuntimeSettings & { permissionTransition?: PermissionTransition } {
+    const active = new Set(this.dispatcher.permissionRunIds());
+    return { ...this.settingsStore.get(), ...(this.permissionTransition ? { permissionTransition: {
+      ...this.permissionTransition, continuingRunIds: this.permissionTransition.continuingRunIds.filter(id => active.has(id)),
+    } } : {}) };
+  }
+
+  /** Serialize both permission APIs: a concurrent enable cannot overtake a
+   * pending STOP. Save `ask` first so new turns are protected even if shutdown
+   * cannot be verified. Failure remains explicit until a successful retry. */
+  private changeSettings(patch: unknown): Promise<RuntimeSettings & { permissionTransition?: PermissionTransition }> {
+    const change = this.permissionChanges.then(async () => {
+      const local = (patch as { local?: Record<string, unknown> } | null)?.local;
+      const changesPermissions = local != null && Object.hasOwn(local, "permissions");
+      if (changesPermissions) this.settingsStore.validate(patch);
+      if (changesPermissions && this.inheritedPermissionRevocation) {
+        throw new SettingsError("Could not confirm permission revocation from the previous runtime. Its CLI process identities require manual review; automatic retry cannot prove they stopped.");
+      }
+      if (changesPermissions && local.permissions === "skip-all" && this.permissionTransition?.effect === "revocation-failed") {
+        throw new SettingsError("Could not confirm permission revocation. Retry turning bypass off before enabling it again.");
+      }
+      const revoking = changesPermissions && local.permissions !== "skip-all";
+      try {
+        if (revoking) {
+          this.permissionTransition = { effect: "revoking", continuingRunIds: this.dispatcher.permissionRunIds(), stoppedRunIds: [] };
+          // Must be durable BEFORE `ask`: a crash between either write and
+          // verified shutdown must never look like a completed revocation.
+          this.storage.writeJson(PERMISSION_REVOCATION_FILE, { version: 1, startedAt: this.clock.nowIso() });
+        }
+        const next = this.settingsStore.set(patch);
+        if (changesPermissions) {
+          if (next.local.permissions === "skip-all") {
+            this.permissionTransition = { effect: "new-turns", continuingRunIds: this.dispatcher.permissionRunIds(), stoppedRunIds: [] };
+          } else {
+            // Run completion may precede process-tree exit. Require BOTH.
+            const [stoppedRunIds, childrenGone] = await Promise.all([
+              this.dispatcher.revokeBypass(), waitForCliShutdown({ retryFailed: true }),
+            ]);
+            if (!childrenGone) throw new SettingsError("Could not confirm permission revocation: CLI processes may still be running. Retry stopping them.");
+            this.storage.removeFile(join(this.storage.layout.root, PERMISSION_REVOCATION_FILE), true);
+            this.permissionTransition = { effect: "revoked", continuingRunIds: this.dispatcher.permissionRunIds(), stoppedRunIds };
+          }
+        }
+        return this.settingsWithPermissionTransition();
+      } catch (error) {
+        if (revoking) this.permissionTransition = { effect: "revocation-failed", continuingRunIds: this.dispatcher.permissionRunIds(), stoppedRunIds: [] };
+        throw error;
+      }
+    });
+    this.permissionChanges = change.then(() => undefined, () => undefined);
+    return change;
+  }
+
   readonly runtime = {
     /** Validate everything before a single scope-owned persistence operation.
      * Selecting never mutates a connector's shared default or starts inference. */
@@ -1328,7 +1395,7 @@ export class LocalBizosHarness {
       else this.settingsStore.set({ local: { model, inferenceModel: selection.source === "provider" ? model : null, inferenceProviderId: selection.source === "provider" ? selection.providerId : null, activePlanId: selection.source === "plan" ? selection.planId : null, provider: family } });
       return { scope, selection: effectiveSelection };
     },
-    getSettings: async (): Promise<RuntimeSettings> => this.settingsStore.get(),
+    getSettings: async () => this.settingsWithPermissionTransition(),
     /**
      * Who answers the next turns. `auto` lets the router pick the best
      * connected plan (any family unless one is preferred); `plan` pins one;
@@ -1377,14 +1444,15 @@ export class LocalBizosHarness {
      * `skip-all` is the dangerous mode the Settings screen warns about: Claude
      * runs with `--dangerously-skip-permissions`, codex with
      * `approvalPolicy: "never"` and a `dangerFullAccess` sandbox, and any
-     * request that still reaches the harness is auto-accepted. It is global
-     * ON PURPOSE — a per-bot version would be a promise the CLIs cannot keep.
+     * permission request from a NEW turn is auto-accepted. Existing turns keep
+     * their policy when enabling; disabling stops bypass missions first.
+     * This switch covers every agent in this runtime, not other workspaces.
      */
-    setPermissions: async (input: { permissions: PermissionPolicy }): Promise<RuntimeSettings> => {
+    setPermissions: async (input: { permissions: PermissionPolicy }) => {
       if (!PERMISSION_POLICIES.includes(input?.permissions)) {
         throw new SettingsError('permissions must be "ask" or "skip-all"');
       }
-      return this.settingsStore.set({ local: { permissions: input.permissions } });
+      return this.changeSettings({ local: { permissions: input.permissions } });
     },
     /**
      * The patch names a codex binary by opaque `codexId`, never by path: the
@@ -1414,7 +1482,7 @@ export class LocalBizosHarness {
         }
         resolved = { ...rest, codexPath: chosen ?? "" };
       }
-      const next = this.settingsStore.set(
+      const next = await this.changeSettings(
         resolved === local ? patch : { ...(patch as Record<string, unknown>), local: resolved },
       );
       this.catalog = null;

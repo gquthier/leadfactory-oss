@@ -26,7 +26,13 @@ const uncapturedCliStops = new WeakSet<ChildProcess>();
 const exitedCliGroups = new WeakMap<ChildProcess, CliProcessIdentity[]>();
 
 /** The service must stay alive until detached CLI/MCP process groups are gone. */
-export async function waitForCliShutdown(): Promise<boolean> {
+export async function waitForCliShutdown(options: { retryFailed?: boolean } = {}): Promise<boolean> {
+  // A revocation retry may recheck only the exact ChildProcesses previously
+  // tracked by STOP. Keep the existing identity checks; never discover a new
+  // process merely because its numeric PID resembles a former child.
+  if (options.retryFailed) for (const child of pendingCliStops.keys()) {
+    if (failedCliStops.has(child)) killCliTree(child);
+  }
   const outcomes = await Promise.all([...pendingCliStops.values()]);
   return outcomes.every(Boolean);
 }

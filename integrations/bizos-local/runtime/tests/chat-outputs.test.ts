@@ -271,10 +271,11 @@ function setup(options: { fetchLinkPreview?: (url: string) => Promise<never | nu
     ...(options.fetchLinkPreview ? { fetchLinkPreview: options.fetchLinkPreview } : { linkPreviews: false }),
     startTurn: (input): CodexTurnHandle => {
       turns.push(input);
+      let stopped = false;
       return {
-        stop: () => undefined,
+        stop: () => { stopped = true; input.onEvent({ type: "turn.completed", ok: false, stopReason: "interrupted" }); },
         respond: (requestId, decision) => { responded.push({ requestId, decision: String(decision) }); return "allowed-once"; },
-        sessionId: () => null, settled: () => false,
+        sessionId: () => null, settled: () => stopped,
       };
     },
     localTeamTools: () => [],
@@ -405,13 +406,15 @@ describe("skip-all is one global switch", () => {
     expect(control.blocks.some((block) => block.kind === "ask")).toBe(false);
     expect(control.blocks.some((block) => block.kind === "meta" && /permission/i.test(block.text))).toBe(true);
 
-    // Back to `ask`: the same question waits for a card again.
+    // Revocation stops the bypass turn. Only an explicit new task can ask again.
     await harness.runtime.setPermissions({ permissions: "ask" });
+    await expect(dispatcher.askLocally({ botId: bot.id, summary: "Old run", approvalKey: "old-run" })).resolves.toBe(false);
+    await harness.threads.send({ botId: bot.id }, { text: "New authorized task" });
     let settled = false;
     void dispatcher.askLocally({ botId: bot.id, summary: "Allow Vega to act on github.com?", approvalKey: `${bot.id}|permission|computer|github.com` }).then(() => { settled = true; });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(settled).toBe(false);
-    const again = (await harness.threads.get({ botId: bot.id })).messages.find((row) => row.role === "bot")!;
+    const again = (await harness.threads.get({ botId: bot.id })).messages.filter((row) => row.role === "bot").at(-1)!;
     expect(again.blocks.find((block) => block.kind === "ask")).toMatchObject({ tool: "computer", status: "pending", impact: "medium", allowAlways: true });
   });
 });

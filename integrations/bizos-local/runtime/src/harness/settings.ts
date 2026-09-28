@@ -346,13 +346,17 @@ export class SettingsStore {
     return this.cached;
   }
 
-  set(patch: unknown): RuntimeSettings {
+  validate(patch: unknown): void {
     if (patch && typeof patch === "object") {
       const local = (patch as Record<string, unknown>).local;
       if (local && typeof local === "object") {
         validateLocalPatch(local as Record<string, unknown>, this.policy);
       }
     }
+  }
+
+  set(patch: unknown): RuntimeSettings {
+    this.validate(patch);
     this.cached = mergeSettings(this.cached, patch);
     this.storage.writeJson(SETTINGS_FILE, this.cached);
     return this.cached;
