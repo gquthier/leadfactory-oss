@@ -23,14 +23,14 @@ const MANIFEST: LocalArchitectureManifest = {
   threadId: "local:inst_secret_1:thread:bot:bot_vega", workspaceDir: "/Users/demo/Acme/Agents/Vega", sharedBrainPath: "/Users/demo/Acme",
   sandbox: "workspace-write", supportedProviders: ["codex", "claude", "cursor", "ollama"],
   peers: [{ agentId: "a1", name: "CEO" }, { agentId: "a2", name: "Nova" }], recruitment: "autonomous-local-tools",
-  host: { platform: "darwin", home: "/Users/demo", provider: "codex", permissions: "ask", tools: ["tool:checkpoint_task"] },
+  host: { platform: "darwin", home: "/Users/demo", provider: "codex", permissions: "ask", tools: ["tool:checkpoint_task", "tool:schedule_routine", "tool:recruit_agent"] },
 };
 
 describe("slim local brief", () => {
   it("fits the budget, keeps the promises that matter and drops internal ids", () => {
     const brief = buildLocalBrief({ bot: BOT, orgName: "Acme", manifest: MANIFEST, hasComputer: true, teamTools: true });
     const before = buildPersonaPrompt({ bot: BOT, orgName: "Acme", since: [], roster: [BOT], sharedFolders: [MANIFEST.workspaceDir], hasComputer: true, localArchitecture: MANIFEST });
-    expect(brief.length).toBeLessThan(3500);
+    expect(brief.length).toBeLessThan(3900);
     expect(before.length).toBeGreaterThan(brief.length * 3);
     // Identity, mission, freedom.
     expect(brief).toContain("You are Vega, CTO, a teammate at Acme.");
@@ -60,6 +60,27 @@ describe("slim local brief", () => {
     expect(brief).not.toContain("recruit_agent");
     expect(brief).toMatch(/aren't available with this provider/);
     expect(brief).toContain("recruitment: unavailable");
+  });
+
+  it("names only mounted tools and describes the team with roles", () => {
+    const manifest = { ...MANIFEST, peers: [{ agentId: "a1", name: "Ada", title: "CEO" }],
+      host: { ...MANIFEST.host!, tools: ["tool:recruit_agent", "tool:schedule_routine", "tool:list_routines", "tool:cancel_routine", "tool:manage_agent", "tool:send_to_chat", "tool:list_accessible_computers", "tool:bizos_email_inbox"] } };
+    const brief = buildLocalBrief({ bot: BOT, orgName: "Acme", manifest, teamTools: true });
+    for (const name of ["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat", "list_accessible_computers", "bizos_email_inbox"]) expect(brief).toContain(name);
+    expect(brief).toContain("Ada (CEO)");
+    expect(brief).not.toContain("bizos_email_send");
+    expect(brief).not.toContain("computer_act");
+  });
+
+  it("lists MCP tools only when the local team server is mounted", () => {
+    const manifest = { ...MANIFEST, mcpToolNames: ["bizos_email_inbox", "schedule_routine"],
+      host: { ...MANIFEST.host!, tools: [] } };
+    const unavailable = buildLocalBrief({ bot: BOT, orgName: "Acme", manifest, teamTools: false });
+    expect(unavailable).not.toContain("bizos_email_inbox");
+    const available = buildLocalBrief({ bot: BOT, orgName: "Acme", manifest: {
+      ...manifest, host: { ...manifest.host, tools: ["mcp:local_team_actions"] },
+    }, teamTools: true });
+    expect(available).toContain("bizos_email_inbox");
   });
 
   it("neutralises a hostile name", () => {
@@ -509,6 +530,7 @@ describe("late answers through the HTTP facade", () => {
     };
     const f = Object.create(CollaborationFacade.prototype) as InstanceType<typeof CollaborationFacade>;
     Object.assign(f, { instanceId: "qa", invoke });
+    Object.defineProperty(f, "cloud", { value: { ownsRun: () => false } });
     await f.answer("local:qa:run:run_abc", { askId: "ask_abc", answer: { kind: "allow_once" } });
     expect(calls).toContain("lbz:threads:answerExpired");
     expect(calls).not.toContain("lbz:threads:answer");

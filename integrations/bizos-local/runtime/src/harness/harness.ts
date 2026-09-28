@@ -3547,7 +3547,7 @@ export class LocalBizosHarness {
     dispatchChild: async (
       scope: { botId: string; threadId: string; runId: string },
       target: { botId: string; groupId?: string },
-      input: { text: string; messageId: string },
+      input: { text: string; messageId: string; allowPreviouslyVisited?: boolean },
     ) => {
       await this.refreshSessionCookie();
       return this.dispatcher.dispatchChild(scope, target, input);

@@ -142,8 +142,7 @@ describe("CEO on-demand recruitment", () => {
       expect(recruit.instructions).toContain(args.context);
       expect(recruit.providerId).toBeUndefined();
       expect(recruit.planId).toBe((await f.harness.bots.list()).find((bot) => bot.id === f.ceoId)?.planId);
-      finish(f.turns.at(-1)!);
-      finish(f.turns.at(-2)!);
+      for (const turn of f.turns.slice(-3).reverse()) finish(turn);
     }
     expect(ids.size).toBe(5);
     expect(await f.harness.bots.list()).toHaveLength(6);
@@ -179,8 +178,9 @@ describe("CEO on-demand recruitment", () => {
     expect(bots).toHaveLength(2);
     expect(bots.find((bot) => bot.name === request.name)!.instructions).toContain(request.context);
     expect(await f.harness.groups.list()).toHaveLength(1);
-    expect(f.turns).toHaveLength(2);
-    expect(f.turns[1]!.text).toContain(request.initial_task);
+    expect(f.turns).toHaveLength(3);
+    expect(f.turns[1]!.text).toContain("Introduce yourself to the person");
+    expect(f.turns[2]!.text).toContain(request.initial_task);
     expect(f.index.events.filter((event) => event.type === "agent.recruited")).toHaveLength(1);
     expect(f.index.roleBindings).toEqual({});
   });
@@ -200,8 +200,9 @@ describe("CEO on-demand recruitment", () => {
     expect(result.agent).toMatchObject({ name: "Marketing", title: "Prospecting and cold email", description: expect.any(String) });
     expect(result.agent).not.toHaveProperty("avatarDataUrl");
     expect(result.dispatch).toMatchObject({ status: "started", runId: expect.any(String), messageId: expect.any(String), parentRunId: `local:${INSTANCE}:run:${parentRunId}` });
-    expect(f.turns).toHaveLength(2);
-    expect(f.turns[1]!.text).toContain("Prepare the first sourced prospect shortlist.");
+    expect(f.turns).toHaveLength(3);
+    expect(f.turns[1]!.text).toContain("Introduce yourself to the person");
+    expect(f.turns[2]!.text).toContain("Prepare the first sourced prospect shortlist.");
     const recruited = (await f.harness.bots.list()).find((bot) => bot.name === "Marketing")!;
     expect(recruited.instructions).toContain(system.trim());
     expect(recruited.instructions).toContain("Use only the supplied French ICP");

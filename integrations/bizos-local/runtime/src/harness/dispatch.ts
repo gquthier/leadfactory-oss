@@ -709,7 +709,7 @@ export class Dispatcher {
   dispatchChild(
     scope: { botId: string; threadId: string; runId: string },
     target: { botId: string; groupId?: string },
-    input: { text: string; messageId: string },
+    input: { text: string; messageId: string; allowPreviouslyVisited?: boolean },
   ): ChildDispatchResult {
     const parent = this.active.get(scope.threadId);
     if (!parent || parent.runId !== scope.runId || parent.botId !== scope.botId || parent.cancelled || parent.discarded) {
@@ -742,6 +742,7 @@ export class Dispatcher {
       triggerMessageId: message.id,
       fromBotId: parent.botId,
       ...(parent.executionPolicy ? { executionPolicy: parent.executionPolicy } : {}),
+      ...(input.allowPreviouslyVisited ? { allowPreviouslyVisited: true } : {}),
     });
     if (!runId) throw new Error("the parent mission reached its turn or queue limit");
     const run = this.deps.runs.get(runId);
@@ -1605,6 +1606,8 @@ export class Dispatcher {
     executionPolicy?: TurnExecutionPolicy;
     triggerMessageId?: string;
     groupLead?: boolean;
+    /** Recruitment only: one introduction DM and one distinct team task. */
+    allowPreviouslyVisited?: boolean;
     /** A task continued by this turn (restart / late-approval resumes). */
     resume?: { task: TaskCheckpoint; previousCheckpoint: string; restartResumes?: number };
   }): string | null {
@@ -1619,7 +1622,7 @@ export class Dispatcher {
     }
     // A bot answers a given message once. Without this, two teammates each
     // naming a third put the same bot in the queue twice for one question.
-    if (chain.visited.has(input.botId)) {
+    if (chain.visited.has(input.botId) && !input.allowPreviouslyVisited) {
       if (chain.outstanding <= 0) this.chains.delete(input.chainId);
       return null;
     }
