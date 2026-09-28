@@ -166,6 +166,8 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
       const result = (await api("GET", `/api/collaboration/threads/${encodeURIComponent(thread.id)}/messages`)).body;
       return JSON.stringify(result).includes("Ari m'a briefée") ? result : null;
     }, "recruit greeting", 30_000);
+    expect(messages.messages[0].role).toBe("assistant");
+    expect(messages.messages[0].senderName).toBe("Lena");
     expect(JSON.stringify(messages)).toContain("Tu peux me solliciter");
   }, 40_000);
 });
