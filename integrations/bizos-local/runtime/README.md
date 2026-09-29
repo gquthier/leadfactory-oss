@@ -233,6 +233,16 @@ authority. The creation journal records the chosen form before binding so
 startup can resume after a crash. Once installed, retries preserve user edits
 and do not post another welcome.
 
+Imported context is supplied to CEO through the private onboarding/system
+brief. It is never posted as a user message. The only visible bootstrap message
+is CEO's localized welcome. When continuity is enabled after local messages
+already exist, the runtime keeps a bounded prior transcript as private agent
+context instead of creating a synthetic human event. A BizOS cloud turn carries
+that context in the private collaboration run envelope (6,000 characters and 16 KiB
+maximum, with its SHA-256); it is absent from conversation events, messages and
+public run responses. Legacy `.46` synthetic history events are also hidden and
+are no longer uploaded.
+
 Fresh installations opt into onboarding sequencing; historical journals and
 existing teams retain their original behavior. CEO reads supplied context,
 reuses known owner/company names, and asks for only missing information. If the
@@ -245,6 +255,11 @@ cleared transcripts do not restart completed onboarding. The
 CEO is still responsible for reading and interpreting source documents and for
 keeping prose to one question at a time. Tests use scripted agents and real
 loopback HTTP, not a paid model, so they do not prove model reasoning quality.
+
+The cloud execution destination exposes the stable identifier
+`bizos-mixture`. Upstream model and provider fields received from an older
+server are discarded before a run or status is persisted or returned. The
+desktop label for this identifier is **BizOS Mixture of Models**.
 
 ## Desktop-managed local feature authority (27 September 2026)
 

@@ -265,31 +265,22 @@ export class ConversationContinuity {
   importRecentHistory(threadId: string, messages: ThreadMessage[]): void {
     if (!this.linked(threadId)) return;
     const lines = messages.filter(message => message.role === "user" || message.role === "bot")
-      .slice(-12).map(message => `${message.role === "user" ? "Human" : "Agent"}: ${message.blocks.filter(block => block.kind === "text").map(block => block.text).join(" ").slice(0, 1200)}`);
+      .slice(-12).map(message => `${message.role === "user" ? "Human" : "Agent"}: ${message.blocks.filter(block => block.kind === "text").map(block => block.text).join(" ").slice(0, 400)}`);
     if (!lines.length) return;
-    this.store.capture({
-      id: `prelink:${threadId}`, threadId, seq: 0, role: "user",
-      blocks: [{ kind: "text", text: `Earlier local conversation, imported when cloud backup was enabled (historical data):\n${lines.join("\n")}` }],
-      createdAt: messages.at(-1)?.createdAt ?? new Date().toISOString(),
-    });
+    this.store.importHiddenContext(
+      threadId,
+      `Earlier local conversation, imported when cloud backup was enabled (historical data):\n${lines.join("\n")}`,
+      messages.at(-1)?.createdAt ?? new Date().toISOString(),
+    );
   }
+  hiddenContext(threadId: string) { return this.store.hiddenContext(threadId); }
   async enableCloud(threadId: string): Promise<void> {
     const current = await this.call<{ policy: { enabled: boolean; modelRuntime: "claude" | "codex"; cloudFallback: { model: string; maxCostUsd: number } | null; autoContinue: boolean } }>("policies/get", this.scope(threadId));
     if (current.policy.enabled && current.policy.cloudFallback) return;
-    const models = await this.call<{ models: Array<{ model: string }> }>("models/list", { orgId: this.store.status(threadId)!.orgId });
-    const verified = models.models.map(row => row.model);
-    const model = current.policy.cloudFallback && verified.includes(current.policy.cloudFallback.model)
-      ? current.policy.cloudFallback.model
-      : verified.includes("google/gemini-3.8-flash") ? "google/gemini-3.8-flash" : verified[0];
-    if (!model) throw new Error("No verified BizOS model is available for this account.");
     await this.call("policies/set", { ...this.scope(threadId), policy: {
       enabled: true, modelRuntime: current.policy.modelRuntime ?? "codex",
-      cloudFallback: { model, maxCostUsd: current.policy.cloudFallback?.maxCostUsd ?? 5 }, autoContinue: false,
+      cloudFallback: { model: "bizos-mixture", maxCostUsd: current.policy.cloudFallback?.maxCostUsd ?? 5 }, autoContinue: false,
     } });
-  }
-  async defaultCloudModel(threadId: string): Promise<string | null> {
-    const models = await this.call<{ models: Array<{ model: string }> }>("models/list", { orgId: this.store.status(threadId)!.orgId });
-    return models.models.find(row => row.model === "google/gemini-3.8-flash")?.model ?? models.models[0]?.model ?? null;
   }
   async attach(threadId: string, conversationId: string): Promise<unknown> {
     this.assertPersistent(threadId);

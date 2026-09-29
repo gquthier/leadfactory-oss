@@ -168,6 +168,16 @@ réponses et STOP sont projetés dans le même fil. Aucun échec cloud ne lance 
 fournisseur personnel. Une réponse perdue conserve l’identifiant du message et
 bloque une bascule jusqu’à récupération de ce même envoi.
 
+Le contexte d’entreprise importé arrive au CEO dans son brief système privé :
+aucune consigne technique n’est publiée comme message humain. Si un fil local
+existait avant l’activation de la continuité, ses douze derniers messages sont
+résumés dans un contexte privé borné (6 000 caractères et 16 Kio maximum),
+accompagné de son SHA-256 et transmis dans l’enveloppe privée du run cloud. Ce
+contexte n’apparaît jamais dans les événements, messages ou réponses publiques ;
+les anciens événements synthétiques `.46` sont masqués et ne sont plus envoyés.
+Le statut et les runs BizOS exposent uniquement l’identifiant stable
+`bizos-mixture`, affiché par le Desktop comme **BizOS Mixture of Models**.
+
 Périmètre : DM persistant déjà lié, compte/enrollment valides et policy cloud
 existante. QuickChat, groupes, fils non liés ou avec historique antérieur non
 canonique restent indisponibles. Aucun import implicite de fichiers ou d’ancien

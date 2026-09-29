@@ -59,6 +59,60 @@ it("preserves a linked user message beyond the former 20k character cap", () => 
   expect(store.pending("bot:a")).toHaveLength(1);
   expect(store.pending("bot:a")[0]?.content).toBe(text);
 });
+it("keeps imported pre-link history in private agent context and out of the conversation archive", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const { ThreadStore } = await import("../src/harness/threads.js");
+  const { systemClock } = await import("../src/harness/clock.js");
+  const continuity = new ConversationContinuity(storage);
+  continuity.store.link("bot:a", binding);
+  continuity.importRecentHistory("bot:a", [
+    message(1, "Le tarif convenu est de 79 EUR."),
+    {
+      ...message(2, "Je prépare la proposition."),
+      role: "bot" as const,
+      deliveryState: "complete" as const,
+      botId: "a",
+    },
+  ]);
+
+  const threads = new ThreadStore(storage, systemClock, continuity);
+  const visible = JSON.stringify(threads.snapshot({ botId: "a" }).messages);
+  const privateContext = continuity.store.context("bot:a");
+  const hidden = continuity.hiddenContext("bot:a");
+
+  expect(visible).not.toContain("Earlier local conversation");
+  expect(visible).not.toContain("79 EUR");
+  expect(continuity.store.pending("bot:a")).toEqual([]);
+  expect(continuity.store.archive("bot:a")).toEqual([]);
+  expect(privateContext).toContain("79 EUR");
+  expect(hidden).toMatchObject({
+    kind: "prior-local-transcript",
+    content: expect.stringContaining("79 EUR"),
+    sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+  });
+  expect(Buffer.byteLength(hidden!.content, "utf8")).toBeLessThanOrEqual(16 * 1024);
+  expect(hidden!.content.length).toBeLessThanOrEqual(6_000);
+  continuity.close();
+});
+it("hides the legacy synthetic pre-link user event after upgrading an existing profile", async () => {
+  const { storage, store } = fixture();
+  store.link("bot:a", binding);
+  store.capture({
+    ...message(1, "Earlier local conversation, imported when cloud backup was enabled (historical data):\nHuman: ancien échange"),
+    id: "prelink:bot:a",
+  });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const { ThreadStore } = await import("../src/harness/threads.js");
+  const { systemClock } = await import("../src/harness/clock.js");
+  const continuity = new ConversationContinuity(storage);
+  const threads = new ThreadStore(storage, systemClock, continuity);
+
+  expect(continuity.store.pending("bot:a")).toEqual([]);
+  expect(threads.snapshot({ botId: "a" }).messages).toEqual([]);
+  expect(continuity.hiddenContext("bot:a")?.content).toContain("ancien échange");
+  continuity.close();
+});
 it("permits QuickChat continuity through the enrolled bridge", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
@@ -84,6 +138,27 @@ it("persists the opt-out and refuses new cloud links or transcript capture", asy
   await expect(continuity.attach("bot:b", "conversation-1")).rejects.toThrow(/disabled/);
   expect(transport).not.toHaveBeenCalled();
   expect(new ConversationContinuity(storage).backupEnabled()).toBe(false);
+  continuity.close();
+});
+it("configures BizOS cloud execution with only the opaque mixture identifier", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const calls: Array<{ operation: string; body: Record<string, unknown> }> = [];
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    calls.push({ operation, body });
+    if (operation === "policies/get") return { policy: { enabled: false, modelRuntime: "codex", cloudFallback: null, autoContinue: false } } as never;
+    if (operation === "policies/set") return { ok: true } as never;
+    throw new Error(`unexpected ${operation}`);
+  });
+  continuity.store.link("bot:a", binding);
+
+  await continuity.enableCloud("bot:a");
+
+  expect(calls.map(call => call.operation)).toEqual(["policies/get", "policies/set"]);
+  expect(calls[1]?.body).toMatchObject({
+    policy: { enabled: true, cloudFallback: { model: "bizos-mixture", maxCostUsd: 5 } },
+  });
+  expect(JSON.stringify(calls)).not.toMatch(/gemini|deepseek|openrouter|qwen|anthropic/i);
   continuity.close();
 });
 it("does not advance memory after disk failure or silently reset a corrupt continuity ledger", () => {

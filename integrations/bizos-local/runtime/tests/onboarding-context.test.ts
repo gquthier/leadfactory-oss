@@ -82,7 +82,9 @@ describe("Autonomous Company from context", () => {
     expect(readFileSync(join(vault, "Company.md"), "utf8")).toContain("Ada Lovelace");
     const welcome = (await harness.threads.get({ botId: result.bots.ceo })).messages[0]!;
     expect(JSON.stringify(welcome)).not.toContain("Two questions");
-    expect(JSON.stringify(welcome)).toContain("context");
+    expect(welcome.role).toBe("bot");
+    expect(welcome.blocks).toContainEqual({ kind: "text", text: "Hi Ada 👋 I’m your CEO. Your business context is ready. I’ll read it first and build on what you already have." });
+    expect(JSON.stringify(welcome)).not.toMatch(/Pick up the context imported|Earlier local conversation/);
     writeFileSync(join(vault, "Knowledge/Imported Context/files/Company.md"), "Owner correction");
     await facade.applyBrainTemplate({ id: "company-os", rootId: "new", context: snapshot });
     expect(readFileSync(join(vault, "Knowledge/Imported Context/files/Company.md"), "utf8")).toBe("Owner correction");

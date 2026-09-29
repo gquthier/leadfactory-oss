@@ -1,5 +1,6 @@
 import { ContinuityBridgeError } from '../continuity-bridge.js';
 import type { ConversationContinuity } from './continuity-sync.js';
+import type { HiddenConversationContext } from './continuity.js';
 import type { Storage } from './storage.js';
 
 export interface CloudRun {
@@ -12,17 +13,51 @@ interface Binding { accountId: string; orgId: string; conversationId: string; in
 interface SavedRun { threadId: string; binding: Binding; run: CloudRun; eventId: string; }
 interface State {
   selections: Record<string, { destination: 'personal' | 'bizos'; binding: Binding }>;
-  requests: Record<string, { threadId: string; content: string; binding: Binding; result?: CloudSend; rejected?: boolean }>;
+  requests: Record<string, { threadId: string; content: string; binding: Binding; hiddenContext?: HiddenConversationContext; result?: CloudSend; rejected?: boolean }>;
   runs: Record<string, SavedRun>;
 }
 const FILE = 'cloud-execution.json';
+const BIZOS_MODEL = 'bizos-mixture';
 const active = (run: CloudRun) => run.state === 'queued' || run.state === 'running';
+const states = new Set<CloudRun['state']>(['queued', 'running', 'done', 'failed', 'cancelled']);
+function publicError(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  return /gemini|deepseek|openrouter|qwen|anthropic/i.test(value) ? 'BizOS execution failed.' : value;
+}
+function cloudRun(value: unknown): CloudRun {
+  if (!value || typeof value !== 'object') throw new Error('BizOS returned an invalid run.');
+  const row = value as Record<string, unknown>;
+  if (![row.runId, row.threadId, row.agentId, row.triggerMessageId, row.createdAt, row.updatedAt].every(item => typeof item === 'string')
+    || typeof row.state !== 'string' || !states.has(row.state as CloudRun['state'])) throw new Error('BizOS returned an invalid run.');
+  return {
+    runId: String(row.runId), threadId: String(row.threadId), agentId: String(row.agentId), triggerMessageId: String(row.triggerMessageId),
+    state: row.state as CloudRun['state'], error: publicError(row.error), createdAt: String(row.createdAt), updatedAt: String(row.updatedAt),
+  };
+}
+function cloudSend(value: unknown): CloudSend {
+  if (!value || typeof value !== 'object') throw new Error('BizOS returned an invalid message receipt.');
+  const row = value as Record<string, unknown>;
+  if (typeof row.eventId !== 'string' || typeof row.duplicate !== 'boolean' || !Array.isArray(row.runs)) throw new Error('BizOS returned an invalid message receipt.');
+  return { eventId: row.eventId, duplicate: row.duplicate, runs: row.runs.map(cloudRun) };
+}
 /** Only linked conversations use this route. No local files or credentials are
  * copied, and no unsuccessful cloud request falls back to a personal driver. */
 export class CloudExecution {
   private state: State;
   constructor(private storage: Storage, private continuity: ConversationContinuity) {
-    this.state = storage.readJsonStrict(FILE, { selections: {}, requests: {}, runs: {} });
+    const loaded = storage.readJsonStrict<State>(FILE, { selections: {}, requests: {}, runs: {} });
+    this.state = {
+      selections: loaded.selections,
+      requests: Object.fromEntries(Object.entries(loaded.requests).map(([id, request]) => [id, {
+        threadId: request.threadId, content: request.content, binding: request.binding,
+        ...(request.hiddenContext ? { hiddenContext: request.hiddenContext } : {}),
+        ...(request.result ? { result: cloudSend(request.result) } : {}), ...(request.rejected ? { rejected: true } : {}),
+      }])),
+      runs: Object.fromEntries(Object.entries(loaded.runs).map(([id, saved]) => [id, {
+        threadId: saved.threadId, binding: saved.binding, eventId: saved.eventId, run: cloudRun(saved.run),
+      }])),
+    };
+    if (JSON.stringify(loaded) !== JSON.stringify(this.state)) this.save();
   }
   private save() { this.storage.writeJson(FILE, this.state); }
   private binding(threadId: string): Binding {
@@ -45,14 +80,15 @@ export class CloudExecution {
       this.binding(threadId);
       const saved = this.state.selections[threadId];
       if (saved) this.assertBinding(threadId, saved.binding);
-      const result = await this.continuity.cloud(threadId, 'cloud/status', {}) as { available: boolean; active: boolean; model: string; reason?: string };
+      const result = await this.continuity.cloud(threadId, 'cloud/status', {}) as { available: boolean; active: boolean; model?: string; provider?: string; reason?: string; conversationId?: string; agentId?: string };
       if (!result.available && result.reason === 'policy_changed') {
-        const model = await this.continuity.defaultCloudModel(threadId).catch(() => null);
-        if (model) return { destination, available: true, active: result.active, model, setupRequired: true };
+        return { destination, available: true, active: result.active, model: BIZOS_MODEL, setupRequired: true };
       }
-      return { destination, ...result };
+      const reason = publicError(result.reason);
+      return { destination, available: result.available, active: result.active, model: BIZOS_MODEL,
+        ...(reason ? { reason } : {}), ...(result.conversationId ? { conversationId: result.conversationId } : {}), ...(result.agentId ? { agentId: result.agentId } : {}) };
     } catch (error) {
-      return { destination, available: false, reason: error instanceof Error ? error.message : 'BizOS is unavailable.' };
+      return { destination, available: false, reason: publicError(error instanceof Error ? error.message : null) ?? 'BizOS is unavailable.' };
     }
   }
   async select(threadId: string, destination: 'personal' | 'bizos') {
@@ -102,11 +138,12 @@ export class CloudExecution {
     await this.continuity.sync(threadId);
     const uncertainBefore = Boolean(old && !old.result && !old.rejected);
     // Persist before dispatch: process death or transport loss remains unknown.
-    this.state.requests[clientMessageId] = { threadId, content, binding: this.binding(threadId), ...(old?.result ? { result: old.result } : {}) };
+    const hiddenContext = old ? old.hiddenContext : this.continuity.hiddenContext(threadId) ?? undefined;
+    this.state.requests[clientMessageId] = { threadId, content, binding: this.binding(threadId), ...(hiddenContext ? { hiddenContext } : {}), ...(old?.result ? { result: old.result } : {}) };
     this.save();
     let result: CloudSend;
     try {
-      result = await this.continuity.cloud(threadId, 'cloud/send', { clientMessageId, content }) as CloudSend;
+      result = cloudSend(await this.continuity.cloud(threadId, 'cloud/send', { clientMessageId, content, ...(hiddenContext ? { hiddenContext } : {}) }));
     } catch (error) {
       // A later rejection cannot prove that an earlier timed-out attempt did
       // not commit. Only the first attempt's explicit pre-admission refusal
@@ -118,7 +155,7 @@ export class CloudExecution {
       throw error;
     }
     this.assertBinding(threadId, saved.binding);
-    if (!result.eventId || !Array.isArray(result.runs) || result.runs.some(run => run.threadId !== saved.binding.conversationId))
+    if (result.runs.some(run => run.threadId !== saved.binding.conversationId))
       throw new Error('BizOS returned a different conversation.');
     this.state.requests[clientMessageId]!.result = result;
     for (const run of result.runs) this.state.runs[`cloud_${run.runId}`] = {
@@ -132,11 +169,12 @@ export class CloudExecution {
     const saved = this.state.runs[id];
     if (!saved) throw new Error('Cloud run not found.');
     this.assertBinding(saved.threadId, saved.binding);
-    const response = await this.continuity.cloud(saved.threadId, stop ? 'cloud/stop' : 'cloud/run', { runId: saved.run.runId }) as { run: CloudRun };
-    if (!response.run || response.run.runId !== saved.run.runId || response.run.threadId !== saved.binding.conversationId)
+    const response = await this.continuity.cloud(saved.threadId, stop ? 'cloud/stop' : 'cloud/run', { runId: saved.run.runId }) as { run?: unknown };
+    const run = cloudRun(response.run);
+    if (run.runId !== saved.run.runId || run.threadId !== saved.binding.conversationId)
       throw new Error('BizOS returned a different run.');
-    if (stop && active(response.run)) throw new Error('BizOS has not confirmed STOP.');
-    saved.run = response.run;
+    if (stop && active(run)) throw new Error('BizOS has not confirmed STOP.');
+    saved.run = run;
     this.save();
     await this.continuity.sync(saved.threadId);
     return structuredClone(saved);
