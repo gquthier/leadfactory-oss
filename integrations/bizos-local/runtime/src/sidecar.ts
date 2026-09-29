@@ -1953,6 +1953,8 @@ export class CollaborationFacade {
   async deleteThread(threadId: string): Promise<{ deleted: true }> {
     const target = this.target(threadId);
     const localThreadId = threadIdForTarget(target);
+    if ("chatId" in target && (await this.harness.quickChats.get(target.chatId)).activeRunIds.length)
+      throw new HttpError(409, "run_active", "Stop the active QuickChat run before deleting it.");
     await this.harness.continuity.deleteConversation(localThreadId);
     if ("chatId" in target) await this.harness.quickChats.remove(target.chatId);
     else await this.harness.threads.clear(target);

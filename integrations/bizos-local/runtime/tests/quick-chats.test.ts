@@ -330,6 +330,55 @@ describe('QuickChat expiry', () => {
 
 
 describe('QuickChat durable deletion projection', () => {
+  it('deletes a completed signed-image QuickChat after a lost cloud tombstone reply and keeps it gone after restart', async () => {
+    const calls: string[] = [];
+    let loseReply = true;
+    const f = fixture(undefined, undefined, undefined, { continuityTransport: async (operation) => {
+      calls.push(operation);
+      if (operation === 'status') return { orgId: 'org-a', userId: 'owner-a', installationId: 'install-a', workspaceId: 'workspace-a' } as never;
+      if (operation === 'conversations/delete') {
+        if (loseReply) { loseReply = false; throw new Error('cloud tombstone committed but reply lost'); }
+        return { conversationId: 'conversation-a', deleted: true, deletedAt: '2026-09-29T21:01:21Z' } as never;
+      }
+      throw new Error(`unexpected ${operation}`);
+    } });
+    const chat = await f.harness.quickChats.create('image-deletion');
+    const sent = await f.harness.quickChats.send(chat.id, 'Create an image', 'image-message');
+    done(f.turns[0]!, 'Image generated.');
+    expect((await f.harness.runs.get(sent.runIds[0]!))?.state).toBe('completed');
+    const threadId = `chat:${chat.id}`;
+    f.harness.threads.appendGeneratedImage({ botId: chat.id, threadId, runId: sent.runIds[0]! }, {
+      messageId: 'generated-image-123e4567-e89b-42d3-a456-426614174000', attachmentId: 'generated-image-123e4567-e89b-42d3-a456-426614174000',
+      path: join(f.root, 'image.png'), url: `file://${f.root}/image.png`, fileName: 'image.png', mimeType: 'image/png',
+      size: 10, width: 1, height: 1,
+    });
+    f.harness.continuity.store.link(threadId, {
+      conversationId: 'conversation-a', installationId: 'install-a', accountId: 'owner-a', orgId: 'org-a', workspaceId: 'workspace-a',
+    });
+    f.harness.continuity.store.effect(threadId, { id: 'signed-image-effect', tool: 'bizos_image_generate',
+      class: 'mediated', state: 'confirmed', generation: 1 });
+    const facade = new CollaborationFacade(f.harness, 'fixture', new LocalTeamBroker(), emptyDurableIndex(), null, () => {});
+    const publicId = (await facade.bootstrap()).threads.find(row => row.kind === 'chat')!.id;
+    await expect(facade.deleteThread(publicId)).rejects.toThrow('reply lost');
+    expect((await f.harness.quickChats.list()).chats).toHaveLength(1);
+    await expect(facade.deleteThread(publicId)).resolves.toEqual({ deleted: true });
+    expect(calls.filter(operation => operation === 'conversations/delete')).toHaveLength(2);
+    expect((await f.harness.quickChats.list()).chats).toHaveLength(0);
+    f.harness.stop();
+    const restored = fixture(f.root);
+    expect((await restored.harness.quickChats.list()).chats).toHaveLength(0);
+  });
+
+  it('refuses deletion of a genuinely running QuickChat with a specific 409', async () => {
+    const f = fixture();
+    const chat = await f.harness.quickChats.create('active-deletion');
+    await f.harness.quickChats.send(chat.id, 'Still running', 'active-message');
+    const facade = new CollaborationFacade(f.harness, 'fixture', new LocalTeamBroker(), emptyDurableIndex(), null, () => {});
+    const publicId = (await facade.bootstrap()).threads.find(row => row.kind === 'chat')!.id;
+    await expect(facade.deleteThread(publicId)).rejects.toMatchObject({ status: 409, code: 'run_active' });
+    expect((await f.harness.quickChats.list()).chats).toHaveLength(1);
+  });
+
   it('erases content-bearing idempotency records and emits a deletion hint; restart replays cleanup', async () => {
     const clock = fixedClock(epoch); const f = fixture(undefined, clock);
     const index = emptyDurableIndex();
