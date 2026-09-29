@@ -190,6 +190,10 @@ export class ContinuityStore {
    * archive is never modified: QuickChat itself is local and ephemeral. */
   forgetQuickChat(threadId: string): void {
     if (!isQuickChatThread(threadId)) throw new Error("Only QuickChat continuity can be forgotten here.");
+    this.forgetConversation(threadId);
+  }
+  /** Remove a conversation only after its server tombstone was acknowledged. */
+  forgetConversation(threadId: string): void {
     const hasQueue = Object.values(this.state.queued).some(value => value && typeof value === "object" && (value as { threadId?: unknown }).threadId === threadId);
     if (!this.state.conversations[threadId] && !hasQueue && !Object.values(this.state.bindings).some(binding => binding.threadId === threadId)) return;
     this.commit(state => {

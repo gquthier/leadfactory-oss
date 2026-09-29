@@ -162,4 +162,19 @@ describe.skipIf(!built)("Quick chat HTTP boundary", () => {
       await api("POST", `/api/collaboration/runs/${encodeURIComponent(run.runId)}/cancel`, {});
     }
   });
+
+  it("deletes a conversation transcript and an agent through qualified desktop identifiers", async () => {
+    const created = await api("POST", "/api/local/bots", { name: "Temporary", title: "Tester" });
+    expect(created.status).toBe(201);
+    const threadId = created.body.thread.id;
+    const agentId = created.body.agent.agentId;
+
+    expect(await api("DELETE", `/api/collaboration/threads/${encodeURIComponent(threadId)}`))
+      .toEqual({ status: 200, body: { deleted: true } });
+    expect((await api("GET", `/api/collaboration/threads/${encodeURIComponent(threadId)}/messages`)).body.messages).toEqual([]);
+
+    expect(await api("DELETE", `/api/local/bots/${encodeURIComponent(agentId)}`))
+      .toEqual({ status: 200, body: { deleted: true } });
+    expect((await api("GET", "/api/local/bots")).body.bots.some((bot: any) => bot.id === created.body.bot.id)).toBe(false);
+  });
 });

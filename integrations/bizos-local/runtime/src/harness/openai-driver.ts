@@ -114,7 +114,7 @@ function mergeToolCalls(into: ToolCall[], deltas: unknown): void {
 }
 
 interface EncryptedReasoning { type: "reasoning.encrypted"; data: string }
-interface Round { content: string; calls: ToolCall[]; finish: string | null; usage?: { input: number; output: number; cached?: number }; reasoningDetails?: EncryptedReasoning[] }
+interface Round { content: string; calls: ToolCall[]; finish: string | null; usage?: { input: number; output: number; cached?: number }; reasoningDetails?: EncryptedReasoning[]; assistantMessage?: Message }
 
 function encryptedReasoning(value: unknown): EncryptedReasoning[] | undefined {
   if (value === undefined) return undefined;
@@ -178,7 +178,13 @@ async function complete(
     const round: Round = { content: "", calls: [], finish: null };
     applyChoice(round, json.choices[0], false, onText);
     const choice = json.choices[0];
-    if (record(choice) && record(choice.message)) round.reasoningDetails = encryptedReasoning(choice.message.reasoning_details);
+    if (record(choice) && record(choice.message)) {
+      round.reasoningDetails = encryptedReasoning(choice.message.reasoning_details);
+      // The SaaS continuation receipt hashes this exact public message. Keep
+      // the server's field order and values instead of rebuilding an
+      // equivalent object whose JSON serialization has a different hash.
+      round.assistantMessage = structuredClone(choice.message);
+    }
     round.usage = usageOf(json.usage);
     return round;
   }
@@ -294,12 +300,14 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
         }
         if (!requested.length) { terminal(true, null); return; }
         const echoed = requested.map((call, index) => ({ ...call, id: call.id || `call_${round}_${index}` }));
-        messages.push({
-          role: "assistant",
-          content: answer.content || null,
-          ...(input.chatCompletion && answer.reasoningDetails ? { reasoning_details: answer.reasoningDetails } : {}),
-          tool_calls: echoed.map((call) => ({ ...(input.chatCompletion ? {} : call.extra), id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } })),
-        });
+        messages.push(input.chatCompletion && answer.assistantMessage
+          ? answer.assistantMessage
+          : {
+              role: "assistant",
+              content: answer.content || null,
+              ...(answer.reasoningDetails ? { reasoning_details: answer.reasoningDetails } : {}),
+              tool_calls: echoed.map((call) => ({ ...(input.chatCompletion ? {} : call.extra), id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } })),
+            });
         for (let index = 0; index < echoed.length; index++) {
           if (cancelled) return;
           calls++;

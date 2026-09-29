@@ -150,6 +150,23 @@ export class QuickChatStore {
     if (!chat || this.expired.has(id)) throw new Error("Chat not found in this workspace (it may have expired)");
     return { ...chat };
   }
+  /** Explicit owner deletion follows the same durable revoke-before-purge
+   * ordering as expiry, so a crash cannot make the chat reappear. */
+  remove(id: string): void {
+    this.get(id);
+    this.expired.add(id);
+    this.storage.writeJson(EXPIRED_QUICK_CHATS_FILE, [...this.expired]);
+    this.storage.blockThread(`chat:${id}`);
+    this.pendingPurge.add(id);
+    this.fingerprints.delete(id);
+    this.chats = this.chats.filter(row => row.id !== id);
+    this.persist();
+    if (this.purge) {
+      try { this.purge(id); this.pendingPurge.delete(id); }
+      catch { /* Revocation is durable; the scheduled sweep retries cleanup. */ }
+    }
+    this.schedule();
+  }
   create(requestId: string, source?: QuickChatSource | boolean): QuickChat {
     this.sweep();
     const dedicated = Boolean(source);

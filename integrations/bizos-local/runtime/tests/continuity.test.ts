@@ -78,6 +78,58 @@ it("refuses sync and cloud calls when a stale link belongs to another OS", async
   expect(calls).toEqual(["status", "status"]);
   continuity.close();
 });
+it("tombstones a linked conversation before forgetting its local continuity state", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const calls: Array<{ operation: string; body: Record<string, unknown> }> = [];
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    calls.push({ operation, body });
+    if (operation === "status") return {
+      orgId: binding.orgId,
+      userId: binding.accountId,
+      installationId: binding.installationId,
+      workspaceId: "workspace-1",
+    } as never;
+    if (operation === "conversations/delete") return {
+      conversationId: binding.conversationId,
+      deleted: true,
+      deletedAt: "2026-09-29T15:00:00.000Z",
+    } as never;
+    throw new Error(`unexpected ${operation}`);
+  });
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-1" });
+
+  await expect(continuity.deleteConversation("bot:a")).resolves.toMatchObject({ deleted: true });
+  expect(calls).toEqual([
+    { operation: "status", body: {} },
+    { operation: "conversations/delete", body: {
+      orgId: binding.orgId,
+      conversationId: binding.conversationId,
+      workspaceId: "workspace-1",
+      localConversationId: "bot:a",
+    } },
+  ]);
+  expect(continuity.store.status("bot:a")).toBeNull();
+  continuity.close();
+});
+it("keeps local continuity state when the remote tombstone is not acknowledged", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const continuity = new ConversationContinuity(storage, async (operation) => {
+    if (operation === "status") return {
+      orgId: binding.orgId,
+      userId: binding.accountId,
+      installationId: binding.installationId,
+      workspaceId: "workspace-1",
+    } as never;
+    throw new Error("tombstone unavailable");
+  });
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-1" });
+
+  await expect(continuity.deleteConversation("bot:a")).rejects.toThrow("tombstone unavailable");
+  expect(continuity.store.status("bot:a")).not.toBeNull();
+  continuity.close();
+});
 it("preserves a linked user message beyond the former 20k character cap", () => {
   const { store } = fixture();
   store.link("bot:a", binding);
@@ -330,6 +382,97 @@ it("replays one operation_id through the signed broker without another local ima
   expect(perform).toHaveBeenCalledTimes(2); // The broker replays its receipt; it does not charge again.
   expect(continuity.store.effects("bot:a")).toHaveLength(1);
   await expect(continuity.execute("bot:a", "local-run", "bizos_image_generate", { tool: "bizos_image_generate", arguments: { prompt: "Changed", operation_id: "image-once" } }, perform)).rejects.toThrow(/operation_id|different arguments/i);
+  continuity.close();
+});
+it("reconciles an uncertain broker effect immediately and clears the continuity blocker", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "local-run": { requestId: "request", threadId: "bot:a", localRunId: "local-run", runtime: "codex", runId: "server-run", epoch: 1, turnId: "turn", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const receipts: Array<Record<string, unknown>> = [];
+  const transport = vi.fn(async (operation: string, body: Record<string, unknown>) => {
+    if (operation === "runs/admit") return { admitted: true };
+    if (operation === "runs/effect") return { operationId: body.operationId, status: "sent", receipt: null, target: "bizos_image_generate", argsHash: payloadHash({ tool: "bizos_image_generate", arguments: { prompt: "bird", operation_id: "image-reconcile" } }) };
+    if (operation === "runs/receipt") { receipts.push(body); return {}; }
+    return {};
+  });
+  const continuity = new ConversationContinuity(storage, transport as any);
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-run", generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  let attempts = 0;
+  const perform = vi.fn(async () => {
+    attempts++;
+    if (attempts === 1) throw new Error("broker response lost");
+    return { status: "completed", url: "https://fixture.test/image.png" };
+  });
+  const input = { tool: "bizos_image_generate", arguments: { prompt: "bird", operation_id: "image-reconcile" } };
+  await expect(continuity.execute("bot:a", "local-run", "bizos_image_generate", input, perform)).resolves.toMatchObject({ status: "completed" });
+  expect(perform).toHaveBeenCalledTimes(2);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "confirmed" }]);
+  expect(receipts.at(-1)).toMatchObject({ status: "confirmed" });
+  continuity.close();
+});
+it("marks an irreconcilable broker effect failed with a clear error so later effects can run", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "local-run": { requestId: "request", threadId: "bot:a", localRunId: "local-run", runtime: "codex", runId: "server-run", epoch: 1, turnId: "turn", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const receipts: Array<Record<string, unknown>> = [];
+  const transport = vi.fn(async (operation: string, body: Record<string, unknown>) => {
+    if (operation === "runs/admit") return { admitted: true };
+    if (operation === "runs/effect") return {
+      operationId: body.operationId,
+      status: "unknown",
+      receipt: null,
+      target: "bizos_image_generate",
+      argsHash: payloadHash({ tool: "bizos_image_generate", arguments: { prompt: "bird", operation_id: "image-failed" } }),
+    };
+    if (operation === "runs/receipt") { receipts.push(body); return {}; }
+    return {};
+  });
+  const continuity = new ConversationContinuity(storage, transport as any);
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-run", generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  const input = { tool: "bizos_image_generate", arguments: { prompt: "bird", operation_id: "image-failed" } };
+  await expect(continuity.execute("bot:a", "local-run", "bizos_image_generate", input, async () => { throw new Error("broker unavailable"); }))
+    .rejects.toThrow(/could not be verified|n'a pas pu être vérifiée/i);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "failed", receipt: expect.stringMatching(/could not be verified|non vérifiée/i) }]);
+  expect(receipts.at(-1)).toMatchObject({ status: "failed" });
+  await expect(continuity.execute("bot:a", "local-run", "read_company", {}, async () => ({ ok: true }))).resolves.toEqual({ ok: true });
+  continuity.close();
+});
+it("settles a crash-left unknown effect with the broker before the next turn", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "old-local-run": {
+    requestId: "request", threadId: "bot:a", localRunId: "old-local-run", runtime: "codex",
+    runId: "server-run", epoch: 3, turnId: "turn", leaseToken: "lease",
+  } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const receipts: Array<Record<string, unknown>> = [];
+  const argumentHash = payloadHash({ tool: "schedule_routine", arguments: { prompt: "Every Monday" } });
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    if (operation === "runs/effect") return {
+      operationId: body.operationId,
+      status: "unknown",
+      receipt: "Result unavailable; external effect may have happened.",
+      target: "schedule_routine",
+      argsHash: argumentHash,
+    } as never;
+    if (operation === "runs/receipt") { receipts.push(body); return {} as never; }
+    throw new Error(`unexpected ${operation}`);
+  });
+  continuity.store.link("bot:a", binding);
+  continuity.store.effect("bot:a", {
+    id: "operation-1", tool: "schedule_routine", class: "mediated", state: "unknown",
+    generation: 3, argumentHash,
+  });
+
+  const internal = continuity as unknown as {
+    reconcileInterruptedEffects(threadId: string): Promise<string[]>;
+  };
+  await expect(internal.reconcileInterruptedEffects("bot:a")).resolves.toEqual([
+    expect.stringMatching(/marked failed/),
+  ]);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "failed" }]);
+  expect(receipts).toMatchObject([{ operationId: "operation-1", status: "failed" }]);
   continuity.close();
 });
 it("keeps a pending user message visible after a transcript projection write fails", async () => {

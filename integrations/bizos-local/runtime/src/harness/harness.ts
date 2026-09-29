@@ -3512,6 +3512,7 @@ export class LocalBizosHarness {
       return { chat, ...this.threadStore.snapshot({ chatId: id }, this.dispatcher.activeRunIds(threadId)),
         runs: this.runStore.list(200).filter(run => run.threadId === threadId) };
     },
+    remove: async (id: string): Promise<void> => this.quickChatStore.remove(id),
     messages: async (id: string, before?: string) => { this.quickChatStore.get(id); return this.threadStore.page({ chatId: id }, before); },
     send: async (id: string, text: string, requestId: string) => {
       this.quickChatStore.get(id);

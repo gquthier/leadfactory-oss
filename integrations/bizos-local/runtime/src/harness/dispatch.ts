@@ -1890,11 +1890,12 @@ export class Dispatcher {
       void continuity!.prepare(threadId, queued.runId, bizos ? "codex" : provider, () => {
         const active = this.active.get(threadId);
         if (active?.runId === queued.runId) { active.cancelled = true; this.deps.onRunStopped?.(queued.runId); active.handle?.stop(); }
-      }, bizos ? { localInference: true } : {}).then(() => {
+      }, bizos ? { localInference: true } : {}).then(({ notices }) => {
         if (this.preparing.get(threadId) !== queued) {
           continuity!.stop(threadId, queued.runId);
           return;
         }
+        for (const notice of notices) this.note(threadId, notice);
         this.preparing.delete(threadId);
         this.launch(queued, bot, {...options, linkedReady: true});
       }).catch(error => {

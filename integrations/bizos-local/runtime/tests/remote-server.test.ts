@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RemoteServerComputerBackend, serverActions } from "../src/computer/remote-server.js";
+import { RemoteServerComputerBackend, serverActions, serverComputerId } from "../src/computer/remote-server.js";
 import type { ContinuityTransport } from "../src/continuity-bridge.js";
 
 const shot = Buffer.from("fixture-image").toString("base64");
@@ -42,6 +42,25 @@ describe("server-owned local agent computer", () => {
     ]);
     expect(calls.every(call => call.body.orgId === "org-a" && call.body.workspaceId === "workspace-a")).toBe(true);
     expect(JSON.stringify(calls)).not.toContain("BOAT_API_KEY");
+  });
+
+  it("maps runtime identities to stable server-safe computer identities", async () => {
+    expect(serverComputerId("workspace", "local:fixture:workspace")).toMatch(/^[A-Za-z0-9_-]{1,100}$/);
+    expect(serverComputerId("agent", "bot:ceo/with spaces")).toMatch(/^[A-Za-z0-9_-]{1,100}$/);
+    expect(serverComputerId("agent", "bot:ceo/with spaces")).toBe(serverComputerId("agent", "bot:ceo/with spaces"));
+    expect(serverComputerId("agent", "bot:a")).not.toBe(serverComputerId("agent", "bot/a"));
+    expect(serverComputerId("agent", "already_safe-1")).toBe("already_safe-1");
+
+    const calls: Array<Record<string, unknown>> = [];
+    const backend = new RemoteServerComputerBackend(async (_op, body) => {
+      calls.push(body);
+      return { awake: true } as never;
+    }, () => "org-a", () => "local:fixture:workspace");
+    await backend.start("bot:ceo/with spaces");
+    expect(calls[0]).toMatchObject({
+      workspaceId: serverComputerId("workspace", "local:fixture:workspace"),
+      agentId: serverComputerId("agent", "bot:ceo/with spaces"),
+    });
   });
 
   it("refuses to call the server when the workspace loses its signed org binding", async () => {

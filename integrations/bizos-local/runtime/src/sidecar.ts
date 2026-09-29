@@ -1909,6 +1909,25 @@ export class CollaborationFacade {
     const thread = bootstrap.threads.find((candidate) => candidate.kind === "agent" && candidate.agentIds.includes(agent.agentId));
     return { bot, agent, thread };
   }
+  async deleteBot(agentId: string): Promise<{ deleted: true }> {
+    const botId = this.internalAgentId(agentId);
+    if (!(await this.bots()).some(bot => bot.id === botId)) throw new HttpError(404, "not_found", "Bot not found.");
+    await this.harness.continuity.deleteConversation(`bot:${botId}`);
+    await this.harness.bots.remove(botId);
+    this.purgeQuickChatIndex(`bot:${botId}`);
+    return { deleted: true };
+  }
+
+  async deleteThread(threadId: string): Promise<{ deleted: true }> {
+    const target = this.target(threadId);
+    const localThreadId = threadIdForTarget(target);
+    await this.harness.continuity.deleteConversation(localThreadId);
+    if ("chatId" in target) await this.harness.quickChats.remove(target.chatId);
+    else await this.harness.threads.clear(target);
+    this.purgeQuickChatIndex(localThreadId);
+    this.streams.publish({ event: "thread", data: { threadId, change: "deleted", reason: "owner" } });
+    return { deleted: true };
+  }
   /** The owner's own photo for an agent: stops any generation, replaces the picture. */
   async setBotAvatar(id: string, raw: unknown) {
     const input = objectBody(raw, ["dataUrl"]);
@@ -3343,6 +3362,8 @@ async function serve(): Promise<void> {
         const result = await facade.postMessage(messageThreadId, await bodyOf(request, MAX_COLLABORATION_MESSAGE_BYTES));
         return sendJson(response, result.status, result.body);
       }
+      const deleteThreadId = routeId(url.pathname, /^\/api\/collaboration\/threads\/([^/]+)$/);
+      if (deleteThreadId && method === "DELETE") return sendJson(response, 200, await facade.deleteThread(deleteThreadId));
       if (method === "GET" && url.pathname === "/api/collaboration/runs") {
         const threadId = url.searchParams.get("threadId");
         return sendJson(response, 200, await facade.runs({
@@ -3384,6 +3405,7 @@ async function serve(): Promise<void> {
       if (avatarBotId && method === "POST") return sendJson(response, 200, await facade.setBotAvatar(avatarBotId, await bodyOf(request)));
       const botId = routeId(url.pathname, /^\/api\/local\/bots\/([^/]+)$/);
       if (botId && method === "PATCH") return sendJson(response, 200, await facade.updateBot(botId, await bodyOf(request)));
+      if (botId && method === "DELETE") return sendJson(response, 200, await facade.deleteBot(botId));
       if (method === "GET" && url.pathname === "/api/local/plans") return sendJson(response, 200, { plans: await facade.plans() });
       if (method === "POST" && url.pathname === "/api/local/plans") return sendJson(response, 201, { plan: await facade.connectPlan(await bodyOf(request)) });
       const activePlanId = routeId(url.pathname, /^\/api\/local\/plans\/([^/]+)\/active$/);

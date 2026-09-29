@@ -1,6 +1,6 @@
 /** A local agent's private Boat computer, reached only through Electron main.
  * The signed installation key and provider key never enter this process. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ContinuityTransport } from "../continuity-bridge.js";
 import type { CapturedFrame } from "./host.js";
 import type {
@@ -24,6 +24,16 @@ type ServerResult = {
 };
 
 const empty = (): ComputerState => ({ backend: "container", status: "none", apps: [] });
+const SERVER_COMPUTER_ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** The server accepts a deliberately small local-id alphabet. Preserve IDs
+ * already in that contract; map qualified runtime IDs to an opaque, stable
+ * value so the same local agent keeps the same server computer seat. */
+export function serverComputerId(kind: "workspace" | "agent", value: string): string {
+  if (SERVER_COMPUTER_ID.test(value)) return value;
+  const digest = createHash("sha256").update(kind).update("\0").update(value).digest("hex").slice(0, 32);
+  return `${kind}_${digest}`;
+}
 
 export function serverActions(actions: ComputerAction[]): Array<Record<string, unknown>> {
   return actions.map((action) => {
@@ -58,7 +68,12 @@ export class RemoteServerComputerBackend implements ManagedComputerBackend {
   private async call(botId: string, op: string, extra: Record<string, unknown> = {}): Promise<ServerResult> {
     const orgId = this.orgId();
     if (!orgId) throw new Error("Link this workspace to a BizOS organization to use Computer.");
-    return this.transport<ServerResult>(`computer/${op}`, { orgId, workspaceId: this.workspaceId(), agentId: botId, ...extra });
+    return this.transport<ServerResult>(`computer/${op}`, {
+      orgId,
+      workspaceId: serverComputerId("workspace", this.workspaceId()),
+      agentId: serverComputerId("agent", botId),
+      ...extra,
+    });
   }
 
   private remember(botId: string, result: ServerResult): ComputerObservation {

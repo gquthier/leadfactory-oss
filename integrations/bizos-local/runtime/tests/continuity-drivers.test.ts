@@ -8,6 +8,7 @@ import {
 } from "../src/harness/claude-driver.js";
 import {
   startCodexTurn,
+  type CodexTurnHandle,
   type RuntimeEvent,
 } from "../src/harness/codex-driver.js";
 const roots: string[] = [];
@@ -96,6 +97,57 @@ it("Claude removes its private prompt when spawning the CLI fails", async () => 
   });
   expect(privateDirs().filter(name => !before.has(name))).toEqual([]);
   expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false });
+});
+it("Claude publishes a result-only terminal answer", async () => {
+  const f = script(`import readline from 'node:readline';const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.type==='control_request')send({type:'control_response',response:{subtype:'success',request_id:r.request_id}});if(r.type==='user')send({type:'result',subtype:'success',result:'Le fichier a été créé.',session_id:'session'});});`);
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("driver timeout")), 3000);
+    startClaudeTurn({ cli: f.cli, cwd: f.root, text: "Create it", sandbox: "read-only", environment: { PATH: process.env.PATH }, onEvent: event => {
+      events.push(event);
+      if (event.type === "turn.completed") { clearTimeout(timer); resolve(); }
+    } });
+  });
+  expect(events).toContainEqual(expect.objectContaining({ type: "item.completed", itemType: "assistant_text", text: "Le fichier a été créé.", phase: "final_answer" }));
+  expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+});
+it("Claude reports an explicit failure when it ends after announcing an action without a final result or permission", async () => {
+  const f = script(`import readline from 'node:readline';const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.type==='control_request')send({type:'control_response',response:{subtype:'success',request_id:r.request_id}});if(r.type==='user'){send({type:'assistant',message:{id:'announced',role:'assistant',stop_reason:'tool_use',content:[{type:'text',text:'Je vais tenter de créer ce fichier…'}]}});send({type:'result',subtype:'success',result:'Je vais tenter de créer ce fichier…',session_id:'session'});}});`);
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("driver timeout")), 3000);
+    startClaudeTurn({ cli: f.cli, cwd: f.root, text: "Create it", sandbox: "read-only", environment: { PATH: process.env.PATH }, onEvent: event => {
+      events.push(event);
+      if (event.type === "turn.completed") { clearTimeout(timer); resolve(); }
+    } });
+  });
+  expect(events.find(event => event.type === "runtime.error")).toMatchObject({
+    message: expect.stringMatching(/sans résultat final|without a final result/i),
+  });
+  expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false });
+});
+it("Claude projects a native file permission before the turn can finish", async () => {
+  const f = script(`import readline from 'node:readline';const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.type==='control_request'&&r.request?.subtype==='initialize'){send({type:'control_response',response:{subtype:'success',request_id:r.request_id}});return;}if(r.type==='user'){send({type:'assistant',message:{id:'announced',role:'assistant',stop_reason:'tool_use',content:[{type:'text',text:'Je vais créer le fichier.'}]}});send({type:'control_request',request_id:'permission-write',request:{subtype:'can_use_tool',tool_name:'Write',input:{file_path:'/fixture/report.md',content:'ok'}}});return;}if(r.type==='control_response'&&r.response?.request_id==='permission-write'){send({type:'assistant',message:{id:'done',role:'assistant',stop_reason:'end_turn',content:[{type:'text',text:'Le fichier est créé.'}]}});send({type:'result',subtype:'success',result:'Le fichier est créé.',session_id:'session'});}});`);
+  const events: RuntimeEvent[] = [];
+  let handle: CodexTurnHandle;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("driver timeout")), 3000);
+    handle = startClaudeTurn({ cli: f.cli, cwd: f.root, text: "Create it", sandbox: "workspace-write", environment: { PATH: process.env.PATH }, onEvent: event => {
+      events.push(event);
+      if (event.type === "request.opened") handle.respond(event.requestId, { behavior: "allow" });
+      if (event.type === "turn.completed") { clearTimeout(timer); resolve(); }
+    } });
+  });
+  expect(events).toContainEqual(expect.objectContaining({
+    type: "request.opened", requestId: "permission-write", requestType: "permission", tool: "Write",
+  }));
+  expect(events).toContainEqual(expect.objectContaining({
+    type: "request.resolved", requestId: "permission-write", behavior: "allow", source: "user",
+  }));
+  expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
 });
 it("Claude init is not a payload receipt, and unexpected native tool exposure fails before it can act", async () => {
   const f = script(

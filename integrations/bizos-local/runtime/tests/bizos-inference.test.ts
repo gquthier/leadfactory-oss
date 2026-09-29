@@ -28,7 +28,7 @@ it("runs BizOS tool calls through the host and sends only opaque completions ove
     const last = (body.messages as Array<Record<string, unknown>>).at(-1)!;
     if (last.role === "tool" && effects.length === 1) return { choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "routine", type: "function", function: { name: "schedule_routine", arguments: "{}" } }] }, finish_reason: "tool_calls" }] };
     if (last.role === "tool") return { choices: [{ message: { role: "assistant", content: "L'agent et la routine existent." }, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 7 } };
-    return { choices: [{ message: { role: "assistant", content: "Agent créé avant vérification", reasoning_details: reasoningDetails, tool_calls: [{ id: "recruit", type: "function", function: { name: "recruit_agent", arguments: "{}" } }] }, finish_reason: "tool_calls" }] };
+    return { choices: [{ message: { role: "assistant", content: "Agent créé avant vérification", tool_calls: [{ id: "recruit", type: "function", function: { name: "recruit_agent", arguments: "{}" } }], reasoning_details: reasoningDetails }, finish_reason: "tool_calls" }] };
   };
   await new Promise<void>((resolve) => {
     startOpenAiTurn({
@@ -49,6 +49,12 @@ it("runs BizOS tool calls through the host and sends only opaque completions ove
   expect((requests[1]!.messages as unknown[]).slice(0, (requests[0]!.messages as unknown[]).length)).toEqual(requests[0]!.messages);
   expect((requests[2]!.messages as unknown[]).slice(0, (requests[1]!.messages as unknown[]).length)).toEqual(requests[1]!.messages);
   expect((requests[1]!.messages as Array<Record<string, unknown>>).find((message) => message.role === "assistant")?.reasoning_details).toEqual(reasoningDetails);
+  expect(JSON.stringify((requests[1]!.messages as Array<Record<string, unknown>>)[2])).toBe(JSON.stringify({
+    role: "assistant",
+    content: "Agent créé avant vérification",
+    tool_calls: [{ id: "recruit", type: "function", function: { name: "recruit_agent", arguments: "{}" } }],
+    reasoning_details: reasoningDetails,
+  }));
   const turnIds = requests.map((body) => body.clientTurnId);
   const requestIds = requests.map((body) => body.requestId);
   expect(new Set(turnIds).size).toBe(1);

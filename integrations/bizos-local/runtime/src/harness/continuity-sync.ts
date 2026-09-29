@@ -5,6 +5,7 @@ import {
   ContinuityStore,
   isQuickChatThread,
   payloadHash,
+  type EffectRecord,
   type NeutralEvent,
 } from "./continuity.js";
 import { LeaseGuard, type ExecutionLease } from "./execution-lease.js";
@@ -59,6 +60,17 @@ const RUNS = "continuity-runs.json";
 const STOPS = "continuity-stops.json";
 const MAX_REQUEST_BYTES = 256 * 1024;
 class DocumentValidationError extends Error {}
+const RECONCILABLE_EFFECT_TOOLS = new Set([
+  "bizos_image_generate", "bizos_site_create", "bizos_site_publish", "bizos_site_unpublish",
+  "bizos_email_send", "schedule_routine", "recruit_agent",
+]);
+interface BrokerEffect {
+  operationId: string;
+  status: "sent" | "unknown" | "confirmed" | "failed";
+  receipt: string | null;
+  target: string;
+  argsHash: string;
+}
 export function wireEvent(
   event: Pick<
     NeutralEvent,
@@ -185,9 +197,12 @@ export class ConversationContinuity {
   }
   forgetQuickChat(threadId: string): void {
     this.assertQuickChat(threadId);
+    this.forgetConversationState(threadId);
+  }
+  private forgetConversationState(threadId: string): void {
     this.guard.stop(threadId);
     this.clearRenewal(threadId);
-    this.store.forgetQuickChat(threadId);
+    this.store.forgetConversation(threadId);
     const removedRunIds = Object.entries(this.runs).filter(([, run]) => run.threadId === threadId).map(([id]) => id);
     const runs = Object.fromEntries(Object.entries(this.runs).filter(([, run]) => run.threadId !== threadId));
     if (Object.keys(runs).length !== Object.keys(this.runs).length) {
@@ -204,6 +219,34 @@ export class ConversationContinuity {
       this.storage.writeJson("continuity-incoming.json", incoming);
       this.incoming = incoming;
     }
+  }
+  async deleteConversation(threadId: string): Promise<{ deleted: true; conversationId?: string; deletedAt?: string }> {
+    this.assertPersistent(threadId);
+    const link = this.store.status(threadId);
+    if (!link) {
+      this.forgetConversationState(threadId);
+      return { deleted: true };
+    }
+    const identity = await this.identity();
+    if (identity.userId !== link.accountId || identity.orgId !== link.orgId
+      || identity.installationId !== link.installationId
+      || (link.workspaceId !== undefined && identity.workspaceId !== link.workspaceId)) {
+      throw new Error("Sign in to the account and installation that own this linked conversation.");
+    }
+    const result = await this.call<{
+      conversationId: string;
+      deleted: boolean;
+      deletedAt: string;
+    }>("conversations/delete", {
+      ...this.scope(threadId),
+      workspaceId: identity.workspaceId,
+      localConversationId: threadId,
+    });
+    if (result.deleted !== true || result.conversationId !== link.conversationId) {
+      throw new Error("The cloud did not acknowledge the conversation tombstone.");
+    }
+    this.forgetConversationState(threadId);
+    return { conversationId: result.conversationId, deleted: true, deletedAt: result.deletedAt };
   }
   private assertQuickChat(threadId: string): void {
     if (!isQuickChatThread(threadId)) throw new Error("Only QuickChat continuity can be forgotten here.");
@@ -542,8 +585,8 @@ export class ConversationContinuity {
     runtime: string,
     abort: () => void,
     options: { localInference?: boolean } = {},
-  ): Promise<void> {
-    if (!this.linked(threadId)) return;
+  ): Promise<{ notices: string[] }> {
+    if (!this.linked(threadId)) return { notices: [] };
     if (runtime !== "claude" && runtime !== "codex")
       throw new Error(
         "This linked conversation requires Claude or Codex on this computer. Choose cloud execution explicitly for an API model.",
@@ -555,6 +598,7 @@ export class ConversationContinuity {
       )
     )
       throw new Error("Conversation is waiting for transfer reconciliation.");
+    const notices = await this.reconcileInterruptedEffects(threadId);
     const { policy } = await this.call<{
       policy: {
         enabled: boolean;
@@ -691,6 +735,49 @@ export class ConversationContinuity {
     }, 15_000);
     timer.unref();
     this.renewals.set(threadId, timer);
+    return { notices };
+  }
+
+  /** Resolve effects left behind by a crash before asking the server for a new
+   * turn. The authoritative broker row is read first. A terminal row is copied
+   * locally; a still-uncertain row is closed as failed with an explicit receipt
+   * because no safe result-recovery closure survives a process restart. */
+  private async reconcileInterruptedEffects(threadId: string): Promise<string[]> {
+    const notices: string[] = [];
+    for (const effect of this.store.effects(threadId).filter(row => ["prepared", "sent", "unknown"].includes(row.state))) {
+      const run = Object.values(this.runs).reverse().find(candidate => candidate.threadId === threadId
+        && candidate.runId && candidate.epoch === effect.generation && candidate.turnId && candidate.leaseToken);
+      if (!run) {
+        this.guard.update(threadId, effect.id, "failed", "Previous operation could not be verified after restart.");
+        notices.push(`Previous ${effect.tool} operation could not be verified after restart and was marked failed; you can continue safely.`);
+        continue;
+      }
+      let remote: BrokerEffect | undefined;
+      try {
+        remote = await this.call<BrokerEffect>("runs/effect", {
+          ...this.scope(threadId), runId: run.runId, epoch: run.epoch, operationId: effect.id,
+        });
+      } catch { /* the terminal receipt below is still authoritative */ }
+      if (remote) this.assertBrokerEffect(effect, remote);
+      if (remote?.status === "confirmed" || remote?.status === "failed") {
+        this.guard.update(threadId, effect.id, remote.status, remote.receipt ?? `Broker reports ${remote.status}.`);
+        if (remote.status === "failed") notices.push(`Previous ${effect.tool} operation failed; the conversation can continue.`);
+        continue;
+      }
+      const receipt = "Previous operation could not be verified after restart; it was closed as failed and was not reported as successful.";
+      await this.call("runs/receipt", { ...this.credentials(run), operationId: effect.id, status: "failed", receipt });
+      this.guard.update(threadId, effect.id, "failed", receipt);
+      notices.push(`Previous ${effect.tool} operation could not be verified and was marked failed; you can continue safely.`);
+    }
+    return notices;
+  }
+  private assertBrokerEffect(effect: EffectRecord, remote: BrokerEffect): void {
+    if (remote.operationId !== effect.id || remote.target !== effect.tool
+      || !effect.argumentHash || remote.argsHash !== effect.argumentHash
+      || !["sent", "unknown", "confirmed", "failed"].includes(remote.status)
+      || (remote.receipt !== null && typeof remote.receipt !== "string")) {
+      throw new Error("The broker returned a mismatched operation receipt; execution remains stopped for reconciliation.");
+    }
   }
   private credentials(run: LinkedRun): Record<string, unknown> {
     return {
@@ -1218,7 +1305,7 @@ export class ConversationContinuity {
     const requestId = typeof nested.operation_id === "string" && nested.operation_id.trim()
       ? nested.operation_id.trim() : undefined;
     const generation = this.guard.assert(threadId, tool).generation;
-    const dedupeConfirmed = ["bizos_image_generate", "bizos_site_create", "bizos_site_publish", "bizos_site_unpublish", "bizos_email_send", "schedule_routine", "recruit_agent"].includes(tool);
+    const dedupeConfirmed = RECONCILABLE_EFFECT_TOOLS.has(tool);
     const previous = this.store.effects(threadId).find(e => e.tool === tool && (
       (requestId && e.requestId === requestId)
       || (e.argumentHash === argsHash && (!e.requestId || !requestId)
@@ -1258,7 +1345,7 @@ export class ConversationContinuity {
       const status =
         error instanceof DocumentValidationError ? "failed" : "unknown";
       this.guard.update(threadId, operationId, status);
-      void this.call("runs/receipt", {
+      await this.call("runs/receipt", {
         ...this.credentials(run),
         operationId,
         status,
@@ -1267,7 +1354,38 @@ export class ConversationContinuity {
             ? "Document was not written; validation failed."
             : "Result unavailable; external effect may have happened.",
       }).catch(() => undefined);
-      throw error;
+      if (!dedupeConfirmed || status === "failed") throw error;
+
+      // Read the continuity broker before replaying the same idempotent host
+      // operation. For BizOS server tools the operation_id returns the actual
+      // receipt; recruitment and routines use their durable run fingerprint.
+      let remote: BrokerEffect | undefined;
+      try {
+        remote = await this.call<BrokerEffect>("runs/effect", {
+          ...this.scope(threadId), runId: run.runId, epoch: run.epoch, operationId,
+        });
+      } catch { /* replay remains the only available read-through receipt */ }
+      if (remote) this.assertBrokerEffect(this.store.effects(threadId).find(row => row.id === operationId)!, remote);
+      if (remote?.status === "failed") {
+        const receipt = remote.receipt ?? "The broker reports that the operation failed; it is safe to continue.";
+        this.guard.update(threadId, operationId, "failed", receipt);
+        throw new Error(receipt);
+      }
+      try {
+        const reconciled = await perform();
+        this.guard.update(threadId, operationId, "confirmed", "Recovered the existing broker result after an uncertain response.");
+        await this.call("runs/receipt", {
+          ...this.credentials(run), operationId, status: "confirmed", receipt: "Recovered the existing broker result.",
+        });
+        return reconciled;
+      } catch {
+        const receipt = "The operation could not be verified after consulting the broker; it was marked failed and can be retried explicitly.";
+        this.guard.update(threadId, operationId, "failed", receipt);
+        await this.call("runs/receipt", {
+          ...this.credentials(run), operationId, status: "failed", receipt,
+        });
+        throw new Error(receipt);
+      }
     }
     // Results stay with the host or the signed broker, never in this effect
     // journal (notably a short-lived hosted image URL).

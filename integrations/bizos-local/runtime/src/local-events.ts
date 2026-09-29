@@ -13,7 +13,7 @@ export const MAX_EVENT_STREAMS = 16;
 export const MAX_STREAM_BACKLOG_BYTES = 1024 * 1024;
 
 export type LocalStreamFrame =
-  | { event: "thread"; data: { threadId: string; change: "deleted"; reason: "expired" } }
+  | { event: "thread"; data: { threadId: string; change: "deleted"; reason: "expired" | "owner" } }
   | { event: "message"; data: { threadId: string; messageId: string; change: "created" | "updated" } }
   | { event: "team-event"; data: LocalTeamEvent }
   | { event: "run"; data: { runId: string; threadId: string; state: "queued" | "running" | "done" | "failed" | "cancelled" } };

@@ -455,6 +455,13 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
         if (message.is_error === true || (typeof message.subtype === "string" && message.subtype.startsWith("error"))) {
           state.resultError = redactSecretsInText(String(message.result ?? message.error ?? "Claude turn failed"));
         } else if (!state.initialized) state.resultError = "Claude initialization did not complete";
+        else {
+          const terminalFailure = publicMessages.completeResult(message);
+          if (terminalFailure) {
+            state.resultError = terminalFailure;
+            emit({ type: "runtime.error", message: terminalFailure });
+          }
+        }
         clearPermissions();
         child.stdin.end();
       }
@@ -589,6 +596,9 @@ class ClaudePublicMessages {
   private sequence = 0;
   private sawMessageStart = false;
   private replaying = false;
+  private lastPublished = "";
+  private finalPublished = false;
+  private commentaryPublished = false;
 
   constructor(private readonly emit: (event: RuntimeEvent) => void) {}
 
@@ -608,7 +618,12 @@ class ClaudePublicMessages {
     if (message.streamed && this.sawMessageStart && !streamCompleted) return;
     const streamed = [...message.blocks.entries()].sort(([a], [b]) => a - b).map(([, text]) => text).join("");
     const text = streamed || message.snapshots.join("");
-    if (text.trim()) this.emit({ type: "item.completed", itemType: "assistant_text", itemId: message.id, text, ...(message.phase ? { phase: message.phase } : {}) });
+    if (text.trim()) {
+      this.lastPublished = text;
+      this.finalPublished ||= message.phase === "final_answer";
+      this.commentaryPublished ||= message.phase === "commentary";
+      this.emit({ type: "item.completed", itemType: "assistant_text", itemId: message.id, text, ...(message.phase ? { phase: message.phase } : {}) });
+    }
   }
 
   ingest(message: Record<string, unknown>): void {
@@ -687,5 +702,31 @@ class ClaudePublicMessages {
     // can_use_tool can arrive before message_delta/message_stop for the
     // very same message. Keep its text buffer until its actual boundary.
     else if ((message.type === "control_request" || message.type === "user") && !this.current?.streamed) this.close();
+  }
+
+  /** Claude versions differ on whether the terminal `result` repeats the last
+   * assistant frame. Publish it when it is the only final answer. If the turn
+   * ends on tool-use commentary alone, fail visibly instead of certifying an
+   * action whose permission/result never reached the host. */
+  completeResult(message: Record<string, unknown>): string | null {
+    if (this.finalPublished) return null;
+    const result = typeof message.result === "string" ? message.result.trim() : "";
+    if (result && (!this.lastPublished || result !== this.lastPublished)) {
+      this.finalPublished = true;
+      this.lastPublished = result;
+      this.emit({ type: "item.completed", itemType: "assistant_text", itemId: `claude-result-${++this.sequence}`, text: result, phase: "final_answer" });
+      return null;
+    }
+    if (this.commentaryPublished) return "Claude s'est terminé sans résultat final ni demande d'autorisation visible.";
+    // Older CLIs emit a complete assistant snapshot without stop metadata and
+    // repeat it in `result`; that visible answer is terminal even without the
+    // newer explicit end_turn phase.
+    if (this.lastPublished && result === this.lastPublished) this.finalPublished = true;
+    else if (result) {
+      this.finalPublished = true;
+      this.lastPublished = result;
+      this.emit({ type: "item.completed", itemType: "assistant_text", itemId: `claude-result-${++this.sequence}`, text: result, phase: "final_answer" });
+    }
+    return null;
   }
 }
