@@ -15,7 +15,7 @@ import {
   type ContinuityIdentity,
   type ContinuityTransport,
 } from "../continuity-bridge.js";
-import type { ThreadMessage } from "./types.js";
+import type { Run, ThreadMessage } from "./types.js";
 import { waitForCliShutdown } from "./procs.js";
 import type { CodexDynamicTool } from "./codex-driver.js";
 import {
@@ -51,6 +51,7 @@ interface LinkedRun {
   runtime: "claude" | "codex";
   leaseUntil?: string;
   finished?: boolean;
+  terminalOutcome?: { ok: boolean; error?: string };
   supervised?: boolean;
   transferring?: boolean;
   processStopped?: boolean;
@@ -599,7 +600,28 @@ export class ConversationContinuity {
       )
     )
       throw new Error("Conversation is waiting for transfer reconciliation.");
+    // The UI can finish a CLI turn before its terminal cloud receipt has
+    // landed. Recover that receipt before claiming the next turn on this CEO.
+    // The durable outcome also covers a process restart between CLI exit and
+    // runs/finish; no new lease may overtake it.
     const notices = await this.reconcileInterruptedEffects(threadId);
+    const localRuns = this.storage.readJsonStrict<Run[]>("runs.json", []);
+    for (const prior of Object.values(this.runs)) {
+      if (prior.threadId !== threadId || prior.localRunId === localRunId || prior.finished || !prior.runId) continue;
+      const local = localRuns.find(candidate => candidate.id === prior.localRunId && candidate.threadId === threadId);
+      const legacyOutcome: { ok: boolean; error?: string } | null = local?.state === "completed" ? { ok: true }
+        : local?.state === "failed" || local?.state === "cancelled"
+          ? { ok: false, error: local.error ?? "Previous local turn ended before its cloud receipt." }
+          : null;
+      if (!prior.terminalOutcome && !prior.finishPayload && !legacyOutcome) continue;
+      if (prior.finishPayload) await this.sync(threadId);
+      else {
+        const outcome = prior.terminalOutcome ?? legacyOutcome!;
+        await this.finish(threadId, prior.localRunId, outcome.ok, outcome.error);
+      }
+      if (!this.runs[prior.localRunId]?.finished)
+        throw new Error("The previous linked turn is still being reconciled.");
+    }
     const { policy } = await this.call<{
       policy: {
         enabled: boolean;
@@ -679,6 +701,13 @@ export class ConversationContinuity {
     };
     this.saveRun(run);
     if (!run.runId) {
+      // The 90-second SQL lease checks presence at the instant runs/start is
+      // admitted. A background tick may have been delayed while syncing a
+      // different conversation, so renew this installation immediately.
+      await this.call("devices/presence", {
+        orgId: current.orgId,
+        capabilities: { runtimes: [runtime], supervised: true },
+      });
       const started = await this.call<{
         runId: string;
         epoch: number;
@@ -880,9 +909,12 @@ export class ConversationContinuity {
   ): Promise<void> {
     let run = this.runs[localRunId];
     if (!run?.runId || run.finished) return;
+    const terminalOutcome = run.terminalOutcome ?? { ok, ...(error ? { error: error.slice(0, 200) } : {}) };
+    this.saveRun({ ...run, terminalOutcome });
+    run = this.runs[localRunId]!;
     this.clearRenewal(threadId);
     try {
-      if (!(await waitForCliShutdown()))
+      if (!(await waitForCliShutdown({ retryFailed: true })))
         throw new Error(
           "CLI process stop could not be confirmed; transfer remains blocked.",
         );
@@ -896,10 +928,10 @@ export class ConversationContinuity {
         return;
       }
       if (
-        !ok &&
+        !terminalOutcome.ok &&
         !this.stopped.has(localRunId) &&
         run.supervised &&
-        /quota|rate.?limit|429|capacity|unavailable/i.test(error ?? "")
+        /quota|rate.?limit|429|capacity|unavailable/i.test(terminalOutcome.error ?? "")
       ) {
         const { policy } = await this.call<{
           policy: {
@@ -948,9 +980,9 @@ export class ConversationContinuity {
         );
       const body = run.finishPayload ?? {
         ...this.credentials(run),
-        status: ok ? "done" : "failed",
+        status: terminalOutcome.ok ? "done" : "failed",
         ...(results.length ? { finalEvents: results.map(wireEvent) } : {}),
-        ...(!ok && error ? { error: error.slice(0, 400) } : {}),
+        ...(!terminalOutcome.ok && terminalOutcome.error ? { error: terminalOutcome.error } : {}),
       };
       if (
         Buffer.byteLength(

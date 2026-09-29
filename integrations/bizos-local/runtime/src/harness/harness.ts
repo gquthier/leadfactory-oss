@@ -3538,15 +3538,19 @@ export class LocalBizosHarness {
     appendGeneratedImage: (scope: { botId: string; threadId: string; runId: string }, input: {
       messageId: string; attachmentId: string; path: string; url: string;
       fileName: string; mimeType: string; size: number; width: number; height: number;
-    }): ThreadMessage => this.threadStore.append(scope.threadId, {
-      id: input.messageId, role: "bot", deliveryState: "complete", botId: scope.botId, runId: scope.runId,
-      blocks: [
-        { kind: "text", text: "Image créée." },
-        { kind: "image", url: input.url, alt: "Image créée", id: input.attachmentId,
-          path: input.path, fileName: input.fileName, mimeType: input.mimeType,
-          size: input.size, width: input.width, height: input.height },
-      ],
-    }),
+    }): ThreadMessage => {
+      const message = this.threadStore.append(scope.threadId, {
+        id: input.messageId, role: "bot", deliveryState: "complete", botId: scope.botId, runId: scope.runId,
+        blocks: [
+          { kind: "text", text: "Image créée." },
+          { kind: "image", url: input.url, alt: "Image créée", id: input.attachmentId,
+            path: input.path, fileName: input.fileName, mimeType: input.mimeType,
+            size: input.size, width: input.width, height: input.height },
+        ],
+      });
+      this.events.publish({ type: "thread.message.created", threadId: scope.threadId, message });
+      return message;
+    },
     hasUnlinkedHistory: (target: ThreadTarget): boolean => this.threadStore.hasUnlinkedHistory(target),
     get: async (target: ThreadTarget): Promise<ThreadSnapshot> =>
       this.threadStore.snapshot(target, this.dispatcher.activeRunIds(threadIdForTarget(target))),

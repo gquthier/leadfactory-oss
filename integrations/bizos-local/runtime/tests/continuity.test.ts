@@ -323,6 +323,7 @@ it("repairs a disabled imported policy for a local CLI turn without authorizing 
     if (operation === "policies/get") return { policy: { enabled: false, modelRuntime: "claude", cloudFallback: null, autoContinue: false } } as never;
     if (operation === "policies/set") return { ok: true } as never;
     if (operation === "status") return { orgId: binding.orgId, userId: binding.accountId, installationId: binding.installationId, workspaceId: "workspace-a", machineName: "QA Mac" } as never;
+    if (operation === "devices/presence") return { receivedAt: new Date().toISOString() } as never;
     if (operation === "runs/start") return { runId: "run-1", epoch: 1, leaseUntil: new Date(Date.now() + 60_000).toISOString() } as never;
     if (operation === "runs/claim") return { turnId: "turn-1", leaseToken: "lease-1", leaseUntil: new Date(Date.now() + 60_000).toISOString() } as never;
     throw new Error(`unexpected ${operation}`);
@@ -334,6 +335,11 @@ it("repairs a disabled imported policy for a local CLI turn without authorizing 
     enabled: true, modelRuntime: "codex", cloudFallback: null, autoContinue: false,
   });
   expect(calls.find(call => call.operation === "runs/start")?.body.cloudFallback).toBeNull();
+  const presence = calls.findIndex(call => call.operation === "devices/presence");
+  const start = calls.findIndex(call => call.operation === "runs/start");
+  expect(presence).toBeGreaterThanOrEqual(0);
+  expect(presence).toBeLessThan(start);
+  expect(calls[presence]?.body.capabilities).toEqual({ runtimes: ["codex"], supervised: true });
   continuity.close();
 });
 it("does not advance memory after disk failure or silently reset a corrupt continuity ledger", () => {
@@ -1018,11 +1024,64 @@ function notAdmittedBroker(options: { admitFails?: boolean } = {}) {
       case "conversations/read": return { events: [], hasMore: false } as never;
       case "conversations/ack": return { acknowledgedThrough: "0" } as never;
       case "devices/list": return { devices: [] } as never;
+      case "devices/presence": return { receivedAt: new Date().toISOString() } as never;
       default: throw new Error(`unexpected ${operation}`);
     }
   };
   return { calls, transport };
 }
+
+it("finishes a lost fourth CLI receipt before Codex claims a signed image turn", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const broker = notAdmittedBroker();
+  let loseFourthReceipt = true;
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    if (operation === "runs/finish" && String(body.runId) === "run-4" && loseFourthReceipt) {
+      loseFourthReceipt = false;
+      throw new Error("terminal receipt transport lost");
+    }
+    return broker.transport(operation, body);
+  });
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+  for (const [index, runtime] of ["codex", "claude", "codex", "claude"].entries()) {
+    const id = `cli-${index + 1}`;
+    await continuity.prepare("bot:a", id, runtime, () => undefined);
+    if (index === 3) await expect(continuity.finish("bot:a", id, true)).rejects.toThrow("terminal receipt transport lost");
+    else await continuity.finish("bot:a", id, true);
+  }
+  expect(storage.readJsonStrict<Record<string, { terminalOutcome?: { ok: boolean }; finishPayload?: unknown }>>("continuity-runs.json", {})["cli-4"])
+    .toMatchObject({ terminalOutcome: { ok: true }, finishPayload: expect.any(Object) });
+  broker.calls.length = 0;
+  await continuity.prepare("bot:a", "codex-image", "codex", () => undefined);
+  expect(broker.calls.map(call => call.operation).indexOf("runs/finish"))
+    .toBeLessThan(broker.calls.map(call => call.operation).indexOf("runs/start"));
+  const image = vi.fn(async () => ({ artifactId: "image-signed" }));
+  await expect(continuity.execute("bot:a", "codex-image", "bizos_image_generate",
+    { prompt: "blue circle", operation_id: "image-on-fifth" }, image)).resolves.toMatchObject({ artifactId: "image-signed" });
+  expect(image).toHaveBeenCalledOnce();
+  continuity.close();
+});
+
+it("repairs a .51 CLI turn whose local answer was saved before the old receipt code ran", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", {
+    "cli-4": { requestId: "request-4", threadId: "bot:a", localRunId: "cli-4",
+      runtime: "claude", runId: "server-4", epoch: 1, turnId: "turn-4", leaseToken: "lease-4" },
+  });
+  storage.writeJson("runs.json", [{ id: "cli-4", threadId: "bot:a", botId: "a", state: "completed",
+    startedAt: new Date().toISOString(), endedAt: new Date().toISOString() }]);
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const broker = notAdmittedBroker();
+  const continuity = new ConversationContinuity(storage, broker.transport);
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+  await continuity.prepare("bot:a", "codex-image", "codex", () => undefined);
+  const operations = broker.calls.map(call => call.operation);
+  expect(operations.indexOf("runs/finish")).toBeGreaterThanOrEqual(0);
+  expect(operations.indexOf("runs/finish")).toBeLessThan(operations.indexOf("runs/start"));
+  expect(storage.readJsonStrict<Record<string, { finished?: boolean }>>("continuity-runs.json", {})["cli-4"]?.finished).toBe(true);
+  continuity.close();
+});
 
 it.each(["claude", "codex"])("a linked Codex turn never blocks the next %s turn on its unreported native effect", async (next) => {
   const { storage } = fixture();

@@ -41,6 +41,24 @@ afterEach(async () => { for (const { harness } of fixtures) harness.stop(); for 
 const done = (turn: CodexTurnInput, text: string) => { turn.onEvent({ type: 'content.delta', streamKind: 'assistant_text', delta: text }); turn.onEvent({ type: 'turn.completed', ok: true, stopReason: null }); };
 
 describe('workspace Quick chats', () => {
+  it('publishes a charged generated image into the QuickChat stream once', async () => {
+    const f = fixture();
+    const chat = await f.harness.quickChats.create('image-projection');
+    const threadId = `chat:${chat.id}`;
+    const events: unknown[] = [];
+    const unsubscribe = f.harness.events.subscribe(event => events.push(event));
+    const image = {
+      messageId: 'generated-image-123e4567-e89b-42d3-a456-426614174000',
+      attachmentId: 'generated-image-123e4567-e89b-42d3-a456-426614174000',
+      path: join(f.root, 'image.png'), url: `file://${f.root}/image.png`,
+      fileName: 'image.png', mimeType: 'image/png', size: 10, width: 1, height: 1,
+    };
+    const message = f.harness.threads.appendGeneratedImage({ botId: chat.id, threadId, runId: 'run-image' }, image);
+    expect(message.blocks.some(block => block.kind === 'image')).toBe(true);
+    expect(events).toContainEqual({ type: 'thread.message.created', threadId, message });
+    expect(f.harness.threads.transcript({ chatId: chat.id }).filter(row => row.id === image.messageId)).toHaveLength(1);
+    unsubscribe();
+  });
   it('sends signed BizOS image tools to Codex in a QuickChat and requires an observed result', async () => {
     const image = { name: 'bizos_image_generate', description: 'Generate an image', inputSchema: { type: 'object', properties: {} }, call: async () => ({ imageId: 'image-1' }) };
     const f = fixture(undefined, undefined, async () => '', {
@@ -48,12 +66,17 @@ describe('workspace Quick chats', () => {
       localTeamMcp: () => ({ command: '/fake/mcp', args: ['--toolset=bizos'] }),
     });
     const chat = await f.harness.quickChats.create('signed-image');
-    await f.harness.quickChats.send(chat.id, 'Generate an image', 'image-request');
+    const sent = await f.harness.quickChats.send(chat.id, 'Generate an image', 'image-request');
     const turn = f.turns[0]!;
     expect(turn.dynamicTools?.map(tool => tool.name)).toContain('bizos_image_generate');
     expect(turn.dynamicTools?.map(tool => tool.name)).not.toContain('recruit_agent');
     expect(turn.system).toContain('bizos_image_generate');
     expect(turn.system).toMatch(/Never announce.*image.*without.*tool/i);
+    await expect(turn.dynamicTools!.find(tool => tool.name === 'bizos_image_generate')!.call({ prompt: 'blue circle' }))
+      .resolves.toEqual({ imageId: 'image-1' });
+    done(turn, 'Voici votre image.');
+    expect((await f.harness.runs.get(sent.runIds[0]!))?.state).toBe('completed');
+    expect((await f.harness.quickChats.get(chat.id)).messages.some(message => message.blocks.some(block => block.kind === 'text' && block.text.includes('Voici votre image.')))).toBe(true);
   });
   it('replays long archived constraints after more than one UI page and a fresh CLI session', async () => {
     const f = fixture();

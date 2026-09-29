@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { downloadGeneratedImage, MAX_IMAGE_BYTES } from "./generated-image.js";
+import { ImageOperationPendingError, pollSignedImageOperation } from "./signed-image-operation.js";
 import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
@@ -3086,32 +3087,31 @@ async function serve(): Promise<void> {
   };
   const invokeBizosTool = async (tool: string, raw: unknown, checkActive: () => void = () => undefined): Promise<unknown> => {
     if (!nativeToolsTransport || !bizosToolOperation[tool]) throw new HttpError(503, "bizos_tools_unavailable", "BizOS server tools are unavailable without the desktop bridge.");
+    const transport = nativeToolsTransport;
     await refreshNativeToolScope();
     const scope = nativeToolScope;
     if (!scope) throw new HttpError(403, "bizos_account_unlinked", "Sign in to BizOS and link this workspace to an organization to use this tool.");
     const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
-    const started = Date.now();
-    for (;;) {
-      checkActive();
+    const invoke = async (): Promise<unknown> => {
       await refreshNativeToolScope();
       if (!nativeToolScope || nativeToolScope.orgId !== scope.orgId || nativeToolScope.workspaceId !== scope.workspaceId)
         throw new HttpError(409, "workspace_changed", "The linked workspace changed during this tool call.");
-      let result: unknown;
-      try {
-        result = await nativeToolsTransport(bizosToolOperation[tool]!, { ...args, orgId: scope.orgId, workspaceId: scope.workspaceId });
-      } catch (error) {
-        if (tool !== "bizos_image_generate" || !(error instanceof ContinuityBridgeError) || error.code !== "operation_outcome_pending") throw error;
-        result = { pending: true };
-      }
-      if (tool !== "bizos_image_generate" || !result || typeof result !== "object" || (result as Record<string, unknown>).pending !== true) return result;
-      if (Date.now() - started > 8 * 60_000)
-        throw new HttpError(504, "image_pending", "Image generation is still processing. Retry with the same operation_id to recover the result.");
-      await new Promise(resolveWait => setTimeout(resolveWait, 3_000));
+      return transport(bizosToolOperation[tool]!, { ...args, orgId: scope.orgId, workspaceId: scope.workspaceId });
+    };
+    if (tool !== "bizos_image_generate") {
+      checkActive();
+      return invoke();
+    }
+    try { return await pollSignedImageOperation(invoke, checkActive); }
+    catch (error) {
+      if (error instanceof ImageOperationPendingError)
+        throw new HttpError(504, "image_pending", error.message);
+      throw error;
     }
   };
   const packOf = (botId: string): PackService | null =>
     packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
-  async function deliverGeneratedImage(capability: TeamCapability, result: unknown, checkActive: () => void): Promise<void> {
+  async function deliverGeneratedImage(capability: TeamCapability, result: unknown): Promise<void> {
     if (!result || typeof result !== "object") throw new HttpError(502, "image_result_invalid", "Image generation returned no image.");
     const row = result as Record<string, unknown>;
     if (typeof row.url !== "string" || typeof row.artifactId !== "string")
@@ -3121,7 +3121,11 @@ async function serve(): Promise<void> {
     const messageId = `generated-image-${row.artifactId}`;
     if (harness.threads.transcript(target).some(message => message.id === messageId)) return;
     const file = await downloadGeneratedImage(row.url, harness.storage.layout.root, row.artifactId);
-    checkActive();
+    // The server has already charged and returned this artifact. A user stop
+    // may end the run during the bounded download; still show the paid result
+    // in its original live conversation, exactly once.
+    if ("chatId" in target) await harness.quickChats.get(target.chatId);
+    if (harness.threads.transcript(target).some(message => message.id === messageId)) return;
     harness.threads.appendGeneratedImage(capability, {
       messageId, attachmentId: messageId, url: pathToFileURL(file.path).href,
       path: file.path, fileName: file.fileName, mimeType: file.mimeType,
@@ -3174,7 +3178,7 @@ async function serve(): Promise<void> {
           if (operation === "bizos") {
             if (!BIZOS_TOOL_SPECS.some(tool => tool.name === parsed.tool)) throw new HttpError(404, "unknown_tool", "Unknown BizOS server tool.");
             const result = await invokeBizosTool(String(parsed.tool), parsed.arguments, () => { teamBroker.authorize(bearer); });
-            if (parsed.tool === "bizos_image_generate") await deliverGeneratedImage(capability, result, () => { teamBroker.authorize(bearer); });
+            if (parsed.tool === "bizos_image_generate") await deliverGeneratedImage(capability, result);
             return result;
           }
           if (operation === "checkpoint") return facade!.checkpointTask(capability,input);
@@ -3799,7 +3803,7 @@ async function serve(): Promise<void> {
           call: async (argumentsValue: unknown) => {
             const capability = teamBroker.authorize(session);
             const result = await invokeBizosTool(tool.name, argumentsValue, () => { teamBroker.authorize(session); });
-            if (tool.name === "bizos_image_generate") await deliverGeneratedImage(capability, result, () => { teamBroker.authorize(session); });
+            if (tool.name === "bizos_image_generate") await deliverGeneratedImage(capability, result);
             return result;
           },
         })) : [];
