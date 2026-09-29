@@ -52,6 +52,9 @@ export const BIZOS_TOOL_SPECS = [{
   name: "bizos_site_publish", description: "Publish an existing BizOS landing site version for this company; returns its public URL. Requires a valid brand snapshot.",
   inputSchema: { type: "object", properties: { site_id: { type: "string" }, version_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this publish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
 }, {
+  name: "bizos_site_unpublish", description: "Unpublish an existing BizOS landing site for this company. Only claim it is unpublished after this tool returns success.",
+  inputSchema: { type: "object", properties: { site_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this unpublish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
+}, {
   name: "bizos_image_generate", description: "Generate an image through the BizOS server. Uses Work Credits, stores the image in the gallery and returns its hosted URL or a pending receipt.",
   inputSchema: { type: "object", properties: { prompt: { type: "string" }, size: { type: "string", enum: ["1:1", "4:5", "9:16"] }, quality: { type: "string", enum: ["low", "medium", "high"] }, operation_id: { type: "string", description: "Stable id for this image; reuse on retry." } }, required: ["prompt", "operation_id"], additionalProperties: false },
 }] as const;

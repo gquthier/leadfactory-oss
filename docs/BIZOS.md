@@ -156,7 +156,10 @@ Cette intégration cible **BizOS local OSS**. Elle n’importe ni moteur privé 
 
 Le runtime sous `integrations/bizos-local/runtime/` est **AGPL-3.0-only** ; ses notices amont sont conservées avec les sources. Le kit d’agence reste **MIT**. Voir [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md) et [le README du runtime](../integrations/bizos-local/runtime/README.md).
 
-### Destination du prochain tour : BizOS — 28 septembre 2026
+### Ancienne destination cloud du prochain tour — 28 septembre 2026
+
+Ce contrat `.46` est conservé ici pour comprendre les envois cloud déjà
+commencés. Le choix `/model` BizOS courant suit le contrat local `.47` ci-dessous.
 
 Le runtime expose `GET/POST /api/local/execution-destination` pour le fil agent
 public demandé. Le choix `personal | bizos` est conservé dans
@@ -189,6 +192,35 @@ Vérification : 54 tests ciblés runtime et TypeScript passent ; le test intégr
 côté backend couvre les vraies signatures/routes/RPC PostgreSQL, l’historique
 32 messages, l’idempotence, STOP, réponse simulée et retour personnel. Le runner
 modèle est simulé ; aucune inférence réelle ni validation du paquet revendiquée.
+
+### Plan BizOS pour les tours locaux — 29 septembre 2026
+
+`GET/POST /api/local/execution-destination` sélectionne désormais BizOS pour
+un DM d'agent, un QuickChat ou un groupe. Le choix est conservé par fil dans
+`bizos-inference-selection.json`, lié à l'organisation et à l'espace de travail
+renvoyés par le pont Desktop signé. Une conversation cloud ou une politique
+`cloudFallback` n'est pas requise. Le statut annonce `bizos-mixture` et, lorsque
+le compte est lié, le coût de 1 Work Credit par tour.
+
+Le message reste traité par le dispatcher local. Le driver Chat Completions
+envoie chaque complétion non streaming par HMAC `inference/chat` vers Electron
+main, qui signe la route SaaS. Le sidecar n'envoie ni clé, ni URL fournisseur,
+ni modèle amont. Un `clientTurnId` UUID reste stable pendant la boucle d'outils
+et chaque complétion a son propre `requestId` UUID. La réponse publique ne
+contient que le nom opaque BizOS. Si le serveur renvoie un jeton opaque
+`reasoning_details` nécessaire à la continuité d'un appel d'outil, le runtime
+le recopie tel quel dans le message assistant suivant, après validation de sa
+forme, sans le décoder. Le délai du pont est de 130 secondes.
+
+Le même manifeste d'outils locaux que les autres agents est monté : recrutement,
+routines, équipe, ordinateur si disponible, email, site et image BizOS si le
+compte est lié et que les outils serveur sont disponibles. Chaque outil passe
+par son hôte et son contrôle d'autorisation ; un échec est rendu comme échec,
+sans déclaration de réussite. `cloud/send` reste destiné à une continuation
+quand le Mac est fermé et à la reprise des anciens envois déjà en cours.
+QuickChat permet aussi le choix et l'inférence BizOS ; comme avec les autres
+fournisseurs, ce fil sans identité d'agent n'a pas les outils d'équipe ni les
+capacités d'action d'un CEO.
 # Ordinateur par agent dans BizOS Simple .46 (candidat, 2026-09-29)
 
 Le sidecar embarqué utilise `computer/remote-server.ts` quand Electron lui donne

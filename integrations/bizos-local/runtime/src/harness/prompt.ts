@@ -272,6 +272,7 @@ export interface PersonaInput {
   /** A native API turn (Gemini, OpenRouter…): the provider's name. Same host
    * tool surface as `nativeOllama`, but the model is remote. */
   nativeApi?: string;
+  nativeBizos?: boolean;
   task?: TaskCheckpoint;
   bot: Bot;
   orgName: string;
@@ -301,7 +302,7 @@ export interface PersonaInput {
 }
 
 export function buildPersonaPrompt(input: PersonaInput): string {
-  const native = input.nativeOllama === true || input.nativeApi !== undefined;
+  const native = input.nativeOllama === true || input.nativeApi !== undefined || input.nativeBizos === true;
   const hasComputer = computerToolsMounted(input);
   const sections: string[] = [personaHeader(input.bot, input.orgName)];
   const instructions = input.bot.instructions?.trim();
@@ -318,11 +319,14 @@ export function buildPersonaPrompt(input: PersonaInput): string {
     }));
   }
   sections.push(native ? [
-    input.nativeOllama
+    input.nativeBizos
+      ? "How Local BizOS works: inference is provided by BizOS Mixture of Models through the signed Desktop bridge. Your listed tools execute in this local runtime. No upstream model or provider identity is available to you."
+      : input.nativeOllama
       ? "How Local BizOS works: this is an independent workspace on this Mac. Ollama runs the selected installed model locally."
       : `How Local BizOS works: this is an independent workspace on this Mac. You answer through ${singleLine(input.nativeApi ?? "an API", 60)}, an API the person connected with their own key; this conversation and your tool results are sent to it.`,
     "You may call only the native host tools listed in this turn. There is no shell, browser, filesystem reader, MCP app or arbitrary computer access unless a listed tool explicitly provides it.",
     "Treat tool results as the only proof of actions. Never claim to have read a file or changed business state without an actual matching tool result.",
+    "Never announce that an agent, routine, email, site, image, computer action or any other action is done unless the corresponding tool returned a successful result. An attempted, missing or failed tool means the action is not done; report the failure plainly.",
     "Recruitment and routines are available only through their listed host tools. STOP revokes them.",
   ].join("\n") : input.localArchitecture ? LOCAL_BIZOS_DOCTRINE : BIZOS_DOCTRINE);
   if (input.localArchitecture) sections.push(...(native ? [LOCAL_PUBLIC_PROGRESS] : [LOCAL_BIZOS_ENVIRONMENT, LOCAL_AUTONOMY_DOCTRINE, LOCAL_PUBLIC_PROGRESS]));
@@ -419,13 +423,16 @@ export function buildPersonaPrompt(input: PersonaInput): string {
 }
 
 /** A session has context, not a persistent teammate's identity or recruitment tools. */
-export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[]; workspace: string; settings: import("./types.js").RuntimeSettings; nativeOllama?: boolean; nativeApi?: string; ephemeralReplay?: boolean }): string {
-  if (input.nativeOllama || input.nativeApi !== undefined) return [
-    input.nativeOllama
+export function buildQuickChatPrompt(input: { bot: Bot; messages: ThreadMessage[]; workspace: string; settings: import("./types.js").RuntimeSettings; nativeOllama?: boolean; nativeApi?: string; nativeBizos?: boolean; ephemeralReplay?: boolean }): string {
+  if (input.nativeOllama || input.nativeApi !== undefined || input.nativeBizos) return [
+    input.nativeBizos
+      ? "You are the assistant in a Quick chat in the user's local BizOS workspace, answered through BizOS Mixture of Models via the signed Desktop bridge."
+      : input.nativeOllama
       ? "You are the assistant in a Quick chat in the user's local BizOS workspace, answered by an installed Ollama model on this Mac."
       : `You are the assistant in a Quick chat in the user's local BizOS workspace, answered through ${singleLine(input.nativeApi ?? "an API", 60)} with the person's own API key.`,
     "This chat has no mounted tools, shell, filesystem reader, browser or attachment reader. Answer text questions from the conversation only. Never claim to have read a file or performed an action.",
     "Do not invent tool results, agents, routines or cloud access. Answer in the user's language.",
+    "Never announce an action as done without a successful result from its corresponding tool.",
     CHAT_STYLE,
     `${TRANSCRIPT_FENCE}\n${conversationSoFar(input.messages, [input.bot])}\nTRANSCRIPT>>>`,
   ].join("\n\n");
@@ -514,7 +521,7 @@ export function buildLocalBrief(input: LocalBriefInput): string {
     work.push("- Checkpoints, routines and recruiting aren't available with this provider: don't promise them.");
   }
   work.push(`- Teammates: ${peers.length ? `${peers.join(", ")}${manifest.peers.length > peers.length ? ", …" : ""}. In a team thread, @Name hands work over.` : "none yet."}${input.teamTools && has("recruit_agent") && manifest.recruitment !== "unavailable" ? " recruit_agent creates a real teammate, even without a role catalog; create the specialists needed for the mission and say who you created only once it returned." : ""}`);
-  const available = ["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat", "list_accessible_computers", "bizos_email_send", "bizos_email_inbox", "bizos_site_publish", "bizos_image_generate", "computer_observe", "computer_act", "computer_download", "computer_request_handoff"].filter((tool) => (input.teamTools || !["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat"].includes(tool)) && (tool !== "recruit_agent" || manifest.recruitment !== "unavailable") && has(tool));
+  const available = ["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat", "list_accessible_computers", "bizos_email_send", "bizos_email_inbox", "bizos_site_publish", "bizos_site_unpublish", "bizos_image_generate", "computer_observe", "computer_act", "computer_download", "computer_request_handoff"].filter((tool) => (input.teamTools || !["recruit_agent", "schedule_routine", "list_routines", "cancel_routine", "manage_agent", "send_to_chat"].includes(tool)) && (tool !== "recruit_agent" || manifest.recruitment !== "unavailable") && has(tool));
   if (available.length) work.push(`- Mounted BizOS tools: ${available.join(", ")}. Call them for real effects; their availability may change with account linking and permissions.`);
   work.push("- To send the person somewhere in the app, name the place: Chats, Apps (their apps, Routines, Second brain), Settings → Plans & usage, Settings → Computer.");
   sections.push(work.join("\n"));

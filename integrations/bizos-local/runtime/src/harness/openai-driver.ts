@@ -14,6 +14,8 @@
 // address the person configured; it is never put in a prompt or an event.
 import type { CodexDynamicTool, CodexTurnHandle, RuntimeEvent } from "./codex-driver.js";
 import { isRichToolResult } from "./tool-result.js";
+import { createHash, randomUUID } from "node:crypto";
+import { ContinuityBridgeError } from "../continuity-bridge.js";
 
 export interface OpenAiTurnInput {
   baseUrl: string;
@@ -30,6 +32,9 @@ export interface OpenAiTurnInput {
   dynamicTools: CodexDynamicTool[];
   onEvent(event: RuntimeEvent): void;
   fetchImpl?: typeof fetch;
+  /** Signed BizOS bridge. When present, no URL, key, provider id or model is
+   * sent. The normal host tool loop consumes its non-streaming completion. */
+  chatCompletion?: (body: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>;
   /** Per-request timeout. */
   timeoutMs?: number;
 }
@@ -42,6 +47,17 @@ const MAX_CALLS = 32;
 const MAX_ARG_CHARS = 32_000;
 const MAX_TOOL_OUTPUT = 10_000;
 const MAX_ANSWER_CHARS = 60_000;
+
+/** The runtime run id is opaque but not UUID-shaped. Derive a UUID so a
+ * resumed local run keeps the same credit admission identity. */
+function clientTurnUuid(runId: string): string {
+  const dnsNamespace = Buffer.from("6ba7b8109dad11d180b400c04fd430c8", "hex");
+  const bytes = createHash("sha1").update(dnsNamespace).update(`bizos-inference-v1:${runId}`).digest().subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -74,7 +90,19 @@ function mergeToolCalls(into: ToolCall[], deltas: unknown): void {
   }
 }
 
-interface Round { content: string; calls: ToolCall[]; finish: string | null; usage?: { input: number; output: number; cached?: number } }
+interface EncryptedReasoning { type: "reasoning.encrypted"; data: string }
+interface Round { content: string; calls: ToolCall[]; finish: string | null; usage?: { input: number; output: number; cached?: number }; reasoningDetails?: EncryptedReasoning[] }
+
+function encryptedReasoning(value: unknown): EncryptedReasoning[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length !== 1 || !record(value[0])
+    || Object.keys(value[0]).sort().join(",") !== "data,type"
+    || value[0].type !== "reasoning.encrypted"
+    || typeof value[0].data !== "string"
+    || !/^bizos-reasoning:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value[0].data))
+    throw new Error("BizOS returned an invalid reasoning token.");
+  return [{ type: "reasoning.encrypted", data: value[0].data }];
+}
 
 function usageOf(value: unknown): Round["usage"] {
   if (!record(value)) return undefined;
@@ -121,6 +149,16 @@ async function complete(
   onText: (delta: string) => void,
 ): Promise<Round> {
   const label = input.label?.trim() || "The API";
+  if (input.chatCompletion) {
+    const json = await input.chatCompletion(body, signal);
+    if (!record(json) || !Array.isArray(json.choices) || !json.choices.length) throw new Error(`${label} returned a malformed chat response.`);
+    const round: Round = { content: "", calls: [], finish: null };
+    applyChoice(round, json.choices[0], false, onText);
+    const choice = json.choices[0];
+    if (record(choice) && record(choice.message)) round.reasoningDetails = encryptedReasoning(choice.message.reasoning_details);
+    round.usage = usageOf(json.usage);
+    return round;
+  }
   const fetchImpl = input.fetchImpl ?? fetch;
   const timeout = AbortSignal.timeout(input.timeoutMs ?? 300_000);
   const response = await fetchImpl(chatCompletionsUrl(input.baseUrl), {
@@ -202,14 +240,19 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
         : [];
       let calls = 0;
       let attributed = false;
+      const clientTurnId = clientTurnUuid(input.runId);
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (cancelled) return;
         const answer = await complete(input, {
-          model: input.model,
+          ...(input.chatCompletion ? { clientTurnId, requestId: randomUUID(), max_tokens: 4096 } : { model: input.model, stream: true }),
           messages,
-          stream: true,
           ...(tools.length ? { tools } : {}),
-        }, aborter.signal, (delta) => emit({ type: "content.delta", streamKind: "assistant_text", delta }));
+        }, aborter.signal, (delta) => {
+          // A non-streaming BizOS response can contain both text and calls.
+          // Hold its text until we know it is a final answer: the model must
+          // not announce an action before the host tool actually succeeds.
+          if (!input.chatCompletion) emit({ type: "content.delta", streamKind: "assistant_text", delta });
+        });
         if (cancelled) return;
         if (answer.finish === "length") throw new Error(`${label} stopped at its output limit; the answer is incomplete.`);
         if (answer.finish === "content_filter") throw new Error(`${label} withheld the answer (content filter).`);
@@ -217,7 +260,8 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
         if (answer.usage) emit({ type: "token-usage", input: answer.usage.input, output: answer.usage.output, ...(answer.usage.cached !== undefined ? { cachedInput: answer.usage.cached } : {}) });
         const requested = answer.calls.filter(Boolean);
         if (!answer.content.trim() && !requested.length) throw new Error(`${label} returned an empty answer.`);
-        if (answer.content.trim()) {
+        if (answer.content.trim() && (!input.chatCompletion || !requested.length)) {
+          if (input.chatCompletion) emit({ type: "content.delta", streamKind: "assistant_text", delta: answer.content });
           emit({ type: "item.completed", itemType: "assistant_text", text: answer.content, itemId: `api-${round}`, phase: requested.length ? "commentary" : "final_answer" });
         }
         if (!requested.length) { terminal(true, null); return; }
@@ -225,6 +269,7 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
         messages.push({
           role: "assistant",
           content: answer.content || null,
+          ...(input.chatCompletion && answer.reasoningDetails ? { reasoning_details: answer.reasoningDetails } : {}),
           tool_calls: echoed.map((call) => ({ ...call.extra, id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } })),
         });
         for (let index = 0; index < echoed.length; index++) {
@@ -248,6 +293,9 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
             emit({ type: "item.started", itemType: "tool", itemId: callId, title: call.name });
             try {
               const value = await tool.call(args, { callId, threadId: input.threadId, turnId: input.runId });
+              if (record(value) && (value.isError === true || value.ok === false || value.success === false || value.error)) {
+                ok = false;
+              }
               result = isRichToolResult(value) ? JSON.stringify(value.text) : JSON.stringify(value ?? null);
               if (result.length > MAX_TOOL_OUTPUT) result = JSON.stringify({
                 status: "completed", result_truncated: true,
@@ -267,7 +315,14 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
     } catch (error) {
       if (cancelled || finished) return;
       const raw = error instanceof Error ? error.message : String(error);
-      const message = input.apiKey ? raw.split(input.apiKey).join("[key]") : raw;
+      const message = input.chatCompletion
+        ? error instanceof ContinuityBridgeError
+          ? error.code === "insufficient_credits" || error.code === "insufficient_work_credits" ? "Crédits BizOS insuffisants. Rechargez vos Work Credits pour continuer."
+            : error.code === "rate_limited" ? "BizOS reçoit trop de demandes. Réessayez dans un instant."
+            : error.code === "inference_disabled" ? "L'inférence BizOS est temporairement indisponible."
+            : "L'inférence BizOS a échoué. Réessayez."
+          : raw === `${label} returned a malformed chat response.` ? raw : "L'inférence BizOS a échoué. Réessayez."
+        : input.apiKey ? raw.split(input.apiKey).join("[key]") : raw;
       emit({ type: "runtime.error", message });
       terminal(false, message);
     }

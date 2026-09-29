@@ -312,6 +312,9 @@ export interface HarnessOptions {
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
   startOpenAiTurn?: DispatchDependencies["startOpenAiTurn"];
+  /** Local BizOS selection and signed non-streaming inference bridge. */
+  bizosSelected?: DispatchDependencies["bizosSelected"];
+  bizosChat?: DispatchDependencies["bizosChat"];
   startOllamaTurn?: DispatchDependencies["startOllamaTurn"];
   startClaudeTurn?: DispatchDependencies["startClaudeTurn"];
   startCursorTurn?: DispatchDependencies["startCursorTurn"];
@@ -777,6 +780,8 @@ export class LocalBizosHarness {
         }
       },
       ...(options.startOpenAiTurn ? { startOpenAiTurn: options.startOpenAiTurn } : {}),
+      ...(options.bizosSelected ? { bizosSelected: options.bizosSelected } : {}),
+      ...(options.bizosChat ? { bizosChat: options.bizosChat } : {}),
       ...(options.startTurn ? { startTurn: options.startTurn } : {}),
       ...(options.startClaudeTurn ? { startClaudeTurn: options.startClaudeTurn } : {}),
       ...(options.startCursorTurn ? { startCursorTurn: options.startCursorTurn } : {}),

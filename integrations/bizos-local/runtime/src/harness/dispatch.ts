@@ -69,7 +69,7 @@ import type { GroupStore } from "./groups.js";
 import { newAskId } from "./ids.js";
 import { isLeadTurn, resolveGroupTargets } from "./mentions.js";
 import { findMentionedBotIds } from "./mentions.js";
-import type { ExternalExecutionProvider, OllamaExecutionProvider } from "./inference.js";
+import { BIZOS_INFERENCE_PROVIDER, type ExternalExecutionProvider, type OllamaExecutionProvider } from "./inference.js";
 import { startOllamaTurn as defaultStartOllamaTurn, type OllamaTurnInput } from "./ollama-driver.js";
 import { startOpenAiTurn as defaultStartOpenAiTurn, type OpenAiTurnInput } from "./openai-driver.js";
 import type { ConnectedPlan, PlanProvider } from "./plan-types.js";
@@ -318,6 +318,9 @@ export interface DispatchDependencies {
   startOllamaTurn?: (input: OllamaTurnInput) => CodexTurnHandle;
   /** Test seam for native OpenAI-compatible API turns. */
   startOpenAiTurn?: (input: OpenAiTurnInput) => CodexTurnHandle;
+  /** Signed BizOS inference selected for this local thread. */
+  bizosSelected?(threadId: string): boolean;
+  bizosChat?(threadId: string, body: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
   environment?: Record<string, string | undefined>;
   retryScale?: number;
   /** Link previews for the first external https link of a reply. `false`
@@ -381,6 +384,7 @@ interface ActiveTurn extends QueuedTurn {
   /** The API provider and model a native API turn answers with, recorded on
    * the run once the provider really answered. */
   apiBinding?: { providerId: string; model: string };
+  bizosBinding?: true;
   blockedOnInput?: boolean;
   /** An approval or question expired unanswered (not refused by anyone). */
   expiredInput?: { askId: string; summary: string; approvalKey: string | null };
@@ -470,7 +474,7 @@ function queuedOf(turn: ActiveTurn): QueuedTurn {
 
 /** Ollama and API providers: in-process drivers with host tools only. */
 function nativeProvider(provider: string): boolean {
-  return provider === "ollama" || provider === "api";
+  return provider === "ollama" || provider === "api" || provider === "bizos";
 }
 
 function isInside(path: string, root: string): boolean {
@@ -1807,8 +1811,10 @@ export class Dispatcher {
     const cursorKey = `${threadId}|${bot.id}`;
     // An explicit external binding must remain exact even after deletion.
     const strictBinding = queued.executionPolicy?.source === "voice" ? queued.executionPolicy.binding : null;
-    const ownPlanProvider = strictBinding ? null : bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
-    if (!strictBinding && bot.planId && !ownPlanProvider) { this.abandon(queued, bot.id, "The selected personal plan was removed; choose another source."); return; }
+    const bizos = !strictBinding && this.deps.bizosSelected?.(threadId) === true;
+    if (bizos && !this.deps.bizosChat) { this.abandon(queued, bot.id, "BizOS inference requires the enrolled Desktop bridge."); return; }
+    const ownPlanProvider = strictBinding || bizos ? null : bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
+    if (!strictBinding && !bizos && bot.planId && !ownPlanProvider) { this.abandon(queued, bot.id, "The selected personal plan was removed; choose another source."); return; }
     const preferredProvider = strictBinding?.provider ?? ownPlanProvider ?? settings.local.provider;
     // An external endpoint answers through codex and needs no plan at all;
     // otherwise the router picks among the connected plans.
@@ -1817,17 +1823,17 @@ export class Dispatcher {
     const globalProviderId = settings.local.inferenceProviderId;
     const exactPlanId = strictBinding?.planId ?? (bot.providerId ? undefined : bot.planId || (!globalProviderId ? settings.local.activePlanId : undefined)) ?? undefined;
     try {
-      ownExternal = strictBinding || queued.ollamaBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
-      globalExternal = strictBinding || queued.ollamaBinding || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
+      ownExternal = strictBinding || bizos || queued.ollamaBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
+      globalExternal = strictBinding || bizos || queued.ollamaBinding || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
     } catch (error) {
       this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error)); return;
     }
-    if (!strictBinding && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
-    const external = strictBinding ? null : queued.ollamaBinding ?? ownExternal ?? (bot.planId && ownPlanProvider ? null : globalExternal);
-    if (!strictBinding && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
+    if (!strictBinding && !bizos && bot.providerId && !ownExternal && !queued.ollamaBinding) { this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Agent settings."); return; }
+    const external = strictBinding || bizos ? null : queued.ollamaBinding ?? ownExternal ?? (bot.planId && ownPlanProvider ? null : globalExternal);
+    if (!strictBinding && !bizos && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
       this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Settings."); return;
     }
-    const plan = external
+    const plan = external || bizos
       ? null
       : this.deps.resolvePlan?.({
           cursorKey,
@@ -1835,17 +1841,17 @@ export class Dispatcher {
           ...(bot.planId && ownPlanProvider ? { botPlanId: bot.planId } : {}),
           ...(exactPlanId ? { exactPlanId } : {}),
         });
-    if (exactPlanId && !external && (!plan || plan.id !== exactPlanId)) { this.abandon(queued, bot.id, "The selected personal plan is unavailable; reconnect it or choose another source."); return; }
+    if (!bizos && exactPlanId && !external && (!plan || plan.id !== exactPlanId)) { this.abandon(queued, bot.id, "The selected personal plan is unavailable; reconnect it or choose another source."); return; }
     if (strictBinding && (!plan || plan.id !== strictBinding.planId || plan.provider !== strictBinding.provider)) {
       this.abandon(queued, bot.id, "The voice task's selected personal plan is no longer available.");
       return;
     }
-    const provider: PlanProvider | "ollama" | "api" = external?.kind === "ollama" ? "ollama" : external?.kind === "api" ? "api" : external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
+    const provider: PlanProvider | "ollama" | "api" | "bizos" = bizos ? "bizos" : external?.kind === "ollama" ? "ollama" : external?.kind === "api" ? "api" : external ? "codex" : (plan?.provider ?? preferredProvider ?? "codex");
     // Ollama and API providers run in-process: no CLI, no MCP mount, no
     // resumable provider session, host dynamic tools only.
-    const native = provider === "ollama" || provider === "api";
+    const native = nativeProvider(provider);
     const family = plan?.provider ?? preferredProvider;
-    const model = external
+    const model = bizos ? BIZOS_INFERENCE_PROVIDER.model : external
       ? (queued.ollamaBinding?.model || bot.model?.trim() || (!bot.providerId && settings.local.inferenceModel?.trim()) || external.model || undefined)
       : (bot.model?.trim() || (bot.planId ? undefined : exactPlanId ? settings.local.model?.trim() : modelForFamily(family, settings.local.model)) || undefined);
     if (provider === "ollama" && !model) { this.abandon(queued, bot.id, "Select an installed Ollama model in Settings."); return; }
@@ -1870,7 +1876,9 @@ export class Dispatcher {
     }
 
     const continuity = this.deps.continuity;
-    const linked = continuity?.linked(threadId) === true;
+    // BizOS inference has its own signed admission and still executes here.
+    // It must not acquire a server execution lease for a foreground turn.
+    const linked = !bizos && continuity?.linked(threadId) === true;
     // A linked Claude turn is always host bounded and manually approved,
     // even when this workspace enables bypass for ordinary local agents; and
     // no shared conversation (another member wrote in it) runs with bypass.
@@ -1987,7 +1995,7 @@ export class Dispatcher {
     // Codex and Claude get a fresh native session and full portable replay.
     // Cursor retains its policy-bound native continuity.
     const local = linked || native || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
-      provider, tools: toolSurface, excludeMessageId: message.id, resumeCursor, cursorKey, writableRoots, skipPermissions,
+      provider: provider as PlanProvider, tools: toolSurface, excludeMessageId: message.id, resumeCursor, cursorKey, writableRoots, skipPermissions,
     });
     const basePersona = local ? local.system : this.personaFor(bot, threadId, {
       replayHistory: !linked && !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
@@ -2010,6 +2018,7 @@ export class Dispatcher {
       skipPermissions: effectiveSkipPermissions,
       ...(external?.kind === "ollama" ? { ollamaBinding: { ...external, model: model! } } : {}),
       ...(external?.kind === "api" ? { apiBinding: { providerId: external.providerId, model: model! } } : {}),
+      ...(bizos ? { bizosBinding: true as const } : {}),
       policyFingerprint,
       ephemeralCli,
       ...(continuityBinding ? { continuityBinding } : {}),
@@ -2060,7 +2069,14 @@ export class Dispatcher {
 
     let handle: CodexTurnHandle;
     if (linked && provider !== "claude") continuity!.markNativeUncontrolled(threadId);
-    if (provider === "api" && external?.kind === "api") {
+    if (provider === "bizos") {
+      handle = (this.deps.startOpenAiTurn ?? defaultStartOpenAiTurn)({
+        baseUrl: "", apiKey: "", model: BIZOS_INFERENCE_PROVIDER.model, label: BIZOS_INFERENCE_PROVIDER.label,
+        system: persona, text: turnText, threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
+        dynamicTools: dynamicTools ?? [], chatCompletion: (body, signal) => this.deps.bizosChat!(threadId, body, signal),
+        onEvent: (event) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
+      });
+    } else if (provider === "api" && external?.kind === "api") {
       handle = (this.deps.startOpenAiTurn ?? defaultStartOpenAiTurn)({
         baseUrl: external.baseUrl, apiKey: external.apiKey, model: model!, label: external.label,
         system: persona, text: turnText, threadId, runId: queued.runId, agent: !threadId.startsWith("chat:"),
@@ -2413,7 +2429,8 @@ export class Dispatcher {
         : this.deps.threads.snapshot({ chatId: threadId.slice(5) }).messages)
         .filter(row => row.id !== runtime.excludeMessageId);
       return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings(), nativeOllama: runtime.provider === "ollama",
-        ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}), ephemeralReplay });
+        ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}),
+        nativeBizos: runtime.provider === "bizos", ephemeralReplay });
     }
     const target: ThreadTarget = threadId.startsWith("group:")
       ? { groupId: threadId.slice(6) }
@@ -2442,6 +2459,7 @@ export class Dispatcher {
       bot,
       nativeOllama: runtime.provider === "ollama",
       ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}),
+      nativeBizos: runtime.provider === "bizos",
       orgName: this.deps.orgName(),
       ...(group
         ? {
@@ -2537,6 +2555,9 @@ export class Dispatcher {
       case "external.model.verified":
         if (turn.apiBinding) this.deps.runs.update(turn.runId, { inference: {
           kind: "api", providerId: turn.apiBinding.providerId, model: turn.apiBinding.model, locality: "remote",
+        } });
+        if (turn.bizosBinding) this.deps.runs.update(turn.runId, { inference: {
+          kind: BIZOS_INFERENCE_PROVIDER.kind, model: BIZOS_INFERENCE_PROVIDER.model, locality: "remote",
         } });
         break;
       case "ollama.model.verified":
