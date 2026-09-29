@@ -75,7 +75,7 @@ describe("bound company vault provider contract", () => {
     expect(turns[0]!.writableRoots).toEqual([vault]);
     expect(turns[0]!.writableRoots).not.toContain(join(root, "state"));
     expect(turns[0]!.writableRoots).not.toContain(globalWorkingDir);
-    expect(turns[0]!.system).toContain(`shared second brain: ${vault}`);
+    expect(turns[0]!.developerInstructions).toContain(`shared second brain: ${vault}`);
     expect(architectureInputs.at(-1)).toEqual({ sharedBrainPath: vault });
   });
 
@@ -102,7 +102,7 @@ describe("bound company vault provider contract", () => {
     await harness.threads.send({ botId: historical.id }, { text: "Continue the old task." });
     expect(turns).toHaveLength(1);
     expect(turns[0]!.writableRoots ?? []).toEqual([]);
-    expect(turns[0]!.system).not.toContain("shared second brain:");
+    expect(`${turns[0]!.developerInstructions ?? ""}\n${turns[0]!.system ?? ""}`).not.toContain("shared second brain:");
     expect(architectureInputs.at(-1)).toEqual({ sharedBrainPath: undefined });
   });
 
@@ -112,7 +112,7 @@ describe("bound company vault provider contract", () => {
     await harness.threads.send({ botId: bot.id }, { text: "Hello" });
     expect(turns).toHaveLength(1);
     expect(turns[0]!.writableRoots ?? []).toEqual([]);
-    expect(turns[0]!.system).not.toContain("shared second brain:");
+    expect(`${turns[0]!.developerInstructions ?? ""}\n${turns[0]!.system ?? ""}`).not.toContain("shared second brain:");
     expect(architectureInputs.at(-1)).toEqual({ sharedBrainPath: undefined });
   });
 });
