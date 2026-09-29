@@ -1187,6 +1187,7 @@ export class CollaborationFacade {
     const localId = threadIdForTarget(target);
     const identity = await continuity.identity();
     if (!identity.orgId || !identity.userId) return false;
+    continuity.store.restoreQuarantinedWorkspace(localId, identity);
     continuity.store.quarantineMismatchedWorkspace(localId, identity.workspaceId);
     if (continuity.store.status(localId)) return true;
     const bots = await this.invoke<Bot[]>("lbz:bots:list");
@@ -1219,6 +1220,8 @@ export class CollaborationFacade {
       try {
         const continuity = this.harness.continuity;
         const identity = await continuity.identity();
+        for (const threadId of continuity.store.quarantinedThreads())
+          continuity.store.restoreQuarantinedWorkspace(threadId, identity);
         const listing = await continuity.list() as { conversations: Array<{
           conversationId: string; agentId: string; audience: string; title: string; localConversationId: string | null; workspaceId?: string;
         }> };
@@ -3845,10 +3848,17 @@ async function serve(): Promise<void> {
     ecommerce: new EcommerceService({ host: packHost, log }),
   };
   const localFacade = new CollaborationFacade(harness, id, teamBroker, index, packs, saveIndex, continuityTransport);
-  // The API descriptor is published later in startup. Quarantine legacy .46
-  // links synchronously first so the first bootstrap cannot see a foreign OS.
-  for (const { threadId } of harness.continuity.store.links())
-    harness.continuity.store.quarantineMismatchedWorkspace(threadId, localFacade.workspaceId);
+  // Use the desktop's enrolled OS identity. The facade id belongs to the
+  // local UI and must never be compared with cloud continuity links.
+  try {
+    const identity = await harness.continuity.identity();
+    if (identity.workspaceId && identity.orgId && identity.userId && identity.installationId) {
+      for (const threadId of harness.continuity.store.quarantinedThreads())
+        harness.continuity.store.restoreQuarantinedWorkspace(threadId, identity);
+      for (const { threadId } of harness.continuity.store.links())
+        harness.continuity.store.quarantineMismatchedWorkspace(threadId, identity.workspaceId);
+    }
+  } catch { /* An unavailable bridge cannot prove a mismatch at startup. */ }
   await refreshNativeToolScope();
   await startLocalHarness(harness, existsSync(join(harnessRoot, "settings.json")), () => {
     facade = localFacade;

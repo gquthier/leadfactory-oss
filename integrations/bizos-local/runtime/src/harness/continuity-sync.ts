@@ -751,7 +751,8 @@ export class ConversationContinuity {
     for (const effect of this.store.effects(threadId).filter(row => row.class !== "uncontrolled"
       && ["prepared", "sent", "unknown"].includes(row.state))) {
       const run = Object.values(this.runs).reverse().find(candidate => candidate.threadId === threadId
-        && candidate.runId && candidate.epoch === effect.generation && candidate.turnId && candidate.leaseToken);
+        && candidate.runId && candidate.epoch === effect.generation && candidate.turnId && candidate.leaseToken
+        && (!effect.runId || candidate.runId === effect.runId));
       if (!run) {
         this.guard.update(threadId, effect.id, "failed", "Previous operation could not be verified after restart.");
         notices.push(`Previous ${effect.tool} operation could not be verified after restart and was marked failed; you can continue safely.`);
@@ -766,7 +767,7 @@ export class ConversationContinuity {
         // The broker never admitted this operation (e.g. runs/admit failed after
         // the local journal entry): nothing was authorized, and runs/receipt
         // would only answer not_found. Close it locally.
-        if (error instanceof ContinuityBridgeError && error.status === 404 && error.code === "not_found") {
+        if (this.operationMissing(error)) {
           this.guard.update(threadId, effect.id, "failed", "The broker never admitted this operation; it was closed as failed.");
           notices.push(`Previous ${effect.tool} operation was never admitted and was marked failed; you can continue safely.`);
           continue;
@@ -779,12 +780,23 @@ export class ConversationContinuity {
         if (remote.status === "failed") notices.push(`Previous ${effect.tool} operation failed; the conversation can continue.`);
         continue;
       }
-      const receipt = "Previous operation could not be verified after restart; it was closed as failed and was not reported as successful.";
-      await this.call("runs/receipt", { ...this.credentials(run), operationId: effect.id, status: "failed", receipt });
+      const receipt = effect.state === "prepared"
+        ? "Previous operation was never executed after admission failed; it was closed as failed."
+        : "Previous operation could not be verified after restart; it was closed as failed and was not reported as successful.";
+      try {
+        await this.call("runs/receipt", { ...this.credentials(run), operationId: effect.id, status: "failed", receipt });
+      } catch (error) {
+        if (!this.operationMissing(error) && effect.state !== "prepared") throw error;
+      }
       this.guard.update(threadId, effect.id, "failed", receipt);
       notices.push(`Previous ${effect.tool} operation could not be verified and was marked failed; you can continue safely.`);
     }
     return notices;
+  }
+  private operationMissing(error: unknown): boolean {
+    return error instanceof ContinuityBridgeError
+      && (error.status === 404 || (error.status === 409
+        && /unknown|not_found|missing/i.test(error.code)));
   }
   private assertBrokerEffect(effect: EffectRecord, remote: BrokerEffect): void {
     if (remote.operationId !== effect.id || remote.target !== effect.tool
@@ -1319,14 +1331,13 @@ export class ConversationContinuity {
       ? input.arguments as Record<string, unknown> : input;
     const requestId = typeof nested.operation_id === "string" && nested.operation_id.trim()
       ? nested.operation_id.trim() : undefined;
-    const generation = this.guard.assert(threadId, tool).generation;
     const dedupeConfirmed = RECONCILABLE_EFFECT_TOOLS.has(tool);
     const locallyRecoverable = tool === "recruit_agent" || tool === "schedule_routine";
-    const previous = this.store.effects(threadId).find(e => e.tool === tool && (
+    const previous = this.store.effects(threadId).find(e => e.tool === tool && e.runId === run.runId && (
       (requestId && e.requestId === requestId)
       || (e.argumentHash === argsHash && (!e.requestId || !requestId)
         && (e.state === "prepared" || e.state === "sent" || e.state === "unknown"
-          || (dedupeConfirmed && (requestId || e.generation === generation))))
+          || dedupeConfirmed))
     ));
     if (previous) {
       if (previous.argumentHash !== argsHash) throw new Error("operation_id was reused with different arguments.");
@@ -1347,20 +1358,33 @@ export class ConversationContinuity {
         throw new Error("An identical operation has an unknown outcome; reconcile before repeating it.");
     }
     const operationId = this.guard.prepare(threadId, tool, kind, argsHash, requestId);
-    const admitted = await this.call<{
-      admitted: boolean;
-      existingStatus?: string;
-    }>("runs/admit", {
-      ...this.credentials(run),
-      operationId,
-      operationClass: kind === "read" ? "read" : "idempotent",
-      argsHash,
-      target: tool,
-    });
-    if (!admitted.admitted)
+    let admitted: { admitted: boolean; existingStatus?: string };
+    try {
+      admitted = await this.call<{
+        admitted: boolean;
+        existingStatus?: string;
+      }>("runs/admit", {
+        ...this.credentials(run),
+        operationId,
+        operationClass: kind === "read" ? "read" : "idempotent",
+        argsHash,
+        target: tool,
+      });
+    } catch (error) {
+      // No host tool has run yet. A lost admission acknowledgement can leave
+      // a broker row, so close it remotely when possible, without making the
+      // local conversation dependent on that reply.
+      this.guard.update(threadId, operationId, "failed", "Admission failed before the host tool ran.");
+      await this.call("runs/receipt", { ...this.credentials(run), operationId, status: "failed",
+        receipt: "Admission failed before the host tool ran." }).catch(() => undefined);
+      throw error;
+    }
+    if (!admitted.admitted) {
+      this.guard.update(threadId, operationId, "failed", "The broker did not admit this operation.");
       throw new Error(
         `Operation already ${admitted.existingStatus ?? "submitted"}; reconcile instead of repeating.`,
       );
+    }
     this.guard.sent(threadId, operationId);
     let result: T;
     try {
@@ -1369,15 +1393,24 @@ export class ConversationContinuity {
       const status =
         error instanceof DocumentValidationError ? "failed" : "unknown";
       this.guard.update(threadId, operationId, status);
-      await this.call("runs/receipt", {
-        ...this.credentials(run),
-        operationId,
-        status,
-        receipt:
-          status === "failed"
-            ? "Document was not written; validation failed."
-            : "Result unavailable; external effect may have happened.",
-      }).catch(() => undefined);
+      let receiptMissing = false;
+      try {
+        await this.call("runs/receipt", {
+          ...this.credentials(run),
+          operationId,
+          status,
+          receipt:
+            status === "failed"
+              ? "Document was not written; validation failed."
+              : "Result unavailable; external effect may have happened.",
+        });
+      } catch (receiptError) {
+        if (this.operationMissing(receiptError)) {
+          this.guard.update(threadId, operationId, "failed", "The broker does not recognize this operation; the local tool error was recorded.");
+          receiptMissing = true;
+        }
+      }
+      if (receiptMissing) throw error;
       if (!dedupeConfirmed || status === "failed") throw error;
 
       // Read the continuity broker before replaying the same idempotent host
@@ -1445,6 +1478,7 @@ export class ConversationContinuity {
       class: "uncontrolled",
       state: "sent",
       generation: lease.generation,
+      runId: lease.runId,
     });
   }
   async putArtifact(

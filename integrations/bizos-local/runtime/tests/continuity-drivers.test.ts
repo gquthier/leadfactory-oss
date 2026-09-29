@@ -128,6 +128,20 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.pa
   });
   expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false });
 });
+it("Claude accepts an empty end_turn after a successful tool result", async () => {
+  const f = script(`import readline from 'node:readline';const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.type==='control_request')send({type:'control_response',response:{subtype:'success',request_id:r.request_id}});if(r.type==='user'){send({type:'assistant',message:{id:'action',role:'assistant',stop_reason:'tool_use',content:[{type:'text',text:'Je crée la routine.'},{type:'tool_use',id:'tool-1',name:'mcp__local__schedule_routine',input:{}}]}});send({type:'user',parent_tool_use_id:'tool-1',message:{role:'user',content:[{type:'tool_result',tool_use_id:'tool-1',content:'Routine créée.'}]}});send({type:'assistant',message:{id:'done',role:'assistant',stop_reason:'end_turn',content:[]}});send({type:'result',subtype:'success',result:'',session_id:'session'});}});`);
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("driver timeout")), 3000);
+    startClaudeTurn({ cli: f.cli, cwd: f.root, text: "Create routine", sandbox: "read-only", environment: { PATH: process.env.PATH }, onEvent: event => {
+      events.push(event);
+      if (event.type === "turn.completed") { clearTimeout(timer); resolve(); }
+    } });
+  });
+  expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+  expect(events.some(event => event.type === "runtime.error")).toBe(false);
+});
 it("Claude projects a native file permission before the turn can finish", async () => {
   const f = script(`import readline from 'node:readline';const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);if(r.type==='control_request'&&r.request?.subtype==='initialize'){send({type:'control_response',response:{subtype:'success',request_id:r.request_id}});return;}if(r.type==='user'){send({type:'assistant',message:{id:'announced',role:'assistant',stop_reason:'tool_use',content:[{type:'text',text:'Je vais créer le fichier.'}]}});send({type:'control_request',request_id:'permission-write',request:{subtype:'can_use_tool',tool_name:'Write',input:{file_path:'/fixture/report.md',content:'ok'}}});return;}if(r.type==='control_response'&&r.response?.request_id==='permission-write'){send({type:'assistant',message:{id:'done',role:'assistant',stop_reason:'end_turn',content:[{type:'text',text:'Le fichier est créé.'}]}});send({type:'result',subtype:'success',result:'Le fichier est créé.',session_id:'session'});}});`);

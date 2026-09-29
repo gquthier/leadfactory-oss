@@ -74,6 +74,8 @@ export interface EffectRecord {
   class: "read" | "mediated" | "supervised" | "uncontrolled";
   state: "prepared" | "sent" | "confirmed" | "failed" | "unknown";
   generation: number;
+  /** Broker run identity: generations can restart at 1 on later runs. */
+  runId?: string;
   argumentHash?: string;
   receipt?: string;
   /** Bounded local tool receipt; lets a repeated model call read an effect without performing it again. */
@@ -201,6 +203,49 @@ export class ContinuityStore {
       for (const [key, value] of Object.entries(state.queued))
         if (value && typeof value === "object" && (value as { threadId?: unknown }).threadId === threadId) delete state.queued[key];
     });
+    return true;
+  }
+  quarantinedThreads(): string[] {
+    const rows = this.storage.readJsonStrict<Array<{ threadId: string; superseded?: boolean }>>("continuity-quarantine.json", []);
+    return [...new Set(rows.filter(row => !row.superseded).map(row => row.threadId))];
+  }
+  /** A .50/.51 startup could quarantine a valid OS link against the local
+   * facade id, then attach a duplicate conversation. Restore only a link whose
+   * full desktop identity still matches. Preserve any unsent duplicate outbox. */
+  restoreQuarantinedWorkspace(threadId: string, identity: { workspaceId: string; orgId: string; userId: string; installationId: string }): boolean {
+    const rows = this.storage.readJsonStrict<Array<{ threadId: string; workspaceId: string; conversation: Conversation; superseded?: boolean }>>(
+      "continuity-quarantine.json", []);
+    const matching = rows.filter(row => !row.superseded && row.threadId === threadId
+      && row.conversation.link.workspaceId === identity.workspaceId
+      && row.conversation.link.orgId === identity.orgId
+      && row.conversation.link.accountId === identity.userId
+      && row.conversation.link.installationId === identity.installationId);
+    if (!matching.length) return false;
+    const original = structuredClone(matching[0]!.conversation);
+    const current = this.state.conversations[threadId];
+    if (current && (current.link.workspaceId !== identity.workspaceId
+      || current.link.orgId !== identity.orgId || current.link.accountId !== identity.userId
+      || current.link.installationId !== identity.installationId)) return false;
+    const target = current?.link.conversationId === original.link.conversationId ? structuredClone(current) : original;
+    const donors = [...matching.map(row => row.conversation), ...(current ? [current] : [])]
+      .filter(donor => donor !== target);
+    for (const donor of donors) {
+      const known = new Set(target.events.map(event => event.eventId));
+      for (const event of donor.events.filter(event => event.seq === undefined && !known.has(event.eventId))) {
+        const { hash: _hash, ...copy } = event;
+        const next = { ...copy, localSequence: target.nextLocalSequence++, baseRevision: String(target.head) };
+        target.events.push({ ...next, hash: payloadHash(next) });
+        known.add(event.eventId);
+      }
+      Object.assign(target.captured, donor.captured);
+      for (const effect of donor.effects)
+        if (!target.effects.some(row => row.id === effect.id)) target.effects.push(effect);
+    }
+    this.commit(state => { state.conversations[threadId] = target; });
+    const remaining = rows.filter(row => !matching.includes(row));
+    if (current && current.link.conversationId !== target.link.conversationId)
+      remaining.push({ threadId, workspaceId: current.link.workspaceId!, conversation: structuredClone(current), superseded: true });
+    this.storage.writeJson("continuity-quarantine.json", remaining);
     return true;
   }
   /** Remove only a legacy local QuickChat projection/outbox. The remote

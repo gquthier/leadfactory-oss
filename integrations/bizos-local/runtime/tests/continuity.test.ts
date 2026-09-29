@@ -82,6 +82,43 @@ it("quarantines a legacy link from a different or unverified OS before cloud pro
   store.link("bot:b", binding); // .46 did not record an OS id.
   expect(store.quarantineMismatchedWorkspace("bot:b", "os_new")).toBe(true);
 });
+it("keeps a matching desktop OS link, its outbox and effect journal during startup", async () => {
+  const { storage, store } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  store.link("bot:a", { ...binding, workspaceId: "os_x" });
+  store.capture(message(1, "unsent"));
+  store.effect("bot:a", { id: "effect-1", tool: "schedule_routine", class: "mediated", state: "confirmed", generation: 1 });
+  const continuity = new ConversationContinuity(storage, async operation => {
+    if (operation === "status") return { ...binding, userId: binding.accountId, workspaceId: "os_x" } as never;
+    throw new Error(`unexpected ${operation}`);
+  });
+  const identity = await continuity.identity();
+  expect(store.quarantineMismatchedWorkspace("bot:a", identity.workspaceId)).toBe(false);
+  expect(store.status("bot:a")?.conversationId).toBe(binding.conversationId);
+  expect(store.pending("bot:a").map(event => event.content)).toEqual(["unsent"]);
+  expect(store.effects("bot:a").map(effect => effect.id)).toEqual(["effect-1"]);
+  expect(storage.readJsonStrict("continuity-quarantine.json", [])).toEqual([]);
+  continuity.close();
+});
+it("restores a .50 quarantined OS link without a second local conversation", () => {
+  const { storage, store } = fixture();
+  store.link("bot:a", { ...binding, workspaceId: "os_x" });
+  store.capture(message(1, "unsent before .50"));
+  store.effect("bot:a", { id: "original-effect", tool: "schedule_routine", class: "mediated", state: "confirmed", generation: 1 });
+  expect(store.quarantineMismatchedWorkspace("bot:a", "local:instance:workspace")).toBe(true);
+  store.link("bot:a", { ...binding, conversationId: "duplicate", workspaceId: "os_x" });
+  store.capture(message(2, "unsent after .50"));
+  expect(store.quarantineMismatchedWorkspace("bot:a", "local:instance:workspace")).toBe(true);
+  store.link("bot:a", { ...binding, conversationId: "duplicate-again", workspaceId: "os_x" });
+  store.capture(message(3, "unsent after .51"));
+  expect(store.restoreQuarantinedWorkspace("bot:a", { workspaceId: "os_x", orgId: binding.orgId, userId: binding.accountId, installationId: binding.installationId })).toBe(true);
+  expect(store.status("bot:a")?.conversationId).toBe(binding.conversationId);
+  expect(store.pending("bot:a").map(event => event.content)).toEqual(["unsent before .50", "unsent after .50", "unsent after .51"]);
+  expect(store.effects("bot:a").map(effect => effect.id)).toEqual(["original-effect"]);
+  expect(new ContinuityStore(storage).links()).toHaveLength(1);
+  expect(storage.readJsonStrict<unknown[]>("continuity-quarantine.json", [])).toHaveLength(1);
+  expect(store.restoreQuarantinedWorkspace("bot:a", { workspaceId: "os_x", orgId: binding.orgId, userId: binding.accountId, installationId: binding.installationId })).toBe(false);
+});
 it("refuses sync and cloud calls when a stale link belongs to another OS", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
@@ -991,7 +1028,7 @@ it.each(["claude", "codex"])("a linked Codex turn never blocks the next %s turn 
   continuity.close();
 });
 
-it("closes locally a prepared effect the broker never admitted, without a receipt", async () => {
+it("closes locally an admission failure before the next turn, without a blocking receipt", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
   const broker = notAdmittedBroker({ admitFails: true });
@@ -1004,16 +1041,100 @@ it("closes locally a prepared effect the broker never admitted, without a receip
     .rejects.toThrow(/continuity_unavailable/);
   expect(perform).not.toHaveBeenCalled();
   await continuity.finish("bot:a", "local-1", true);
-  expect(continuity.store.effects("bot:a")).toMatchObject([{ tool: "schedule_routine", state: "prepared" }]);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ tool: "schedule_routine", state: "failed" }]);
 
   broker.calls.length = 0;
   const { notices } = await continuity.prepare("bot:a", "local-2", "claude", () => undefined);
-  expect(notices).toEqual([expect.stringMatching(/never admitted.*marked failed/)]);
+  expect(notices).toEqual([]);
   expect(continuity.store.effects("bot:a")).toMatchObject([{ tool: "schedule_routine", state: "failed" }]);
   const operations = broker.calls.map(call => call.operation);
-  expect(operations).toContain("runs/effect");
+  expect(operations).not.toContain("runs/effect");
   expect(operations).not.toContain("runs/receipt");
   expect(operations).toContain("runs/start");
+  continuity.close();
+});
+it.each([
+  ["runs/effect", 409, "unknown_operation"], ["runs/receipt", 404, "not_found"],
+])("closes a prepared effect when %s returns %i/%s and starts the next turn", async (route, status, code) => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { old: { requestId: "old", threadId: "bot:a", localRunId: "old", runtime: "claude",
+    runId: "run-old", epoch: 1, turnId: "turn-old", leaseToken: "lease-old" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const { ContinuityBridgeError } = await import("../src/continuity-bridge.js");
+  const broker = notAdmittedBroker();
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    if (operation === route) throw new ContinuityBridgeError(status, code, "operation unknown");
+    if (operation === "runs/effect") return { operationId: body.operationId, status: "sent", receipt: null,
+      target: "schedule_routine", argsHash: payloadHash({ prompt: "Monday" }) } as never;
+    return broker.transport(operation, body);
+  });
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+  continuity.store.effect("bot:a", { id: "never-admitted", tool: "schedule_routine", class: "mediated", state: "prepared",
+    generation: 1, runId: "run-old", argumentHash: payloadHash({ prompt: "Monday" }) });
+  await expect(continuity.prepare("bot:a", "next", "claude", () => undefined)).resolves.toMatchObject({ notices: [expect.stringMatching(/marked failed/)] });
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "failed" }]);
+  expect(broker.calls.some(call => call.operation === "runs/start")).toBe(true);
+  continuity.close();
+});
+it.each(["network", "stop"])("closes a %s failure during admit before the next turn", async failure => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const broker = notAdmittedBroker();
+  let failAdmit = true;
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    if (operation === "runs/admit" && failAdmit) {
+      failAdmit = false;
+      throw new Error(failure === "stop" ? "stopped" : "network offline");
+    }
+    return broker.transport(operation, body);
+  });
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+  await continuity.prepare("bot:a", "first", "claude", () => undefined);
+  await expect(continuity.execute("bot:a", "first", "schedule_routine", { prompt: "Monday" }, async () => "unused")).rejects.toThrow();
+  await continuity.finish("bot:a", "first", true);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "failed" }]);
+  await expect(continuity.prepare("bot:a", "second", "claude", () => undefined)).resolves.toMatchObject({ notices: [] });
+  continuity.close();
+});
+it("allows a second tool after a failed first tool gets a missing broker receipt", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { local: { requestId: "one", threadId: "bot:a", localRunId: "local",
+    runtime: "codex", runId: "server-1", epoch: 1, turnId: "turn-1", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const { ContinuityBridgeError } = await import("../src/continuity-bridge.js");
+  const continuity = new ConversationContinuity(storage, async operation => {
+    if (operation === "runs/admit") return { admitted: true } as never;
+    if (operation === "runs/receipt") throw new ContinuityBridgeError(404, "not_found", "unknown effect");
+    return {} as never;
+  });
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-1", generation: 1, leaseToken: "lease",
+    expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  await expect(continuity.execute("bot:a", "local", "send_message", { text: "first" }, async () => { throw new Error("tool failed"); }))
+    .rejects.toThrow("tool failed");
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "failed" }]);
+  await expect(continuity.execute("bot:a", "local", "read_company", {}, async () => ({ ok: true }))).resolves.toEqual({ ok: true });
+  continuity.close();
+});
+it("deduplicates a routine within its run but executes the same arguments in another run", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", {
+    first: { requestId: "one", threadId: "bot:a", localRunId: "first", runtime: "codex", runId: "server-1", epoch: 1, turnId: "turn-1", leaseToken: "lease" },
+    second: { requestId: "two", threadId: "bot:a", localRunId: "second", runtime: "codex", runId: "server-2", epoch: 1, turnId: "turn-2", leaseToken: "lease" },
+  });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const continuity = new ConversationContinuity(storage, async operation => operation === "runs/admit" ? { admitted: true } as never : {} as never);
+  continuity.store.link("bot:a", binding);
+  const perform = vi.fn(async () => ({ routineId: `routine-${perform.mock.calls.length}` }));
+  const lease = (runId: string) => ({ runId, generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 });
+  continuity.guard.install("bot:a", lease("server-1"), () => undefined);
+  const first = await continuity.execute("bot:a", "first", "schedule_routine", { prompt: "Monday" }, perform);
+  expect(await continuity.execute("bot:a", "first", "schedule_routine", { prompt: "Monday" }, perform)).toEqual(first);
+  continuity.guard.release("bot:a");
+  continuity.guard.install("bot:a", lease("server-2"), () => undefined);
+  const second = await continuity.execute("bot:a", "second", "schedule_routine", { prompt: "Monday" }, perform);
+  expect(second).not.toEqual(first);
+  expect(perform).toHaveBeenCalledTimes(2);
   continuity.close();
 });
 

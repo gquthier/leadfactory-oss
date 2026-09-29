@@ -599,6 +599,7 @@ class ClaudePublicMessages {
   private lastPublished = "";
   private finalPublished = false;
   private commentaryPublished = false;
+  private terminalEndTurn = false;
 
   constructor(private readonly emit: (event: RuntimeEvent) => void) {}
 
@@ -664,7 +665,7 @@ class ClaudePublicMessages {
       } else if (event.type === "message_delta") {
         const reason = (event.delta as Record<string, unknown> | undefined)?.stop_reason;
         if (reason === "tool_use") current.phase = "commentary";
-        else if (reason === "end_turn") current.phase = "final_answer";
+        else if (reason === "end_turn") { current.phase = "final_answer"; this.terminalEndTurn = true; }
       } else if (event.type === "message_stop") this.close(true);
       return;
     }
@@ -676,7 +677,7 @@ class ClaudePublicMessages {
       const current = this.current;
       if (!current) return;
       if (nested?.stop_reason === "tool_use") current.phase = "commentary";
-      else if (nested?.stop_reason === "end_turn") current.phase = "final_answer";
+      else if (nested?.stop_reason === "end_turn") { current.phase = "final_answer"; this.terminalEndTurn = true; }
       const text = extractAssistantText(message);
       if (text) {
         if (current.streamed) {
@@ -715,6 +716,12 @@ class ClaudePublicMessages {
       this.finalPublished = true;
       this.lastPublished = result;
       this.emit({ type: "item.completed", itemType: "assistant_text", itemId: `claude-result-${++this.sequence}`, text: result, phase: "final_answer" });
+      return null;
+    }
+    if (this.terminalEndTurn) {
+      this.finalPublished = true;
+      if (this.commentaryPublished) this.emit({ type: "item.completed", itemType: "assistant_text",
+        itemId: `claude-result-${++this.sequence}`, text: "Opération terminée.", phase: "final_answer" });
       return null;
     }
     if (this.commentaryPublished) return "Claude s'est terminé sans résultat final ni demande d'autorisation visible.";

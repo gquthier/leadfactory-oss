@@ -74,6 +74,7 @@ export class LeaseGuard {
       class: kind,
       state: "prepared",
       generation: lease.generation,
+      runId: lease.runId,
       ...(argumentHash ? { argumentHash } : {}),
       ...(requestId ? { requestId } : {}),
     });
