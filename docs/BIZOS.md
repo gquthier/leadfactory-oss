@@ -201,8 +201,10 @@ un DM d'agent, un QuickChat ou un groupe. Le choix est conservé par fil dans
 renvoyés par le pont Desktop signé. Une conversation cloud ou une politique
 `cloudFallback` n'est pas requise. Le statut annonce `bizos-mixture` et, lorsque
 le compte est lié, le coût de 1 Work Credit par tour.
-Un fil déjà lié à la continuité garde toutefois sa politique d'exécution
-activée pour obtenir la lease locale qui autorise ses messages d'agent.
+Un fil déjà lié à la continuité obtient la lease locale qui autorise ses
+messages d'agent. Si sa politique d'exécution est désactivée, le runtime
+demande une lease `localOnly` pour ce tour BizOS ; il ne modifie pas la
+politique, n'active pas `cloudFallback` et ne transfère pas ce run au cloud.
 
 Le message reste traité par le dispatcher local. Le driver Chat Completions
 envoie chaque complétion non streaming par HMAC `inference/chat` vers Electron

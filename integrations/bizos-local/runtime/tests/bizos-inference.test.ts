@@ -112,7 +112,7 @@ it.each([
   expect(JSON.stringify(events)).not.toMatch(/deepseek|private-provider-token/);
 });
 
-it("dispatches a BizOS CEO turn locally and persists the recruited agent and routine", async () => {
+it.each([true, false])("dispatches a BizOS CEO turn locally with continuity policy enabled=%s", async (policyEnabled) => {
   const root = mkdtempSync(join(tmpdir(), "bizos-local-ceo-")); roots.push(root);
   const broker = new LocalTeamBroker();
   const workspaceId = "local:fixture:workspace";
@@ -120,11 +120,12 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
   const conversationId = randomUUID();
   const continuityEvents: Array<Record<string, unknown>> = [];
   const bridgeOperations: string[] = [];
+  const startBodies: Record<string, unknown>[] = [];
   const bridge: ContinuityTransport = async <T>(operation: string, body: Record<string, unknown>) => {
     bridgeOperations.push(operation);
     let result: unknown;
     if (operation === "status") result = { linked: true, toolsAvailable: true, orgId, workspaceId, userId: "owner", installationId: "install" };
-    else if (operation === "policies/get") result = { policy: { enabled: true, modelRuntime: "codex", cloudFallback: null, autoContinue: false } };
+    else if (operation === "policies/get") result = { policy: { enabled: policyEnabled, modelRuntime: "codex", cloudFallback: null, autoContinue: false } };
     else if (operation === "conversations/read") result = { events: continuityEvents.filter((row) => Number(row.sequence) > Number(body.after)), hasMore: false, latestCheckpointId: null };
     else if (operation === "conversations/append") {
       for (const event of body.events as Array<Record<string, unknown>>) if (!continuityEvents.some((row) => row.eventId === event.eventId)) continuityEvents.push({ ...event, sequence: String(continuityEvents.length + 1), contentHash: canonicalEventHash(event as never), createdAt: new Date().toISOString() });
@@ -132,7 +133,11 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
     }
     else if (operation === "conversations/ack") result = { acknowledgedThrough: body.through };
     else if (operation === "devices/list") result = { devices: [] };
-    else if (operation === "runs/start") result = { runId: randomUUID(), epoch: 1, leaseUntil: new Date(Date.now() + 60_000).toISOString() };
+    else if (operation === "runs/start") {
+      startBodies.push(body);
+      if (!policyEnabled && (body.localOnly !== true || body.cloudFallback !== null)) throw new Error("disabled policy requires a local-only lease");
+      result = { runId: randomUUID(), epoch: 1, leaseUntil: new Date(Date.now() + 60_000).toISOString() };
+    }
     else if (operation === "runs/claim") result = { turnId: randomUUID(), leaseToken: "fixture-lease", leaseUntil: new Date(Date.now() + 60_000).toISOString() };
     else if (operation === "runs/finish") {
       for (const event of (body.finalEvents ?? []) as Array<Record<string, unknown>>) if (!continuityEvents.some((row) => row.eventId === event.eventId)) continuityEvents.push({ ...event, sequence: String(continuityEvents.length + 1), contentHash: canonicalEventHash(event as never), createdAt: new Date().toISOString() });
@@ -189,6 +194,10 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
   expect((await harness.routines.list()).some((routine) => routine.name === "Market watch")).toBe(true);
   expect(bridgeOperations).toContain("runs/claim");
   expect(bridgeOperations).not.toContain("cloud/send");
+  expect(bridgeOperations).not.toContain("policies/set");
+  expect(bridgeOperations).not.toContain("transfers/prepare");
+  expect(startBodies).toEqual([expect.objectContaining(policyEnabled ? { cloudFallback: null } : { localOnly: true, cloudFallback: null })]);
+  if (policyEnabled) expect(startBodies[0]).not.toHaveProperty("localOnly");
   expect(requests).toHaveLength(3);
   expect(JSON.stringify(requests)).not.toMatch(/openrouter|deepseek/i);
   harness.stop();

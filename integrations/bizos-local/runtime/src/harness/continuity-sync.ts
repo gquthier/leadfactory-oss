@@ -539,6 +539,7 @@ export class ConversationContinuity {
     localRunId: string,
     runtime: string,
     abort: () => void,
+    options: { localInference?: boolean } = {},
   ): Promise<void> {
     if (!this.linked(threadId)) return;
     if (runtime !== "claude" && runtime !== "codex")
@@ -560,7 +561,11 @@ export class ConversationContinuity {
         autoContinue: boolean;
       };
     }>("policies/get", this.scope(threadId));
-    if (!policy.enabled)
+    // A BizOS completion runs on this Mac even when the conversation's
+    // continuity execution policy is off. It gets a distinct local-only
+    // server lease; that policy and its cloud fallback remain untouched.
+    const localOnly = !policy.enabled && options.localInference === true;
+    if (!policy.enabled && !localOnly)
       throw new Error(
         "Conversation execution is disabled in its continuity policy.",
       );
@@ -627,7 +632,8 @@ export class ConversationContinuity {
         ...this.scope(threadId),
         requestId: run.requestId,
         modelRuntime: runtime,
-        cloudFallback: policy.cloudFallback,
+        cloudFallback: localOnly ? null : policy.cloudFallback,
+        ...(localOnly ? { localOnly: true } : {}),
       });
       run = { ...run, ...started };
       this.saveRun(run);

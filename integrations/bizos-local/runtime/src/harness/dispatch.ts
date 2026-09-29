@@ -1890,7 +1890,7 @@ export class Dispatcher {
       void continuity!.prepare(threadId, queued.runId, bizos ? "codex" : provider, () => {
         const active = this.active.get(threadId);
         if (active?.runId === queued.runId) { active.cancelled = true; this.deps.onRunStopped?.(queued.runId); active.handle?.stop(); }
-      }).then(() => {
+      }, bizos ? { localInference: true } : {}).then(() => {
         if (this.preparing.get(threadId) !== queued) {
           continuity!.stop(threadId, queued.runId);
           return;
