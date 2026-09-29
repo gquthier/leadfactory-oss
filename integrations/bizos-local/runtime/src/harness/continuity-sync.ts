@@ -560,10 +560,22 @@ export class ConversationContinuity {
         autoContinue: boolean;
       };
     }>("policies/get", this.scope(threadId));
-    if (!policy.enabled)
-      throw new Error(
-        "Conversation execution is disabled in its continuity policy.",
-      );
+    // Imported conversations may have a disabled cloud continuity policy.
+    // The server's legacy runs/start gate still requires enabled=true, so
+    // migrate it to a local-only policy. Never inherit or enable a cloud
+    // fallback while repairing a personal CLI turn.
+    if (!policy.enabled) {
+      await this.call("policies/set", {
+        ...this.scope(threadId),
+        policy: {
+          enabled: true,
+          modelRuntime: runtime,
+          cloudFallback: null,
+          autoContinue: false,
+        },
+      });
+      policy.cloudFallback = null;
+    }
     await this.sync(threadId);
     const current = await this.identity();
     const agentId = this.store.status(threadId)?.agentId;
