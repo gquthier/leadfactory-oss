@@ -36,7 +36,13 @@ it.skipIf(!built)("starts with an os_x bridge without quarantining its existing 
       const token = createHmac("sha256", secret).update("os_x\0continuity").digest("hex");
       if (request.headers.authorization !== `Bearer ${token}`) { response.writeHead(403); response.end(); return; }
       const { operation } = JSON.parse(Buffer.concat(chunks).toString()) as { operation: string };
-      const result = operation === "status" ? { linked: false, workspaceId: "os_x", orgId: "org-x", userId: "owner-x", installationId: "install-x" } : null;
+      const result = operation === "status"
+        ? { linked: false, workspaceId: "os_x", orgId: "org-x", userId: "owner-x", installationId: "install-x" }
+        : operation === "conversations/list"
+          ? { conversations: [{ conversationId: "conversation-duplicate", agentId: "ceo", audience: "private",
+            title: "CEO", localConversationId: "bot:existing", workspaceId: "os_x" }] }
+          : operation === "conversations/bind" ? { conversationId: "conversation-duplicate" }
+          : null;
       response.writeHead(result ? 200 : 404, { "content-type": "application/json" });
       response.end(JSON.stringify(result ? { ok: true, result } : { ok: false, code: "not_found" }));
     });
@@ -55,10 +61,16 @@ it.skipIf(!built)("starts with an os_x bridge without quarantining its existing 
     while (!existsSync(descriptorPath) && Date.now() < deadline && child.exitCode === null)
       await new Promise(resolveWait => setTimeout(resolveWait, 50));
     expect(existsSync(descriptorPath), logs).toBe(true);
+    const descriptor = JSON.parse(readFileSync(descriptorPath, "utf8")) as { origin: string; token: string };
+    const autoLink = await fetch(new URL("/api/local/continuity/auto-link", descriptor.origin), {
+      method: "POST", headers: { authorization: `Bearer ${descriptor.token}` },
+    });
+    expect(autoLink.status).toBe(200);
     const reopened = new ContinuityStore(storage);
     expect(reopened.status("bot:existing")?.conversationId).toBe(link.conversationId);
     expect(reopened.pending("bot:existing").map(event => event.content)).toEqual(["Unsent message"]);
     expect(reopened.effects("bot:existing").map(effect => effect.id)).toEqual(["effect-original"]);
+    expect(reopened.links().some(row => row.link.conversationId === "conversation-duplicate")).toBe(false);
     expect(readFileSync(storage.threadPath("bot:existing"), "utf8")).toBe(before);
     expect(storage.readJsonStrict("continuity-quarantine.json", [])).toEqual([]);
   } finally {

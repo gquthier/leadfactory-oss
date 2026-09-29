@@ -1235,6 +1235,10 @@ export class CollaborationFacade {
           seen.add(row.conversationId);
           if (this.importedRemote.has(row.conversationId)) continue;
           if (continuity.store.links().some(link => link.link.conversationId === row.conversationId)) continue;
+          // A .50/.51 startup may have created a second cloud conversation
+          // for this same local thread. Keep the restored original link and
+          // never materialize the duplicate as another bot or group.
+          if (continuity.store.status(remoteThreadId)) continue;
           try {
             let threadId: string;
             if (remoteThreadId.startsWith("bot:")) {
