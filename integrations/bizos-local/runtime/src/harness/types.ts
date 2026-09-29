@@ -450,7 +450,8 @@ export interface Run {
   outcome?: RoutineRunOutcome;
   task?: import("./task.js").TaskCheckpoint;
   inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" }
-    | { kind: "api"; providerId: string; model: string; locality: "remote" };
+    | { kind: "api"; providerId: string; model: string; locality: "remote" }
+    | { kind: "bizos"; model: "bizos-mixture"; locality: "remote" };
   usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
   /** Last write to this record (checkpoint, state, usage). */
   updatedAt?: string;

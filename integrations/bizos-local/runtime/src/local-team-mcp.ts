@@ -52,7 +52,7 @@ export const BIZOS_TOOL_SPECS = [{
   name: "bizos_site_publish", description: "Publish an existing BizOS landing site version for this company; returns its public URL. Requires a valid brand snapshot.",
   inputSchema: { type: "object", properties: { site_id: { type: "string" }, version_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this publish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
 }, {
-  name: "bizos_site_unpublish", description: "Take an existing BizOS landing site offline for this company. Its public URL will stop serving the page.",
+  name: "bizos_site_unpublish", description: "Take an existing BizOS landing site offline for this company. Its public URL will stop serving the page. Only claim it is unpublished after this tool returns success.",
   inputSchema: { type: "object", properties: { site_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this unpublish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
 }, {
   name: "bizos_image_generate", description: "Generate an image through the BizOS server. Uses Work Credits, stores the image in the gallery and returns its hosted URL or a pending receipt.",

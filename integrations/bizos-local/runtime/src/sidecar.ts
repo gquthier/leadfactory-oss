@@ -1,4 +1,5 @@
 import { CloudExecution } from "./harness/cloud-execution.js";
+import { BizosInferenceSelection } from "./harness/bizos-inference.js";
 import { localComputerEnabled } from "./computer/release.js";
 import { ContinuityBridgeError, desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
@@ -738,6 +739,7 @@ export class LocalTeamBroker {
 export class CollaborationFacade {
   private readonly handlers;
   private cloudController?: CloudExecution;
+  private readonly bizos: BizosInferenceSelection;
   private get cloud(): CloudExecution {
     return this.cloudController ??= new CloudExecution(this.harness.storage, this.harness.continuity);
   }
@@ -754,7 +756,9 @@ export class CollaborationFacade {
     private readonly index: DurableIndex = durableIndex(),
     private readonly packs: Packs | null = null,
     private readonly persistIndex: (value: DurableIndex) => void = saveIndex,
+    inferenceBridge?: ReturnType<typeof desktopContinuityTransport>,
   ) {
+    this.bizos = new BizosInferenceSelection(harness.storage, inferenceBridge);
     this.handlers = buildHandlers(harness);
     this.importedRemote = new Set(harness.storage.readJsonStrict<string[]>("continuity-imported-remote.json", []));
     this.userId = `local:${instanceId}:user`;
@@ -1388,7 +1392,7 @@ export class CollaborationFacade {
         throw new HttpError(422, "invalid_agent_target", "Agent is not in this thread.");
       }
       const localThreadId = threadIdForTarget(target);
-      if (this.cloud.ownsRequest(clientMessageId) || (this.cloud.destination(localThreadId) === "bizos" && !this.index.messages[clientMessageId])) {
+      if (this.cloud.ownsRequest(clientMessageId)) {
         if (mentionAgentIds.length) throw new HttpError(422, "invalid_agent_target", "Cloud execution uses the linked conversation agent.");
         const sent = await this.cloud.send(localThreadId, clientMessageId, content);
         this.index.messages[clientMessageId] = {
@@ -1687,21 +1691,15 @@ export class CollaborationFacade {
   async executionDestination(threadId: string, destination?: 'personal' | 'bizos') {
     return this.exclusive(async () => {
       const target = this.target(threadId), localId = threadIdForTarget(target);
-      try { await this.ensureAutoLinked(target); }
-      catch (error) { if (destination === 'bizos') throw error; }
       const runs = await this.invoke<Run[]>("lbz:runs:list", [{ limit: 200 }]);
       const running = runs.some(run => run.threadId === localId && ['queued', 'working', 'waiting_input'].includes(run.state));
       if (destination && running) throw new HttpError(409, "run_active", "Stop the active run before changing execution.");
-      // A pre-link local transcript is not silently uploaded or omitted.
-      if (destination === 'bizos' || destination === undefined) {
-        if (this.harness.threads.hasUnlinkedHistory(target)) {
-          if (destination) throw new HttpError(409, "history_not_linked", "The local history is not fully linked to BizOS.");
-          return { destination: this.cloud.destination(localId), available: false, reason: "The local history is not fully linked to BizOS." };
-        }
-      }
-      return destination ? this.cloud.select(localId, destination) : this.cloud.status(localId);
+      return destination ? this.bizos.select(localId, destination) : this.bizos.status(localId);
     });
   }
+
+  bizosDestination(threadId: string): 'personal' | 'bizos' { return this.bizos.destination(threadId); }
+  async bizosScope(threadId: string) { return this.bizos.requireSelected(threadId); }
 
   async getRun(publicRunId: string) {
     const id = this.internalRunId(publicRunId);
@@ -3514,6 +3512,17 @@ async function serve(): Promise<void> {
     ...(managedEntitlement ? { managedEntitlementInstanceId: id } : {}),
     rootDir: harnessRoot,
     ...(continuityTransport ? { continuityTransport } : {}),
+    bizosSelected: (threadId) => facade?.bizosDestination(threadId) === "bizos",
+    ...(continuityTransport ? { bizosChat: async (threadId: string, body: Record<string, unknown>, signal: AbortSignal) => {
+      if (signal.aborted || !facade) throw new Error("BizOS inference was stopped.");
+      const messages = body.messages;
+      if (!Array.isArray(messages)) throw new Error("BizOS inference messages are invalid.");
+      const scope = await facade.bizosScope(threadId);
+      await refreshNativeToolScope();
+      if (!nativeToolScope || scope.orgId !== nativeToolScope.orgId || scope.workspaceId !== nativeToolScope.workspaceId)
+        throw new Error("BizOS workspace changed.");
+      return continuityTransport("inference/chat", { ...body, orgId: scope.orgId, workspaceId: scope.workspaceId });
+    } } : {}),
     ...(cloudComputer ? { cloudComputer } : {}),
     ...(serverComputer ? { computerBackend: serverComputer } : {}),
     baseUrl: origin,
@@ -3693,7 +3702,7 @@ async function serve(): Promise<void> {
     agency: new AgencyService({ host: packHost, log }),
     ecommerce: new EcommerceService({ host: packHost, log }),
   };
-  const localFacade = new CollaborationFacade(harness, id, teamBroker, index, packs);
+  const localFacade = new CollaborationFacade(harness, id, teamBroker, index, packs, saveIndex, continuityTransport);
   await refreshNativeToolScope();
   await startLocalHarness(harness, existsSync(join(harnessRoot, "settings.json")), () => {
     facade = localFacade;

@@ -80,6 +80,8 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
           ? { address: "fixture@createbizos.com", items: [{ subject: "Fixture inbox" }] }
           : call.operation === "tools/site-unpublish"
             ? { unpublished: true, siteId: call.body.site_id }
+          : call.operation === "inference/chat"
+            ? { choices: [{ message: { role: "assistant", content: "Signed BizOS inference completed." }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 5 } }
           : null;
       response.writeHead(result ? 200 : 404, { "content-type": "application/json" });
       response.end(JSON.stringify(result ? { ok: true, result } : { ok: false, code: "not_found" }));
@@ -229,4 +231,28 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
     expect(messages.messages[0].senderName).toBe("Lena");
     expect(JSON.stringify(messages)).toContain("Tu peux me solliciter");
   }, 40_000);
+
+  it("runs BizOS inference for the signed os workspace and refuses a descriptor mismatch", async () => {
+    const originalWorkspaceId = statusWorkspaceId;
+    const select = () => api("POST", "/api/local/execution-destination", { threadId: ceoThread, destination: "bizos" });
+    const before = bridgeCalls.filter(row => row.operation === "inference/chat").length;
+    try {
+      expect((await select()).status).toBe(200);
+      const run = await settle(await send(ceoThread, "BIZOS_INFERENCE_WORKSPACE"), "signed BizOS inference");
+      expect(run.state, JSON.stringify(run)).toBe("done");
+      const completions = bridgeCalls.filter(row => row.operation === "inference/chat");
+      expect(completions).toHaveLength(before + 1);
+      expect(completions.at(-1)?.body.workspaceId).toBe(originalWorkspaceId);
+      expect(originalWorkspaceId).toMatch(/^os_/);
+
+      statusWorkspaceId = "os_different_workspace";
+      expect((await select()).status).toBe(200);
+      const refused = await settle(await send(ceoThread, "BIZOS_INFERENCE_WRONG_WORKSPACE"), "mismatched BizOS inference refusal");
+      expect(refused.state).toBe("failed");
+      expect(bridgeCalls.filter(row => row.operation === "inference/chat")).toHaveLength(before + 1);
+    } finally {
+      statusWorkspaceId = originalWorkspaceId;
+      await api("POST", "/api/local/execution-destination", { threadId: ceoThread, destination: "personal" });
+    }
+  }, 30_000);
 });

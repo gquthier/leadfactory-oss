@@ -539,6 +539,7 @@ export class ConversationContinuity {
     localRunId: string,
     runtime: string,
     abort: () => void,
+    options: { localInference?: boolean } = {},
   ): Promise<void> {
     if (!this.linked(threadId)) return;
     if (runtime !== "claude" && runtime !== "codex")
@@ -560,11 +561,11 @@ export class ConversationContinuity {
         autoContinue: boolean;
       };
     }>("policies/get", this.scope(threadId));
-    // Imported conversations may have a disabled cloud continuity policy.
-    // The server's legacy runs/start gate still requires enabled=true, so
-    // migrate it to a local-only policy. Never inherit or enable a cloud
-    // fallback while repairing a personal CLI turn.
-    if (!policy.enabled) {
+    // BizOS inference gets a local-only lease without changing a disabled
+    // continuity policy. Personal CLI turns keep the imported-policy repair
+    // required by the legacy runs/start gate, without enabling cloud fallback.
+    const localOnly = !policy.enabled && options.localInference === true;
+    if (!policy.enabled && !localOnly) {
       await this.call("policies/set", {
         ...this.scope(threadId),
         policy: {
@@ -639,7 +640,8 @@ export class ConversationContinuity {
         ...this.scope(threadId),
         requestId: run.requestId,
         modelRuntime: runtime,
-        cloudFallback: policy.cloudFallback,
+        cloudFallback: localOnly ? null : policy.cloudFallback,
+        ...(localOnly ? { localOnly: true } : {}),
       });
       run = { ...run, ...started };
       this.saveRun(run);

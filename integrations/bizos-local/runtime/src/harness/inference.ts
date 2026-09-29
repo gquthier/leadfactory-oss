@@ -14,6 +14,12 @@ import { newId } from "./ids.js";
 import type { Storage } from "./storage.js";
 import { normalizeOllamaUrl, probeOllama, type OllamaModelDetail } from "./ollama.js";
 
+/** Account-billed inference supplied by Desktop main. It is deliberately
+ * outside providers.json: no upstream URL, key or model may enter the client. */
+export const BIZOS_INFERENCE_PROVIDER = {
+  kind: "bizos", label: "BizOS Mixture of Models", model: "bizos-mixture",
+} as const;
+
 export const PROVIDERS_FILE = "providers.json";
 export const MAX_INFERENCE_PROVIDERS = 12;
 export const PROVIDER_ID = /^prv_[a-z0-9]{6,40}$/;
