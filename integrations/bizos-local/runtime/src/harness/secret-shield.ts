@@ -195,12 +195,18 @@ export function seatbeltLaunch(
 }
 
 /** Claude Code `permissions.deny` rules for the path-taking tools. Bash has
- * no path-shaped rule, hence the seatbelt in bypass mode. */
+ * no path-shaped rule, hence the seatbelt in bypass mode.
+ *
+ * An absolute path is written `//path`: in Claude Code rules a single leading
+ * `/` anchors at the settings source, not at the filesystem root
+ * (code.claude.com/docs/en/permissions, "Read and Edit"; checked for
+ * claude 2.1.284). Before .52 the rules used `/path` and matched nothing. */
 export function claudeDenySettings(paths: readonly string[]): { permissions: { deny: string[] } } {
   const deny: string[] = [];
   for (const path of [...new Set(paths.map(canonicalProtectedPath))]) {
+    const rule = path.startsWith("/") && !path.startsWith("//") ? `/${path}` : path;
     for (const tool of ["Read", "Edit", "Write", "Glob", "Grep"]) {
-      deny.push(`${tool}(${path})`, `${tool}(${path}/**)`);
+      deny.push(`${tool}(${rule})`, `${tool}(${rule}/**)`);
     }
   }
   return { permissions: { deny } };

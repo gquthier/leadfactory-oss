@@ -78,20 +78,23 @@ describe("the protected list", () => {
 });
 
 describe("the Claude deny rules", () => {
-  it("cover every path-taking tool for the path and everything under it", () => {
+  it("cover every path-taking tool for the path and everything under it, as absolute (//) patterns", () => {
     const settings = claudeDenySettings(["/a/providers.json", "/a/plans", "/a/plans"]);
     expect(settings.permissions.deny).toEqual([
-      "Read(/a/providers.json)", "Read(/a/providers.json/**)",
-      "Edit(/a/providers.json)", "Edit(/a/providers.json/**)",
-      "Write(/a/providers.json)", "Write(/a/providers.json/**)",
-      "Glob(/a/providers.json)", "Glob(/a/providers.json/**)",
-      "Grep(/a/providers.json)", "Grep(/a/providers.json/**)",
-      "Read(/a/plans)", "Read(/a/plans/**)",
-      "Edit(/a/plans)", "Edit(/a/plans/**)",
-      "Write(/a/plans)", "Write(/a/plans/**)",
-      "Glob(/a/plans)", "Glob(/a/plans/**)",
-      "Grep(/a/plans)", "Grep(/a/plans/**)",
+      "Read(//a/providers.json)", "Read(//a/providers.json/**)",
+      "Edit(//a/providers.json)", "Edit(//a/providers.json/**)",
+      "Write(//a/providers.json)", "Write(//a/providers.json/**)",
+      "Glob(//a/providers.json)", "Glob(//a/providers.json/**)",
+      "Grep(//a/providers.json)", "Grep(//a/providers.json/**)",
+      "Read(//a/plans)", "Read(//a/plans/**)",
+      "Edit(//a/plans)", "Edit(//a/plans/**)",
+      "Write(//a/plans)", "Write(//a/plans/**)",
+      "Glob(//a/plans)", "Glob(//a/plans/**)",
+      "Grep(//a/plans)", "Grep(//a/plans/**)",
     ]);
+    // A single leading slash would anchor at the settings source (Claude Code
+    // docs): never emit one for an absolute path.
+    expect(settings.permissions.deny.some((rule) => /^\w+\(\/[^/]/.test(rule))).toBe(false);
   });
 });
 

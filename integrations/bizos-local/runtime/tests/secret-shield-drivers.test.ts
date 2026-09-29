@@ -51,8 +51,8 @@ async function runTurn(input: Parameters<typeof startCodexTurn>[0]) {
 it("Claude gets deny rules for the protected paths, bounded turns keep their own settings", () => {
   const args = buildClaudeArgs({ cwd: "/work", text: "hi", sandbox: "workspace-write", protectedPaths: ["/state/providers.json"] });
   const settings = JSON.parse(args[args.indexOf("--settings") + 1]!) as { permissions: { deny: string[] } };
-  expect(settings.permissions.deny).toContain("Read(/state/providers.json)");
-  expect(settings.permissions.deny).toContain("Read(/state/providers.json/**)");
+  expect(settings.permissions.deny).toContain("Read(//state/providers.json)");
+  expect(settings.permissions.deny).toContain("Read(//state/providers.json/**)");
   const bypass = buildClaudeArgs({ cwd: "/work", text: "hi", sandbox: "workspace-write", skipPermissions: true, protectedPaths: ["/state/providers.json"] });
   expect(bypass).toContain("--dangerously-skip-permissions");
   expect(JSON.parse(bypass[bypass.indexOf("--settings") + 1]!)).toEqual(settings);
