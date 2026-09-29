@@ -5,6 +5,7 @@ describe("local team MCP", () => {
   it("advertises site creation and routes the signed draft request", async () => {
     const spec = BIZOS_TOOL_SPECS.find(tool => tool.name === "bizos_site_create");
     expect(spec?.inputSchema.required).toEqual(["title", "content", "operation_id"]);
+    expect((spec?.inputSchema.properties as { title?: { maxLength?: number } }).title?.maxLength).toBe(180);
     const bizos = vi.fn(async () => ({ siteId: "site-1", versionId: "version-1", published: false }));
     const options = { toolsets: new Set(["team", "bizos"]), bizos };
     const listed = await handleLocalTeamMessage({ id: 1, method: "tools/list" }, undefined, undefined, undefined, undefined, options);

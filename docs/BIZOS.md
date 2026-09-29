@@ -240,9 +240,10 @@ L'image finale est copiée dans le profil privé du sidecar (HTTPS public,
 PNG/JPEG/WebP, 8 Mio maximum), puis ajoutée une fois au fil comme pièce jointe
 locale. L'URL source, qui peut expirer, n'est pas écrite dans le transcript ni
 dans le journal de continuité. L'attachement d'un fil local à une conversation
-cloud exige le `workspaceId` et le `localConversationId` exacts. Un second Mac
-vide peut restaurer le seul OS source de la même organisation vérifiée ; un
-profil déjà peuplé ou plusieurs OS sources ne sont jamais rapprochés par titre.
+cloud exige le `workspaceId` et le `localConversationId` exacts. Une autre
+installation peut restaurer les conversations si elle reprend cette identité
+d'OS vérifiée ; un nouvel OS, même vide et lié au même compte, n'importe jamais
+un historique étranger par titre.
 Les anciens liens dont l'OS n'est pas vérifiable sont retirés de la projection
 et conservés dans la quarantaine locale. `POST /api/local/quick-chats` accepte une référence de
 message vérifiée (`sourceThreadId`, `sourceMessageId`) pour créer un seul

@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { downloadGeneratedImage, MAX_IMAGE_BYTES } from "../src/generated-image.js";
-import { attachmentsOf } from "../src/sidecar.js";
+import { AttachmentRegistry, attachmentsOf } from "../src/sidecar.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })));
@@ -22,6 +22,13 @@ it("downloads a bounded hosted image to the scoped profile without keeping its s
     url: `file://${image.path}`, fileName: image.fileName, mimeType: image.mimeType, size: image.size }]);
   expect(projected[0]).toMatchObject({ kind: "image", status: "ready", contentType: "image/png",
     dataUrl: `data:image/png;base64,${png.toString("base64")}` });
+  const registry = new AttachmentRegistry();
+  // The app's disposable profile is canonicalized before sidecar startup.
+  const canonicalPath = realpathSync(image.path);
+  registry.remember(projected[0]!.id, canonicalPath, "bot:ceo");
+  expect(registry.resolve(projected[0]!.id)).toBe(canonicalPath);
+  registry.forgetThread("bot:ceo");
+  expect(registry.resolve(projected[0]!.id)).toBeNull();
 });
 
 it("rejects private destinations, non-images and oversized responses", async () => {

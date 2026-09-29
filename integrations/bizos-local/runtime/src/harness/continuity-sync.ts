@@ -214,7 +214,8 @@ export class ConversationContinuity {
     this.assertPersistent(threadId);
     const link = this.store.status(threadId);
     const identity = await this.identity();
-    if (!link || identity.userId !== link.accountId || identity.orgId !== link.orgId || identity.installationId !== link.installationId)
+    if (!link || identity.userId !== link.accountId || identity.orgId !== link.orgId
+      || identity.installationId !== link.installationId || identity.workspaceId !== link.workspaceId)
       throw new Error("Sign in to the account and installation that own this linked conversation.");
     return this.call(operation, { ...body, ...this.scope(threadId), workspaceId: identity.workspaceId, localConversationId: threadId });
   }
@@ -388,7 +389,8 @@ export class ConversationContinuity {
       if (
         identity.userId !== link.accountId ||
         identity.orgId !== link.orgId ||
-        identity.installationId !== link.installationId
+        identity.installationId !== link.installationId ||
+        identity.workspaceId !== link.workspaceId
       )
         throw new Error(
           "This conversation link belongs to another account or installation; explicitly reattach it on this app.",

@@ -639,11 +639,11 @@ function previewOfMessage(message: ThreadMessage): CollaborationPreview | undefi
  * what an agent sent — never from a request. Serving checks the file is still
  * the same regular file (no symlink swapped in since) before a byte leaves.
  */
-class AttachmentRegistry {
+export class AttachmentRegistry {
   private readonly paths = new Map<string, { path: string; threads: Set<string> }>();
 
   remember(id: string, path: string, threadId: string): void {
-    if (!/^(?:att|prv)_[A-Za-z0-9]+$/.test(id) || !path) return;
+    if (!/^(?:(?:att|prv)_[A-Za-z0-9]+|generated-image-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i.test(id) || !path) return;
     const record = this.paths.get(id) ?? { path, threads: new Set<string>() };
     record.threads.add(threadId);
     this.paths.set(id, record);
@@ -1224,21 +1224,11 @@ export class CollaborationFacade {
         }> };
         const seen = new Set<string>();
         const bots = await this.invoke<Bot[]>("lbz:bots:list");
-        const existingGroups = await this.invoke<Group[]>("lbz:groups:list");
-        const existingChats = await this.harness.quickChats.list();
-        const foreignWorkspaces = new Set(listing.conversations.filter(row => row.workspaceId && row.workspaceId !== identity.workspaceId).map(row => row.workspaceId));
-        // A second Mac may have a different local workspace ID for the same
-        // verified cloud org. Restore its sole source into a truly empty
-        // profile; never merge foreign history into existing local data or
-        // choose among several possible source OSes by title.
-        const restoreSoleForeignWorkspace = bots.length === 0 && existingGroups.length === 0 && existingChats.chats.length === 0
-          && foreignWorkspaces.size === 1 ? [...foreignWorkspaces][0] : null;
         for (const row of listing.conversations) {
           const remoteThreadId = row.localConversationId ?? "";
           if (seen.has(row.conversationId) || row.audience !== "private"
             || !/^(?:bot:[^:]+|group:[^:]+|chat:qchat_[a-f0-9]{32})$/.test(remoteThreadId)
-            || !(remoteConversationBelongsToWorkspace(row, identity.workspaceId, remoteThreadId)
-              || (restoreSoleForeignWorkspace && row.workspaceId === restoreSoleForeignWorkspace))) continue;
+            || !remoteConversationBelongsToWorkspace(row, identity.workspaceId, remoteThreadId)) continue;
           seen.add(row.conversationId);
           if (this.importedRemote.has(row.conversationId)) continue;
           if (continuity.store.links().some(link => link.link.conversationId === row.conversationId)) continue;
@@ -3816,6 +3806,10 @@ async function serve(): Promise<void> {
     ecommerce: new EcommerceService({ host: packHost, log }),
   };
   const localFacade = new CollaborationFacade(harness, id, teamBroker, index, packs, saveIndex, continuityTransport);
+  // The API descriptor is published later in startup. Quarantine legacy .46
+  // links synchronously first so the first bootstrap cannot see a foreign OS.
+  for (const { threadId } of harness.continuity.store.links())
+    harness.continuity.store.quarantineMismatchedWorkspace(threadId, localFacade.workspaceId);
   await refreshNativeToolScope();
   await startLocalHarness(harness, existsSync(join(harnessRoot, "settings.json")), () => {
     facade = localFacade;

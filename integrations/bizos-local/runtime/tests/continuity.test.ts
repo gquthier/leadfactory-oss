@@ -62,6 +62,22 @@ it("quarantines a legacy link from a different or unverified OS before cloud pro
   store.link("bot:b", binding); // .46 did not record an OS id.
   expect(store.quarantineMismatchedWorkspace("bot:b", "os_new")).toBe(true);
 });
+it("refuses sync and cloud calls when a stale link belongs to another OS", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const calls: string[] = [];
+  const continuity = new ConversationContinuity(storage, async operation => {
+    calls.push(operation);
+    if (operation === "status") return { orgId: binding.orgId, userId: binding.accountId,
+      installationId: binding.installationId, workspaceId: "os_shop" } as never;
+    throw new Error(`unexpected ${operation}`);
+  });
+  continuity.store.link("bot:a", { ...binding, workspaceId: "os_office" });
+  await expect(continuity.sync("bot:a")).rejects.toThrow(/another account or installation/);
+  await expect(continuity.cloud("bot:a", "cloud/status", {})).rejects.toThrow(/own this linked conversation/);
+  expect(calls).toEqual(["status", "status"]);
+  continuity.close();
+});
 it("preserves a linked user message beyond the former 20k character cap", () => {
   const { store } = fixture();
   store.link("bot:a", binding);

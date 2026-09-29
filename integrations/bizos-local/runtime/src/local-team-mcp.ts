@@ -50,7 +50,7 @@ export const BIZOS_TOOL_SPECS = [{
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 }, {
   name: "bizos_site_create", description: "Create a simple unpublished BizOS landing page draft for this company from a title and content. Returns siteId and versionId; call bizos_site_publish with those IDs to put it online.",
-  inputSchema: { type: "object", properties: { title: { type: "string", maxLength: 220 }, content: { type: "string", maxLength: 1200 }, operation_id: { type: "string", description: "Stable id for this draft; reuse on retry." } }, required: ["title", "content", "operation_id"], additionalProperties: false },
+  inputSchema: { type: "object", properties: { title: { type: "string", maxLength: 180 }, content: { type: "string", maxLength: 1200 }, operation_id: { type: "string", description: "Stable id for this draft; reuse on retry." } }, required: ["title", "content", "operation_id"], additionalProperties: false },
 }, {
   name: "bizos_site_publish", description: "Publish an existing BizOS landing site version for this company; returns its public URL. Requires a valid brand snapshot.",
   inputSchema: { type: "object", properties: { site_id: { type: "string" }, version_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this publish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
