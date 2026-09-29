@@ -43,6 +43,10 @@ The link records the last pre-link local row. Older profiles without that
 boundary or per-message anchors place their remaining local rows after the
 latest canonical message no later than the row timestamp. This keeps final
 local replies reachable by forward polling from the canonical cursor.
+Turning backup off stops event uploads; it does not remove the visible
+canonical projection. New local replies still anchor after that projection,
+and old null anchors are recovered by chronology when no pre-link boundary
+places them earlier.
 
 The first explicit link starts from that boundary; it does not import old native
 CLI chats. A second installation discovers an authorized BizOS conversation and

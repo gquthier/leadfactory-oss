@@ -70,10 +70,10 @@ export class ThreadStore {
       if (ids.has(row.id)) anchor = row.id;
       else {
         const recorded = this.continuity!.store.projectionAnchor(threadId, row.id);
-        let position = recorded === undefined ? anchor : recorded;
-        if (recorded === undefined && !anchor) {
+        let position = recorded ?? anchor;
+        if (recorded === undefined || recorded === null) {
           if (preLinkTailIndex >= 0 && index <= preLinkTailIndex) position = null;
-          else {
+          else if (!anchor) {
             // Older ledgers did not record presentation anchors. Use the
             // canonical chronology for their post-link local rows, while
             // rows known to predate this link stay before the archive.
@@ -214,7 +214,9 @@ export class ThreadStore {
     },
   ): ThreadMessage {
     this.hooks?.assertAccessible(threadId);
-    const tail = this.continuity?.linked(threadId) ? this.rows(threadId).at(-1) : undefined;
+    // Disabling backup stops uploads, but the linked canonical projection
+    // remains visible. Local replies still need an anchor after that history.
+    const tail = this.continuity?.store.status(threadId) ? this.rows(threadId).at(-1) : undefined;
     const message: ThreadMessage = {
       id: input.id ?? newMessageId(),
       threadId,

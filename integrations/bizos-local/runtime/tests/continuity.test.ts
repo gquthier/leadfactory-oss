@@ -764,6 +764,8 @@ it("pages local replies after a canonical cursor when an older profile has no pr
       blocks: [{ kind: "text" as const, text: "Final answer" }], createdAt: "2026-09-29T14:00:01Z" },
   ];
   for (const row of local) storage.appendNdjson(storage.threadPath("bot:a"), row);
+  continuity.store.anchorProjection("bot:a", "local-user", null);
+  continuity.store.anchorProjection("bot:a", "local-final", null);
   storage.appendNdjson(storage.threadPath("bot:a"), local[1]!); // replayed final write remains one bubble
   const threads = new ThreadStore(storage, systemClock, continuity);
   expect(threads.transcript({ botId: "a" }).map(row => row.id))
@@ -775,6 +777,31 @@ it("pages local replies after a canonical cursor when an older profile has no pr
     .toEqual(["local-user", "local-final"]);
   expect(reopened.transcript({ botId: "a" }).map(row => row.id))
     .toEqual(["prelink", "prelink-last", "canonical", "local-user", "local-final"]);
+  continuity.close();
+});
+
+it("keeps local replies after the canonical cursor while conversation backup is disabled", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const { ThreadStore } = await import("../src/harness/threads.js");
+  const { systemClock } = await import("../src/harness/clock.js");
+  const continuity = new ConversationContinuity(storage);
+  continuity.store.link("bot:a", binding);
+  continuity.store.accept("bot:a", [{ eventId: "canonical", schemaVersion: 1,
+    localSequence: 1, baseRevision: "0", kind: "message", author: "human",
+    content: "Prior cloud message", hash: payloadHash("Prior cloud message"),
+    seq: 1, createdAt: "2026-09-29T12:00:00Z" }]);
+  continuity.setBackupEnabled(false);
+  const threads = new ThreadStore(storage, systemClock, continuity);
+  const sent = threads.append("bot:a", { role: "user", blocks: [{ kind: "text", text: "New request" }] });
+  const final = threads.append("bot:a", { role: "bot", blocks: [{ kind: "text", text: "Final answer" }] });
+  expect(continuity.store.projectionAnchor("bot:a", sent.id)).toBe("canonical");
+  expect(continuity.store.projectionAnchor("bot:a", final.id)).toBe(sent.id);
+  expect(threads.pageAfter({ botId: "a" }, "canonical")?.messages.map(row => row.id))
+    .toEqual([sent.id, final.id]);
+  expect(new ThreadStore(storage, systemClock, new ConversationContinuity(storage))
+    .pageAfter({ botId: "a" }, "canonical")?.messages.map(row => row.id))
+    .toEqual([sent.id, final.id]);
   continuity.close();
 });
 
