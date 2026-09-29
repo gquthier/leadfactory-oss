@@ -10,6 +10,7 @@ import { Storage } from "../src/harness/storage.js";
 import { ContinuityStore } from "../src/harness/continuity.js";
 import { BotStore } from "../src/harness/bots.js";
 import { systemClock } from "../src/harness/clock.js";
+import { ConversationContinuity, canonicalEventHash } from "../src/harness/continuity-sync.js";
 
 const runtime = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const script = join(runtime, "dist/sidecar.js");
@@ -103,6 +104,25 @@ it.skipIf(!built)("preserves an os_x link and retires an imported .50 duplicate 
     expect(recovered.supersededThreads()).toEqual(["bot:duplicate"]);
     expect(new BotStore(storage, systemClock).get("duplicate")?.archived).toBe(true);
     expect(readFileSync(storage.threadPath("bot:existing"), "utf8")).toBe(before);
+    child.kill("SIGTERM");
+    await new Promise(resolveExit => child!.once("exit", resolveExit));
+    child = undefined;
+    const cloudEvents: any[] = [];
+    const continuity = new ConversationContinuity(storage, async (operation, body) => {
+      if (operation === 'status') return { installationId: link.installationId, userId: link.accountId, orgId: link.orgId, workspaceId: link.workspaceId } as never;
+      if (operation === 'conversations/read') return { events: cloudEvents.filter(row => Number(row.sequence) > Number(body.after)), hasMore: false } as never;
+      if (operation === 'conversations/append') {
+        for (const event of body.events as any[]) cloudEvents.push({ ...event, sequence: String(cloudEvents.length + 1), contentHash: canonicalEventHash(event), createdAt: new Date().toISOString() });
+        return { head: String(cloudEvents.length), receipts: [] } as never;
+      }
+      if (operation === 'conversations/ack') return { acknowledgedThrough: body.through } as never;
+      throw new Error(`unexpected ${operation}`);
+    });
+    expect(continuity.linked('bot:existing')).toBe(true);
+    continuity.capture({ id: 'after-restart-note', threadId: 'bot:existing', seq: 2, role: 'user', blocks: [{ kind: 'text', text: 'CEO note after sidecar restart' }], createdAt: new Date().toISOString() });
+    await continuity.sync('bot:existing');
+    expect(cloudEvents.some(event => event.content === 'CEO note after sidecar restart')).toBe(true);
+    expect(continuity.store.status('bot:existing')?.pending).toBe(0);
   } finally {
     if (child && child.exitCode === null) {
       child.kill("SIGTERM");

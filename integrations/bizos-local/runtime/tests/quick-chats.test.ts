@@ -41,6 +41,20 @@ afterEach(async () => { for (const { harness } of fixtures) harness.stop(); for 
 const done = (turn: CodexTurnInput, text: string) => { turn.onEvent({ type: 'content.delta', streamKind: 'assistant_text', delta: text }); turn.onEvent({ type: 'turn.completed', ok: true, stopReason: null }); };
 
 describe('workspace Quick chats', () => {
+  it('sends signed BizOS image tools to Codex in a QuickChat and requires an observed result', async () => {
+    const image = { name: 'bizos_image_generate', description: 'Generate an image', inputSchema: { type: 'object', properties: {} }, call: async () => ({ imageId: 'image-1' }) };
+    const f = fixture(undefined, undefined, async () => '', {
+      localTeamTools: () => [image],
+      localTeamMcp: () => ({ command: '/fake/mcp', args: ['--toolset=bizos'] }),
+    });
+    const chat = await f.harness.quickChats.create('signed-image');
+    await f.harness.quickChats.send(chat.id, 'Generate an image', 'image-request');
+    const turn = f.turns[0]!;
+    expect(turn.dynamicTools?.map(tool => tool.name)).toContain('bizos_image_generate');
+    expect(turn.dynamicTools?.map(tool => tool.name)).not.toContain('recruit_agent');
+    expect(turn.system).toContain('bizos_image_generate');
+    expect(turn.system).toMatch(/Never announce.*image.*without.*tool/i);
+  });
   it('replays long archived constraints after more than one UI page and a fresh CLI session', async () => {
     const f = fixture();
     await f.harness.templates.apply('company-os', 'new');
@@ -80,7 +94,7 @@ describe('workspace Quick chats', () => {
     expect(f.turns[0]!.system).not.toContain('Beta:');
     expect(f.turns[1]!.system).not.toContain('Alpha:');
     expect(f.turns[0]!.dynamicTools).toEqual([]);
-    expect(f.teamMounts()).toBe(0);
+    expect(f.teamMounts()).toBeGreaterThan(0);
     f.turns[0]!.onEvent({ type: 'session.started', sessionId: 'native_0', model: null });
     f.turns[1]!.onEvent({ type: 'session.started', sessionId: 'native_1', model: null });
     done(f.turns[0]!, 'Answer Alpha'); done(f.turns[1]!, 'Answer Beta');
@@ -144,7 +158,7 @@ describe('workspace Quick chats', () => {
     expect((await call('create', [{ requestId: 'x', botId: 'injected' }])).ok).toBe(false);
     const chat = await f.harness.quickChats.create('valid');
     expect((await call('send', [chat.id, { requestId: 'x', text: '', workspacePath: '/tmp' }])).ok).toBe(false);
-    expect((await call('send', [chat.id, { requestId: 'x', text: 'x'.repeat(20001) }])).ok).toBe(false);
+    expect((await call('send', [chat.id, { requestId: 'x', text: 'é'.repeat(16 * 1024 * 1024 + 1) }])).ok).toBe(false);
     expect((await call('get', ['../../somewhere'])).ok).toBe(false);
     expect(f.turns).toHaveLength(0);
     expect(readFileSync(join(f.root, 'quick-chats.json'), 'utf8')).not.toContain('botId');

@@ -708,18 +708,15 @@ export class LocalBizosHarness {
             ? { computer: { url: this.computerBroker.url, token: this.computerBroker.issue({ botId: bot.id, threadId: context.threadId, runId: context.runId }) } }
             : {}),
         });
-        const localTeam = bot.id.startsWith("qchat_")
-          ? undefined
-          : options.localTeamMcp?.(localTeamMount(bot, context));
+        const localTeam = options.localTeamMcp?.(localTeamMount(bot, context));
         // The user's own apps go first so a harness server always wins the
         // key on a collision (the store refuses reserved names anyway).
         const apps = this.appsStore.mountedServers({ sharedDirs });
         return { ...apps, ...cloudTools, ...(localTeam ? { local_team_actions: localTeam } : {}) };
       },
       ...(options.localTeamTools ? { dynamicTools: (bot: Bot, context: TurnContext) =>
-        bot.id.startsWith("qchat_")
-          ? []
-          : options.localTeamTools!(localTeamMount(bot, context)) } : {}),
+        options.localTeamTools!(localTeamMount(bot, context)).filter(tool =>
+          !bot.id.startsWith("qchat_") || tool.name.startsWith("bizos_")) } : {}),
       onRunSettled: (runId: string) => {
         this.computerManager?.cancelHandoff(runId);
         options.onLocalRunSettled?.(runId);

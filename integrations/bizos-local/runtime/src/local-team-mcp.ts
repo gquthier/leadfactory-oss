@@ -15,15 +15,15 @@ const MAX_PACK_RESULT_CHARS = 64_000;
 
 /**
  * Which tool families this server offers, from its OWN argv
- * (`--toolset=team,agency` or `--toolset=team,commerce`). `team` is always
- * there. `agency` / `commerce` are added by the sidecar only for the agents
+ * (`--toolset=team,agency` or `--toolset=team,commerce`). `team` is the
+ * default when no flag is supplied. `agency` / `commerce` are added only for the agents
  * of the installed pack — and listing is not granting: the sidecar re-checks
  * the calling agent on every `/pack` call.
  */
 export function toolsetsFromArgv(argv: readonly string[]): Set<string> {
   const flag = argv.find((argument) => argument.startsWith("--toolset="));
   const names = (flag ? flag.slice("--toolset=".length) : "team").split(",").map((name) => name.trim()).filter(Boolean);
-  return new Set(["team", ...names]);
+  return new Set(names);
 }
 
 /** Shared by every cloud tool description: what the machine is, and the manners. */
@@ -373,7 +373,7 @@ export async function handleLocalTeamMessage(
   if (method === "notifications/initialized" || method === "notifications/cancelled") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") {
-    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (localComputerEnabled() && toolsets.has("cloud"))).filter(tool => !toolsets.has("continuity") || tool.name !== "cloud_computer_run").map((tool) => ({
+    const teamTools = (toolsets.has("team") ? LOCAL_TEAM_TOOL_SPECS : []).filter(tool => !isCloudToolName(tool.name) || (localComputerEnabled() && toolsets.has("cloud"))).filter(tool => !toolsets.has("continuity") || tool.name !== "cloud_computer_run").map((tool) => ({
       ...tool,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: isCloudToolName(tool.name) },
     }));
@@ -397,11 +397,11 @@ export async function handleLocalTeamMessage(
   if (method === "tools/call") {
     try {
       if (isCloudToolName(params.name) || isComputerToolName(params.name)) assertLocalComputerEnabled();
-      if (params.name === "recruit_agent") return reply(textResult(await invokeRecruit((params.arguments ?? {}) as Json)));
-      if (params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
-      if (params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
-      if (params.name === "list_routines") return reply(textResult(await callListRoutines((params.arguments ?? {}) as Json)));
-      if (params.name === "cancel_routine") return reply(textResult(await callCancelRoutine((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "recruit_agent") return reply(textResult(await invokeRecruit((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "manage_agent") return reply(textResult(await invokeManage((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "schedule_routine") return reply(textResult(await invokeSchedule((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "list_routines") return reply(textResult(await callListRoutines((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "cancel_routine") return reply(textResult(await callCancelRoutine((params.arguments ?? {}) as Json)));
       if (toolsets.has("bizos") && BIZOS_TOOL_SPECS.some(tool => tool.name === params.name)) return reply(textResult(await (options.bizos ?? ((input) => callEndpoint("/api/internal/local-team/bizos", input, 320_000)))({ tool: params.name, arguments: params.arguments ?? {} })));
       if (toolsets.has("continuity")) {
         const operation = Object.entries(CONTINUITY_MCP_OPERATIONS).find(([,name]) => name === params.name)?.[0];
@@ -409,11 +409,11 @@ export async function handleLocalTeamMessage(
           ? options.continuity(String(params.name), (params.arguments ?? {}) as Json)
           : callEndpoint(`/api/internal/local-team/${operation}`, (params.arguments ?? {}) as Json))));
       }
-      if (params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "checkpoint_task") return reply(textResult(await invokeCheckpoint((params.arguments ?? {}) as Json)));
       if (toolsets.has("context") && !toolsets.has("continuity") && CONTEXT_TOOL_SPECS.some(tool => tool.name === params.name)) return reply(textResult(await invokeContext({ tool: params.name, arguments: params.arguments ?? {} }), false, MAX_PACK_RESULT_CHARS));
-      if (params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
-      if (params.name === "offer_quick_replies") return reply(textResult(await invokeQuickReplies((params.arguments ?? {}) as Json)));
-      if (params.name === "propose_company_name") return reply(textResult(await invokeProposeName((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "send_to_chat") return reply(textResult(await invokeSend((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "offer_quick_replies") return reply(textResult(await invokeQuickReplies((params.arguments ?? {}) as Json)));
+      if (toolsets.has("team") && params.name === "propose_company_name") return reply(textResult(await invokeProposeName((params.arguments ?? {}) as Json)));
       if (toolsets.has("cloud") && isCloudToolName(params.name)) return reply(textResult(await invokeCloud({ tool: params.name, arguments: params.arguments ?? {} })));
       if (toolsets.has("computer") && isComputerToolName(params.name)) {
         return reply(computerResult(await invokeComputer({ tool: params.name, arguments: params.arguments ?? {} })));

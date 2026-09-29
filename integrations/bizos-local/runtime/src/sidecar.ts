@@ -1841,7 +1841,19 @@ export class CollaborationFacade {
   /** 402 `pro_required` on the free tier. */
   private requirePro(feature: ProFeature): void { this.harness.entitlement.require(feature); }
 
-  selectModel(raw: unknown) { return this.invoke("lbz:runtime:selectModel", [raw]); }
+  async selectModel(raw: unknown) {
+    const input = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    const scope = input.scope && typeof input.scope === "object" && !Array.isArray(input.scope)
+      ? input.scope as Record<string, unknown> : {};
+    if (scope.kind === "agent" && typeof scope.agentId === "string") {
+      const threadId = `bot:${scope.agentId}`;
+      // The model and execution destination must move together. Refuse an
+      // active cloud run before recording a personal CLI selection.
+      if (this.bizos.destination(threadId) === "bizos")
+        await this.executionDestination(this.publicThreadId({ botId: scope.agentId }), "personal");
+    }
+    return this.invoke("lbz:runtime:selectModel", [raw]);
+  }
   async setInference(raw: unknown) {
     return this.invoke("lbz:runtime:setInference", [raw]);
   }
@@ -3721,7 +3733,7 @@ async function serve(): Promise<void> {
       // Exchange the one-shot ticket inside the trusted host. Neither token
       // reaches Codex, its prompt, argv, environment, or the renderer.
       const session = teamBroker.exchange(teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }));
-      const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (!serverComputer && localComputerEnabled())).filter(tool => !tool.name.startsWith("read_conversation_")).map((tool) => ({
+      const teamTools = (bot.id.startsWith("qchat_") ? [] : LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (!serverComputer && localComputerEnabled())).filter(tool => !tool.name.startsWith("read_conversation_"))).map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
@@ -3747,7 +3759,7 @@ async function serve(): Promise<void> {
       }));
       // The pack's tools, for the pack's own agents only, under the SAME
       // capability: STOP or the end of the run revokes them with the rest.
-      const pack = packOf(bot.id);
+      const pack = bot.id.startsWith("qchat_") ? null : packOf(bot.id);
       const packTools = pack
         ? pack.dynamicTools(() => {
           const capability = teamBroker.authorize(session);
@@ -3756,7 +3768,7 @@ async function serve(): Promise<void> {
         : [];
       // The agent's own computer (a seat on the cloud computer), under the
       // SAME capability: nothing outside this run can drive it.
-      const computerTools = harness.computerToolsAvailable()
+      const computerTools = !bot.id.startsWith("qchat_") && harness.computerToolsAvailable()
         ? COMPUTER_TOOL_SPECS.map((tool) => ({
           name: tool.name,
           description: tool.description,
@@ -3770,7 +3782,7 @@ async function serve(): Promise<void> {
           },
         }))
         : [];
-      const contextTools = !harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id)
+      const contextTools = !bot.id.startsWith("qchat_") && !harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id)
         ? CONTEXT_TOOL_SPECS.map(tool => ({
           name: tool.name,
           description: tool.description,
@@ -3798,11 +3810,11 @@ async function serve(): Promise<void> {
     // the child exchanges (it never reaches the CLI's argv or prompt). The
     // toolset rides in argv, per server; the sidecar re-checks every call.
     localTeamMcpScriptPath,
-    localTeamMcp: ({ bot, threadId, runId, teamDelegationBlocked }) => ({
+    localTeamMcp: ({ bot, threadId, runId, teamDelegationBlocked }) => bot.id.startsWith("qchat_") && !nativeToolScope ? null : ({
       command: process.execPath,
       args: [
         localTeamMcpScriptPath,
-        `--toolset=${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!serverComputer && localComputerEnabled() ? ",cloud" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}${nativeToolScope ? ",bizos" : ""}`,
+        `--toolset=${bot.id.startsWith("qchat_") ? "bizos" : `${packs?.agency.isPackBot(bot.id) ? "team,agency" : packs?.ecommerce.isPackBot(bot.id) ? "team,commerce" : "team"}${harness.computerToolsAvailable() ? ",computer" : ""}${!serverComputer && localComputerEnabled() ? ",cloud" : ""}${!harness.continuity.linked(threadId) && harness.contextToolsAvailableFor(bot.id) ? ",context" : ""}${harness.continuity.linked(threadId) ? ",continuity" : ""}${nativeToolScope ? ",bizos" : ""}`}`,
       ],
       env: { LOCALBIZOS_TEAM_ORIGIN: origin },
       forwarded: { LBZ_LOCAL_TEAM_TICKET: teamBroker.issue({ botId: bot.id, threadId, runId, teamDelegationBlocked }) },

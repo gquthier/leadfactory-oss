@@ -247,6 +247,7 @@ async function computer(
   provider: "claude" | "codex",
   transport: ContinuityTransport,
   hold = false,
+  signedImage?: (args: unknown) => Promise<unknown>,
 ) {
   const root = mkdtempSync(join(tmpdir(), "continuity-computer-"));
   mkdirSync(join(root, "state"));
@@ -338,6 +339,10 @@ async function computer(
     continuityTransport: transport,
     startTurn: start,
     startClaudeTurn: start,
+    ...(signedImage ? { localTeamTools: () => [{
+      name: 'bizos_image_generate', description: 'Signed image tool', inputSchema: { type: 'object' },
+      call: signedImage,
+    }] } : {}),
     localArchitecture: (i) => ({
       mode: "local",
       instanceId: name,
@@ -362,6 +367,28 @@ async function computer(
   const bot = await harness.bots.create({ name: "CEO" });
   return { harness, bot, turns, threadId: `bot:${bot.id}` };
 }
+it('releases four CLI claims before a fifth signed image tool call on the same CEO thread', async () => {
+  const b = await backend();
+  const signedImage = vi.fn(async () => ({ imageId: 'signed-image-1', url: 'https://example.test/image.png' }));
+  const a = await computer('imagecli', 'codex', b.transport('install-a'), true, signedImage);
+  await a.harness.continuity.link(a.threadId, { agentId: 'cloud-agent', audience: 'private', title: 'CEO' });
+  for (let n = 0; n < 4; n++) {
+    const sent = await a.harness.threads.send({ botId: a.bot.id }, { text: `CLI turn ${n + 1}` });
+    await until(() => a.turns.length === n + 1);
+    a.turns[n]!.onEvent({ type: 'turn.completed', ok: true, stopReason: null });
+    await until(async () => (await a.harness.runs.get(sent.runIds[0]!))?.state === 'completed');
+    await until(() => b.requests.filter(row => row.op === 'runs/finish').length === n + 1);
+  }
+  const fifth = await a.harness.threads.send({ botId: a.bot.id }, { text: 'Generate the image with BizOS' });
+  await until(() => a.turns.length === 5);
+  const image = (a.turns[4] as CodexTurnInput).dynamicTools?.find(tool => tool.name === 'bizos_image_generate');
+  expect(image).toBeDefined();
+  expect(await image!.call({ prompt: 'A logo', operation_id: randomUUID() }, { callId: 'image-call', threadId: a.threadId, turnId: 'turn-5' })).toMatchObject({ imageId: 'signed-image-1' });
+  expect(signedImage).toHaveBeenCalledTimes(1);
+  a.turns[4]!.onEvent({ type: 'turn.completed', ok: true, stopReason: null });
+  await until(async () => (await a.harness.runs.get(fifth.runIds[0]!))?.state === 'completed');
+  await until(() => b.requests.filter(row => row.op === 'runs/finish').length === 5);
+});
 it("linked Claude stays manually approved while bypass changes for ordinary local turns", async () => {
   const b = await backend();
   const a = await computer("A", "claude", b.transport("install-a"), true);

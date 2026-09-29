@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { BIZOS_TOOL_SPECS, handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS, toolsetsFromArgv } from "../src/local-team-mcp.js";
 
 describe("local team MCP", () => {
+  it('exposes only signed BizOS tools to a QuickChat MCP server', async () => {
+    const toolsets = toolsetsFromArgv(['--toolset=bizos']);
+    const listed = await handleLocalTeamMessage({ id: 1, method: 'tools/list' }, undefined, undefined, undefined, undefined, { toolsets });
+    const names = JSON.stringify(listed);
+    expect(names).toContain('bizos_image_generate');
+    expect(names).not.toContain('recruit_agent');
+    expect(names).not.toContain('schedule_routine');
+    const recruit = vi.fn(async () => ({ agentId: 'must-not-exist' }));
+    const refused = await handleLocalTeamMessage({ id: 2, method: 'tools/call', params: { name: 'recruit_agent', arguments: {} } },
+      recruit, undefined, undefined, undefined, { toolsets });
+    expect(recruit).not.toHaveBeenCalled();
+    expect(JSON.stringify(refused)).toContain('Unknown tool');
+  });
   it("advertises site creation and routes the signed draft request", async () => {
     const spec = BIZOS_TOOL_SPECS.find(tool => tool.name === "bizos_site_create");
     expect(spec?.inputSchema.required).toEqual(["title", "content", "operation_id"]);

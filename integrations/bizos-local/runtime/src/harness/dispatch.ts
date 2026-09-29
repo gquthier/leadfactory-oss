@@ -2435,7 +2435,7 @@ export class Dispatcher {
         .filter(row => row.id !== runtime.excludeMessageId);
       return buildQuickChatPrompt({ bot, messages, workspace: this.deps.workspaceFor(bot), settings: this.deps.settings(), nativeOllama: runtime.provider === "ollama",
         ...(runtime.provider === "api" ? { nativeApi: runtime.apiLabel ?? "API" } : {}),
-        nativeBizos: runtime.provider === "bizos", ephemeralReplay });
+        nativeBizos: runtime.provider === "bizos", ephemeralReplay, tools: runtime.tools });
     }
     const target: ThreadTarget = threadId.startsWith("group:")
       ? { groupId: threadId.slice(6) }

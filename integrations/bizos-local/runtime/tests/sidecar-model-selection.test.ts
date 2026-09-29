@@ -4,7 +4,24 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { CollaborationFacade } from '../src/sidecar.js';
+
+it('checks cloud destination before committing a Codex model on the linked CEO', async () => {
+  const order: string[] = [];
+  const facade = {
+    bizos: { destination: () => 'bizos' },
+    publicThreadId: () => 'linked-ceo',
+    executionDestination: vi.fn(async () => { order.push('personal'); throw new Error('Stop the active run before changing execution.'); }),
+    invoke: vi.fn(async () => { order.push('model'); return { selection: { source: 'plan', model: 'codex' } }; }),
+  };
+  const request = { scope: { kind: 'agent', agentId: 'ceo' }, selection: { source: 'plan', planId: 'codex', model: 'codex' } };
+  await expect(CollaborationFacade.prototype.selectModel.call(facade as never, request)).rejects.toThrow('Stop the active run');
+  expect(order).toEqual(['personal']);
+  facade.executionDestination.mockImplementation(async () => { order.push('personal'); return { destination: 'personal' }; });
+  await CollaborationFacade.prototype.selectModel.call(facade as never, request);
+  expect(order).toEqual(['personal', 'personal', 'model']);
+});
 const runtime = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const script = join(runtime, 'dist/sidecar.js');
 const built = existsSync(script) && existsSync(join(runtime, 'dist/agency-kit/lib/app.mjs'));
