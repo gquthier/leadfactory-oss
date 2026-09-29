@@ -2928,6 +2928,7 @@ async function serve(): Promise<void> {
   const token = randomBytes(48).toString("base64url");
   const teamBroker = new LocalTeamBroker();
   const localTeamMcpScriptPath = join(dirname(fileURLToPath(import.meta.url)), "local-team-mcp.js");
+  const nativeDescriptorPath = process.env[NATIVE_COMPUTER_DESCRIPTOR_VARIABLE]?.trim();
   let facade: CollaborationFacade | null = null;
   let connector: RelayConnector | null = null;
   let packs: Packs | null = null;
@@ -2935,23 +2936,29 @@ async function serve(): Promise<void> {
   let cloudLink: CloudLink | null = null;
   let nativeToolScope: { orgId: string; workspaceId: string } | null = null;
   let nativeToolsTransport: ReturnType<typeof desktopContinuityTransport> | null = null;
+  let refreshComputerAvailability: (() => Promise<void>) | null = null;
   const refreshNativeToolScope = async (): Promise<void> => {
-    if (!nativeToolsTransport) { nativeToolScope = null; return; }
+    if (!nativeToolsTransport || !nativeDescriptorPath) { nativeToolScope = null; return; }
     try {
       const status = await nativeToolsTransport<{ linked?: boolean; toolsAvailable?: boolean; orgId?: string; workspaceId?: string }>("status", {});
-      nativeToolScope = status.linked === true && status.toolsAvailable === true && typeof status.orgId === "string" && typeof status.workspaceId === "string"
+      const descriptor = JSON.parse(readFileSync(resolve(nativeDescriptorPath), "utf8")) as { workspaceId?: unknown };
+      nativeToolScope = status.linked === true && status.toolsAvailable === true
+        && typeof status.orgId === "string" && status.orgId.length > 0
+        && typeof status.workspaceId === "string" && status.workspaceId.length > 0
+        && status.workspaceId === descriptor.workspaceId
         ? { orgId: status.orgId, workspaceId: status.workspaceId } : null;
     } catch { nativeToolScope = null; }
   };
   const bizosToolOperation: Record<string, string> = {
     bizos_email_send: "tools/email-send", bizos_email_inbox: "tools/email-inbox",
-    bizos_site_publish: "tools/site-publish", bizos_image_generate: "tools/image-generate",
+    bizos_site_publish: "tools/site-publish", bizos_site_unpublish: "tools/site-unpublish",
+    bizos_image_generate: "tools/image-generate",
   };
   const invokeBizosTool = async (tool: string, raw: unknown): Promise<unknown> => {
     if (!nativeToolsTransport || !bizosToolOperation[tool]) throw new HttpError(503, "bizos_tools_unavailable", "BizOS server tools are unavailable without the desktop bridge.");
     await refreshNativeToolScope();
     const scope = nativeToolScope;
-    if (!scope || scope.workspaceId !== `local:${id}:workspace`) throw new HttpError(403, "bizos_account_unlinked", "Sign in to BizOS and link this workspace to an organization to use this tool.");
+    if (!scope) throw new HttpError(403, "bizos_account_unlinked", "Sign in to BizOS and link this workspace to an organization to use this tool.");
     const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
     return nativeToolsTransport(bizosToolOperation[tool]!, { ...args, orgId: scope.orgId, workspaceId: scope.workspaceId });
   };
@@ -3233,6 +3240,8 @@ async function serve(): Promise<void> {
       const messageThreadId = routeId(url.pathname, /^\/api\/collaboration\/threads\/([^/]+)\/messages$/);
       if (messageThreadId && method === "GET") return sendJson(response, 200, await facade.messagePage(messageThreadId, url));
       if (messageThreadId && method === "POST") {
+        if (nativeToolsTransport) await refreshNativeToolScope();
+        if (refreshComputerAvailability) await refreshComputerAvailability();
         const result = await facade.postMessage(messageThreadId, await bodyOf(request, MAX_COLLABORATION_MESSAGE_BYTES));
         return sendJson(response, result.status, result.body);
       }
@@ -3448,7 +3457,6 @@ async function serve(): Promise<void> {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Local sidecar did not bind a TCP port.");
   origin = `http://127.0.0.1:${address.port}`;
-  const nativeDescriptorPath = process.env[NATIVE_COMPUTER_DESCRIPTOR_VARIABLE]?.trim();
   // A signed installation uses only the server seat. Do not even load the old
   // local Boat configuration in that sidecar process.
   const cloudComputer: CloudComputer | null = nativeDescriptorPath ? null : new CloudComputer({
@@ -3465,26 +3473,39 @@ async function serve(): Promise<void> {
   let computerOrgId: string | null = null;
   let computerWorkspaceId = "";
   if (continuityTransport) {
-    const refreshComputerAvailability = async () => {
+    let lastComputerGate = "";
+    refreshComputerAvailability = async () => {
+      const recordGate = (gate: string): void => {
+        if (gate !== lastComputerGate) process.stderr.write(`[localbizos] signed computer gate: ${gate}\n`);
+        lastComputerGate = gate;
+      };
       if (process.env.BIZOS_DESKTOP_COMPUTER_OPT_OUT === "true") {
         process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false";
+        recordGate("opted_out");
         return;
       }
       try {
         const scope = await continuityTransport<Record<string, unknown>>("status", {});
         computerOrgId = scope.linked === true && typeof scope.orgId === "string" ? scope.orgId : null;
         computerWorkspaceId = typeof scope.workspaceId === "string" ? scope.workspaceId : "";
-        if (!computerOrgId) { process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false"; return; }
+        if (!computerOrgId || !computerWorkspaceId) {
+          process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false";
+          recordGate("unlinked");
+          return;
+        }
         const status = await continuityTransport<Record<string, unknown>>("computer/status", {
           orgId: computerOrgId, workspaceId: computerWorkspaceId, agentId: "ceo",
         });
         process.env.BIZOS_LOCAL_COMPUTER_ENABLED = status.available === true && status.configured === true ? "true" : "false";
+        recordGate(process.env.BIZOS_LOCAL_COMPUTER_ENABLED === "true" ? "available" : "unavailable");
       } catch {
         process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "false";
+        recordGate("status_error");
       }
     };
-    await refreshComputerAvailability();
-    setInterval(() => { void refreshComputerAvailability(); }, 60_000).unref();
+    const refresh = refreshComputerAvailability;
+    await refresh();
+    setInterval(() => { void refresh(); }, 60_000).unref();
   }
   const serverComputer = continuityTransport && nativeDescriptorPath
     ? new RemoteServerComputerBackend(continuityTransport, () => computerOrgId, () => computerWorkspaceId)

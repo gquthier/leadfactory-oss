@@ -20,7 +20,10 @@ const FILE = 'cloud-execution.json';
 const BIZOS_MODEL = 'bizos-mixture';
 const active = (run: CloudRun) => run.state === 'queued' || run.state === 'running';
 const states = new Set<CloudRun['state']>(['queued', 'running', 'done', 'failed', 'cancelled']);
-const publicReasonCodes = new Set(['policy_changed']);
+const publicReasonCodes = new Set([
+  'policy_changed', 'not_found', 'model_unavailable', 'budget_exhausted',
+  'insufficient_work_credits', 'credit_state_unavailable',
+]);
 function publicError(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   return publicReasonCodes.has(value) ? value : 'BizOS execution failed.';
@@ -32,7 +35,7 @@ function cloudRun(value: unknown): CloudRun {
     || typeof row.state !== 'string' || !states.has(row.state as CloudRun['state'])) throw new Error('BizOS returned an invalid run.');
   return {
     runId: String(row.runId), threadId: String(row.threadId), agentId: String(row.agentId), triggerMessageId: String(row.triggerMessageId),
-    state: row.state as CloudRun['state'], error: publicError(row.error), createdAt: String(row.createdAt), updatedAt: String(row.updatedAt),
+    state: row.state as CloudRun['state'], error: row.error == null ? null : publicError(row.errorCode ?? row.error), createdAt: String(row.createdAt), updatedAt: String(row.updatedAt),
   };
 }
 function cloudSend(value: unknown): CloudSend {

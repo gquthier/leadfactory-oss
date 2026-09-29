@@ -16,6 +16,8 @@ const built = existsSync(script) && existsSync(join(runtime, "dist/agency-kit/li
 let root: string, child: ChildProcess, provider: Server, bridge: Server, descriptor: { origin: string; token: string };
 let providerOrigin = "", workerId = "", cancelId = "", ceoId = "", ceoThread = "", calls = 0;
 let bridgeCalls: Array<{ operation: string; body: Record<string, unknown> }> = [];
+let linked = true, statusWorkspaceId = "", computerAvailable = false;
+let offeredTools: string[] = [];
 let logs = "";
 
 async function waitFor<T>(probe: () => Promise<T | null> | T | null, what: string, timeout = 50_000): Promise<T> {
@@ -39,6 +41,14 @@ async function send(threadId: string, content: string) {
   expect(result.status).toBe(201);
   return result;
 }
+async function settle(result: { body: any }, what: string) {
+  const runId = result.body.runs?.[0]?.runId;
+  expect(runId).toBeTruthy();
+  return waitFor(async () => {
+    const run = (await api("GET", `/api/collaboration/runs/${encodeURIComponent(runId)}`)).body;
+    return ["done", "failed", "cancelled"].includes(run.state) ? run : null;
+  }, what, 30_000);
+}
 
 describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
   beforeAll(async () => {
@@ -48,7 +58,8 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
     mkdirSync(join(root, "claude"));
     mkdirSync(join(root, "state"));
     const instance = randomUUID();
-    const workspaceId = `local:${instance}:workspace`;
+    const workspaceId = `os_${randomUUID().replaceAll("-", "")}`;
+    statusWorkspaceId = workspaceId;
     const orgId = randomUUID();
     const bridgeSecret = randomBytes(32).toString("hex");
     writeFileSync(join(root, "state", "instance.json"), JSON.stringify({ version: 1, instanceId: instance }));
@@ -62,9 +73,13 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
       const call = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { operation: string; body: Record<string, unknown> };
       bridgeCalls.push(call);
       const result = call.operation === "status"
-        ? { linked: true, toolsAvailable: true, orgId, workspaceId }
+        ? { linked, toolsAvailable: linked, orgId, workspaceId: statusWorkspaceId }
+        : call.operation === "computer/status"
+          ? { available: computerAvailable, configured: computerAvailable }
         : call.operation === "tools/email-inbox"
           ? { address: "fixture@createbizos.com", items: [{ subject: "Fixture inbox" }] }
+          : call.operation === "tools/site-unpublish"
+            ? { unpublished: true, siteId: call.body.site_id }
           : null;
       response.writeHead(result ? 200 : 404, { "content-type": "application/json" });
       response.end(JSON.stringify(result ? { ok: true, result } : { ok: false, code: "not_found" }));
@@ -75,7 +90,8 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
     provider = createServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { messages: Array<{ role: string; content?: string }> };
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { messages: Array<{ role: string; content?: string }>; tools?: Array<{ function?: { name?: string } }> };
+      offeredTools = (body.tools ?? []).map(tool => tool.function?.name ?? "");
       calls += 1;
       const last = body.messages.at(-1);
       let message: Record<string, unknown>;
@@ -92,6 +108,8 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
       else if (String(last?.content).includes("LIST_ROUTINES")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "list_routines", arguments: "{}" } }] };
       else if (String(last?.content).includes("CANCEL_ROUTINE")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "cancel_routine", arguments: JSON.stringify({ routine_id: cancelId }) } }] };
       else if (String(last?.content).includes("SEND_INBOX_TOOL")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "bizos_email_inbox", arguments: "{}" } }] };
+      else if (String(last?.content).includes("UNPUBLISH_SITE_TOOL")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "bizos_site_unpublish", arguments: JSON.stringify({ site_id: "site-fixture", operation_id: "operation-fixture" }) } }] };
+      else if (String(last?.content).includes("CHECK_COMPUTER_TOOL")) message = { role: "assistant", content: "Computer tools checked." };
       else if (String(last?.content).includes("RECRUIT_SPECIALIST")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "recruit_agent", arguments: JSON.stringify({ name: "Lena", title: "Market researcher", description: "Research the market and report practical findings", initial_task: "Find three useful market signals" }) } }] };
       else if (String(last?.content).includes("Introduce yourself to the person")) message = { role: "assistant", content: "Hello, j'espère que tu vas bien. Ari m'a briefée pour étudier le marché et te partager des pistes concrètes. Tu peux me solliciter quand tu veux." };
       else message = { role: "assistant", content: "Routine ran for worker." };
@@ -154,9 +172,50 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
     const before = bridgeCalls.length;
     await send(ceoThread, "SEND_INBOX_TOOL");
     const call = await waitFor(() => bridgeCalls.slice(before).find(row => row.operation === "tools/email-inbox") ?? null, "signed inbox bridge call");
-    expect(call.body.workspaceId).toMatch(/^local:.*:workspace$/);
+    expect(call.body.workspaceId).toMatch(/^os_/);
     expect(typeof call.body.orgId).toBe("string");
     expect(JSON.stringify(call)).not.toMatch(/secret|apiKey|providerKey/);
+  }, 30_000);
+
+  it("refuses unlinked or mismatched status before sending a BizOS tool call", async () => {
+    const before = bridgeCalls.filter(row => row.operation === "tools/email-inbox").length;
+    const originalWorkspaceId = statusWorkspaceId;
+    linked = false;
+    const firstTurn = calls;
+    await settle(await send(ceoThread, "SEND_INBOX_TOOL"), "unlinked tool refusal");
+    expect(calls).toBeGreaterThan(firstTurn);
+    expect(bridgeCalls.filter(row => row.operation === "tools/email-inbox")).toHaveLength(before);
+    linked = true;
+    statusWorkspaceId = "os_different_workspace";
+    const secondTurn = calls;
+    await settle(await send(ceoThread, "SEND_INBOX_TOOL"), "mismatched workspace refusal");
+    expect(calls).toBeGreaterThan(secondTurn);
+    expect(bridgeCalls.filter(row => row.operation === "tools/email-inbox")).toHaveLength(before);
+    statusWorkspaceId = originalWorkspaceId;
+  }, 30_000);
+
+  it("dispatches site unpublish over the signed desktop bridge", async () => {
+    const before = bridgeCalls.length;
+    const run = await settle(await send(ceoThread, "UNPUBLISH_SITE_TOOL"), "unpublish tool turn");
+    expect(offeredTools, JSON.stringify({ run, bridge: bridgeCalls.slice(before), logs: logs.slice(-500) })).toContain("bizos_site_unpublish");
+    const call = bridgeCalls.slice(before).find(row => row.operation === "tools/site-unpublish");
+    expect(call, JSON.stringify({ run, bridge: bridgeCalls.slice(before), logs: logs.slice(-500) })).toBeDefined();
+    expect(call?.body).toMatchObject({ workspaceId: statusWorkspaceId, site_id: "site-fixture", operation_id: "operation-fixture" });
+  }, 30_000);
+
+  it("mounts server computer tools on the next turn when signed availability changes, even on a free local plan", async () => {
+    expect((await api("GET", "/api/local/entitlement")).body).toMatchObject({ tier: "free", features: { cloudComputer: false } });
+    computerAvailable = true;
+    const before = calls;
+    await settle(await send(ceoThread, "CHECK_COMPUTER_TOOL"), "computer-enabled model turn");
+    expect(calls).toBeGreaterThan(before);
+    expect(offeredTools).toContain("computer_observe");
+    expect(bridgeCalls.some(row => row.operation === "computer/status" && row.body.workspaceId === statusWorkspaceId)).toBe(true);
+    computerAvailable = false;
+    const after = calls;
+    await settle(await send(ceoThread, "CHECK_COMPUTER_TOOL"), "computer-disabled model turn");
+    expect(calls).toBeGreaterThan(after);
+    expect(offeredTools).not.toContain("computer_observe");
   }, 30_000);
 
   it("lets a new recruit write its own short first message in its direct chat", async () => {

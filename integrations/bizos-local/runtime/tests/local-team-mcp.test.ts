@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS, toolsetsFromArgv } from "../src/local-team-mcp.js";
+import { BIZOS_TOOL_SPECS, handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS, toolsetsFromArgv } from "../src/local-team-mcp.js";
 
 describe("local team MCP", () => {
+  it("advertises and dispatches site unpublish only through the BizOS toolset", async () => {
+    const spec = BIZOS_TOOL_SPECS.find(tool => tool.name === "bizos_site_unpublish");
+    expect(spec?.inputSchema.required).toEqual(["site_id", "operation_id"]);
+    const bizos = vi.fn(async () => ({ unpublished: true }));
+    const listed = await handleLocalTeamMessage({ id: 1, method: "tools/list" }, undefined, undefined, undefined, undefined,
+      { toolsets: new Set(["team", "bizos"]), bizos });
+    expect(JSON.stringify(listed)).toContain("bizos_site_unpublish");
+    const called = await handleLocalTeamMessage({ id: 2, method: "tools/call", params: { name: "bizos_site_unpublish", arguments: { site_id: "site", operation_id: "op" } } },
+      undefined, undefined, undefined, undefined, { toolsets: new Set(["team", "bizos"]), bizos });
+    expect(bizos).toHaveBeenCalledWith({ tool: "bizos_site_unpublish", arguments: { site_id: "site", operation_id: "op" } });
+    expect(JSON.stringify(called)).toContain("unpublished");
+  });
   it("matches the sidecar's computer seats and never advertises cloud tools on a server seat", async () => {
     const old = process.env.BIZOS_LOCAL_COMPUTER_ENABLED;
     process.env.BIZOS_LOCAL_COMPUTER_ENABLED = "true";
