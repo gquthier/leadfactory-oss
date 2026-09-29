@@ -44,6 +44,17 @@ it('fails closed for unknown upstream identifiers in status and run errors',asyn
   f.cloud.mockRejectedValueOnce(new ContinuityBridgeError(409,'policy_changed','untrusted server detail',true));
   expect(await f.manager.status('bot:marketing')).toMatchObject({reason:'policy_changed'});
 });
+it('preserves only approved credit refusal codes in status and failed runs',async()=>{
+  const f=fixture();
+  Object.assign(f.state,{available:false,reason:'budget_exhausted'});
+  expect(await f.manager.status('bot:marketing')).toMatchObject({available:false,reason:'budget_exhausted'});
+  Object.assign(f.state,{available:true,reason:undefined});
+  await f.manager.select('bot:marketing','bizos');
+  Object.assign(f.response.runs[0]!,{state:'failed',error:'Your BizOS Work Credits are exhausted. Recharge your plan to continue.',errorCode:'insufficient_work_credits'});
+  const sent=await f.manager.send('bot:marketing','message','hello');
+  expect(sent.runs[0]?.error).toBe('insufficient_work_credits');
+  expect(JSON.stringify(sent)).not.toMatch(/gemini|openrouter/i);
+});
 it('sends private imported context on every retry without exposing upstream model metadata',async()=>{
   const f=fixture(); await f.manager.select('bot:marketing','bizos');
   f.cloud.mockRejectedValueOnce(new Error('offline'));
