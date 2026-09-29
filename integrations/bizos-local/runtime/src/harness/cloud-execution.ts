@@ -20,9 +20,10 @@ const FILE = 'cloud-execution.json';
 const BIZOS_MODEL = 'bizos-mixture';
 const active = (run: CloudRun) => run.state === 'queued' || run.state === 'running';
 const states = new Set<CloudRun['state']>(['queued', 'running', 'done', 'failed', 'cancelled']);
+const publicReasonCodes = new Set(['policy_changed']);
 function publicError(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  return /gemini|deepseek|openrouter|qwen|anthropic/i.test(value) ? 'BizOS execution failed.' : value;
+  return publicReasonCodes.has(value) ? value : 'BizOS execution failed.';
 }
 function cloudRun(value: unknown): CloudRun {
   if (!value || typeof value !== 'object') throw new Error('BizOS returned an invalid run.');
@@ -88,7 +89,8 @@ export class CloudExecution {
       return { destination, available: result.available, active: result.active, model: BIZOS_MODEL,
         ...(reason ? { reason } : {}), ...(result.conversationId ? { conversationId: result.conversationId } : {}), ...(result.agentId ? { agentId: result.agentId } : {}) };
     } catch (error) {
-      return { destination, available: false, reason: publicError(error instanceof Error ? error.message : null) ?? 'BizOS is unavailable.' };
+      const reason = error instanceof ContinuityBridgeError ? error.code : error instanceof Error ? error.message : null;
+      return { destination, available: false, reason: publicError(reason) ?? 'BizOS is unavailable.' };
     }
   }
   async select(threadId: string, destination: 'personal' | 'bizos') {

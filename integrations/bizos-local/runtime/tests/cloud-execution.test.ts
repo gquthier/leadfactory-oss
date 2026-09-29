@@ -26,6 +26,24 @@ it('selection persists and makes no inference request',async()=>{
   expect(await f.manager.status('bot:marketing')).toMatchObject({model:'bizos-mixture'});
   expect(new CloudExecution(f.storage,f.continuity).destination('bot:marketing')).toBe('bizos');
 });
+it('fails closed for unknown upstream identifiers in status and run errors',async()=>{
+  const f=fixture();
+  Object.assign(f.state,{available:false,reason:'acme/nebulon-ultra-9'});
+  expect(await f.manager.status('bot:marketing')).toMatchObject({
+    available:false,
+    reason:'BizOS execution failed.',
+  });
+  Object.assign(f.state,{available:true,reason:undefined});
+  await f.manager.select('bot:marketing','bizos');
+  (f.response.runs[0] as {error:string|null}).error='acme/nebulon-ultra-9 failed';
+  const sent=await f.manager.send('bot:marketing','message','hello');
+  expect(sent.runs[0]?.error).toBe('BizOS execution failed.');
+  expect(JSON.stringify({status:await f.manager.status('bot:marketing'),sent})).not.toContain('nebulon');
+  f.cloud.mockRejectedValueOnce(new ContinuityBridgeError(502,'upstream_failed','acme/nebulon-ultra-9 failed',true));
+  expect(await f.manager.status('bot:marketing')).toMatchObject({reason:'BizOS execution failed.'});
+  f.cloud.mockRejectedValueOnce(new ContinuityBridgeError(409,'policy_changed','untrusted server detail',true));
+  expect(await f.manager.status('bot:marketing')).toMatchObject({reason:'policy_changed'});
+});
 it('sends private imported context on every retry without exposing upstream model metadata',async()=>{
   const f=fixture(); await f.manager.select('bot:marketing','bizos');
   f.cloud.mockRejectedValueOnce(new Error('offline'));
