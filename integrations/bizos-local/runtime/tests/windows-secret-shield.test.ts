@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { startCodexTurn, type RuntimeEvent } from "../src/harness/codex-driver.js";
 import { startClaudeTurn } from "../src/harness/claude-driver.js";
 import { startCursorTurn } from "../src/harness/cursor-driver.js";
+import { runtimeProtectedPaths } from "../src/harness/secret-shield.js";
 
 it.skipIf(process.platform !== "win32")("never launches a Windows agent CLI with access to BizOS keys", async () => {
   const root = mkdtempSync(join(tmpdir(), "bizos-win-shield-"));
@@ -24,6 +25,20 @@ it.skipIf(process.platform !== "win32")("never launches a Windows agent CLI with
       expect(events).toContainEqual({ type: "turn.completed", ok: false, stopReason: "secret_shield_unavailable" });
       expect(existsSync(marker)).toBe(false);
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it.skipIf(process.platform !== "win32")("protects the Windows profile's cookie and session stores", () => {
+  const root = mkdtempSync(join(tmpdir(), "bizos-win-paths-"));
+  try {
+    const paths = runtimeProtectedPaths({ storageRoot: join(root, "runtime"), stateRoot: root, home: root });
+    const profile = join(process.env.LOCALAPPDATA ?? join(root, "AppData", "Local"), "BizOS-Simple");
+    for (const name of ["Cookies", "Partitions", "Local Storage", "Session Storage"]) {
+      expect(paths).toContain(join(profile, name));
+    }
+    expect(paths).toContain(join(root, "runtime", "providers.json"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
