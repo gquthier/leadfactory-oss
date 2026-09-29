@@ -22,7 +22,8 @@ import { createReadStream, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { downloadGeneratedImage, MAX_IMAGE_BYTES } from "./generated-image.js";
 import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
@@ -149,6 +150,8 @@ export interface CollaborationAttachment {
   alt?: string;
   path?: string;
   url: string;
+  /** Small generated images can cross the desktop's JSON IPC without a second authenticated binary request. */
+  dataUrl?: string;
   status: "ready";
 }
 
@@ -560,10 +563,19 @@ function attachmentUrl(id: string): string {
 /** The `image` / `file` blocks of a message as the desktop contract. Only
  * an agent's attachment (one with an `id` and a `path`) is listed: a
  * person's own upload already reached the desktop as a data URL. */
-function attachmentsOf(blocks: readonly MessageBlock[]): CollaborationAttachment[] {
+function generatedImageDataUrl(block: Extract<MessageBlock, { kind: "image" }>): string | undefined {
+  if (!block.id?.startsWith("generated-image-") || !block.path || !block.mimeType) return undefined;
+  try {
+    if (statSync(block.path).size > MAX_IMAGE_BYTES) return undefined;
+    return `data:${block.mimeType};base64,${readFileSync(block.path).toString("base64")}`;
+  } catch { return undefined; }
+}
+
+export function attachmentsOf(blocks: readonly MessageBlock[]): CollaborationAttachment[] {
   const out: CollaborationAttachment[] = [];
   for (const block of blocks) {
     if (block.kind === "image" && block.id && block.path) {
+      const dataUrl = generatedImageDataUrl(block);
       out.push({
         id: block.id, kind: "image", fileName: block.fileName ?? basename(block.path),
         contentType: block.mimeType ?? "application/octet-stream",
@@ -571,6 +583,7 @@ function attachmentsOf(blocks: readonly MessageBlock[]): CollaborationAttachment
         ...(block.width !== undefined && block.height !== undefined ? { width: block.width, height: block.height } : {}),
         ...(block.alt ? { alt: block.alt } : {}),
         path: block.path, url: attachmentUrl(block.id), status: "ready",
+        ...(dataUrl ? { dataUrl } : {}),
       });
     } else if (block.kind === "file" && block.id && block.path) {
       out.push({
@@ -1172,9 +1185,10 @@ export class CollaborationFacade {
     const continuity = this.harness.continuity;
     if (!continuity.backupEnabled()) return false;
     const localId = threadIdForTarget(target);
-    if (continuity.store.status(localId)) return true;
     const identity = await continuity.identity();
     if (!identity.orgId || !identity.userId) return false;
+    continuity.store.quarantineMismatchedWorkspace(localId, identity.workspaceId);
+    if (continuity.store.status(localId)) return true;
     const bots = await this.invoke<Bot[]>("lbz:bots:list");
     const groups = await this.invoke<Group[]>("lbz:groups:list");
     const title = "botId" in target ? bots.find(bot => bot.id === target.botId)?.name
@@ -1183,13 +1197,15 @@ export class CollaborationFacade {
     if (!title) return false;
     const roster = await continuity.agents() as { agents: Array<{ agentId: string; name: string }> };
     const agentId = roster.agents.find(agent => agent.name.toLocaleLowerCase() === title.toLocaleLowerCase())?.agentId ?? "ceo";
-    const history = this.harness.threads.transcript(target);
-    const listing = await continuity.list() as { conversations: Array<{ conversationId: string; agentId: string; title: string }> };
+    const listing = await continuity.list() as { conversations: Array<{ conversationId: string; agentId: string; title: string; workspaceId?: string; localConversationId?: string }> };
     const attached = new Set(continuity.store.links().map(link => link.link.conversationId));
-    const candidates = listing.conversations.filter(row => row.agentId === agentId && row.title === title && !attached.has(row.conversationId));
+    const candidates = listing.conversations.filter(row => row.agentId === agentId && row.title === title
+      && remoteConversationBelongsToWorkspace(row, identity.workspaceId, localId) && !attached.has(row.conversationId));
     if (candidates.length === 1) await continuity.attach(localId, candidates[0]!.conversationId);
     else await continuity.link(localId, { agentId, audience: "private", title: title.slice(0, 80) });
-    continuity.importRecentHistory(localId, history);
+    // Legacy local messages have no trustworthy per-message OS marker. Do
+    // not copy them to cloud hidden context merely because this thread has a
+    // matching title; the local UI can still show its own verified history.
     await continuity.sync(localId);
     return true;
   }
@@ -1202,15 +1218,27 @@ export class CollaborationFacade {
       // conversations in the normal list before linking work created here.
       try {
         const continuity = this.harness.continuity;
+        const identity = await continuity.identity();
         const listing = await continuity.list() as { conversations: Array<{
-          conversationId: string; agentId: string; audience: string; title: string; localConversationId: string | null;
+          conversationId: string; agentId: string; audience: string; title: string; localConversationId: string | null; workspaceId?: string;
         }> };
         const seen = new Set<string>();
         const bots = await this.invoke<Bot[]>("lbz:bots:list");
+        const existingGroups = await this.invoke<Group[]>("lbz:groups:list");
+        const existingChats = await this.harness.quickChats.list();
+        const foreignWorkspaces = new Set(listing.conversations.filter(row => row.workspaceId && row.workspaceId !== identity.workspaceId).map(row => row.workspaceId));
+        // A second Mac may have a different local workspace ID for the same
+        // verified cloud org. Restore its sole source into a truly empty
+        // profile; never merge foreign history into existing local data or
+        // choose among several possible source OSes by title.
+        const restoreSoleForeignWorkspace = bots.length === 0 && existingGroups.length === 0 && existingChats.chats.length === 0
+          && foreignWorkspaces.size === 1 ? [...foreignWorkspaces][0] : null;
         for (const row of listing.conversations) {
           const remoteThreadId = row.localConversationId ?? "";
           if (seen.has(row.conversationId) || row.audience !== "private"
-            || !/^(?:bot:[^:]+|group:[^:]+|chat:qchat_[a-f0-9]{32})$/.test(remoteThreadId)) continue;
+            || !/^(?:bot:[^:]+|group:[^:]+|chat:qchat_[a-f0-9]{32})$/.test(remoteThreadId)
+            || !(remoteConversationBelongsToWorkspace(row, identity.workspaceId, remoteThreadId)
+              || (restoreSoleForeignWorkspace && row.workspaceId === restoreSoleForeignWorkspace))) continue;
           seen.add(row.conversationId);
           if (this.importedRemote.has(row.conversationId)) continue;
           if (continuity.store.links().some(link => link.link.conversationId === row.conversationId)) continue;
@@ -1821,7 +1849,19 @@ export class CollaborationFacade {
   disconnectPlan(id: string) { return this.invoke("lbz:plans:disconnect", [id]); }
 
   async createQuickChat(raw: unknown) {
-    const chat = await this.invoke<{ id: string; title: string; createdAt: string; updatedAt: string }>("lbz:quickChats:create", [raw]);
+    const input = objectBody(raw, ["requestId", "sourceThreadId", "sourceMessageId"]);
+    const requestId = requiredString(input.requestId, "requestId", 128);
+    let source: { threadId: string; messageId: string; excerpt: string } | undefined;
+    if (input.sourceThreadId !== undefined || input.sourceMessageId !== undefined) {
+      const publicThreadId = requiredString(input.sourceThreadId, "sourceThreadId", 160);
+      const publicMessageId = requiredString(input.sourceMessageId, "sourceMessageId", 160);
+      const target = this.target(publicThreadId);
+      const message = await this.harness.threads.message(target, this.internalMessageId(publicMessageId));
+      if (!message) throw new HttpError(404, "not_found", "Source message is unavailable in this workspace.");
+      source = { threadId: publicThreadId, messageId: publicMessageId,
+        excerpt: textOf(message.blocks, 500).replace(/\s+/g, " ").trim().slice(0, 500) || "Ce message" };
+    }
+    const chat = await this.invoke<{ id: string; title: string; createdAt: string; updatedAt: string }>("lbz:quickChats:create", [{ requestId, ...(source ? { source } : {}) }]);
     return { ...chat, thread: await this.thread({ chatId: chat.id }, [], []) };
   }
 
@@ -2024,6 +2064,32 @@ export class CollaborationFacade {
       this.invoke<Bot[]>("lbz:bots:list"),
     ]);
     return { items: routines.map((routine) => publicRoutine(routine, bots, (botId) => this.agentId(botId))) };
+  }
+  /** Owner action from an agent card; uses the same trigger validation and store as schedule_routine. */
+  async createCron(raw: unknown): Promise<{ item: PublicRoutine }> {
+    return this.exclusive(async () => {
+      const input = objectBody(raw, ["agent_id", "name", "prompt", "frequency", "time", "weekdays", "every_minutes", "at", "until"]);
+      const owner = requiredString(input.agent_id, "agent_id", 160);
+      const botId = owner.startsWith("local:") ? this.internalAgentId(owner) : owner;
+      const name = requiredString(input.name, "name", 80);
+      const prompt = requiredString(input.prompt, "prompt", 6000);
+      let trigger;
+      let endsAt: string | null;
+      try {
+        trigger = triggerFromToolInput(input);
+        endsAt = endsAtFromToolInput(input);
+      } catch (error) {
+        throw new HttpError(400, "invalid_trigger", error instanceof Error ? error.message : "invalid trigger");
+      }
+      const bots = await this.invoke<Bot[]>("lbz:bots:list");
+      if (!bots.some(bot => bot.id === botId && !bot.archived)) throw new HttpError(404, "not_found", "That owner is not an active agent here.");
+      const routine = await this.invoke<Routine>("lbz:routines:create", [{ botId, name, prompt, trigger, enabled: true, ...(endsAt ? { endsAt } : {}) }]);
+      this.recordTeamEvent("routine.created", {
+        actorBotId: botId, ownerBotId: botId, runId: this.runId("none"),
+        threadId: this.publicThreadId({ botId }), changes: this.routineChanges(routine),
+      });
+      return { item: publicRoutine(routine, bots, (id) => this.agentId(id)) };
+    });
   }
   async patchCron(id: string, raw: unknown): Promise<{ item: PublicRoutine }> {
     const input = objectBody(raw, ["status", "expected_updated_at", "agent_id", "name", "description", "trigger", "ends_at", "endsAt"]);
@@ -2893,6 +2959,13 @@ export function publicRunState(state: Run["state"]): "queued" | "running" | "don
   return "failed";
 }
 
+/** An organization-wide cloud listing can contain multiple local OSes. */
+export function remoteConversationBelongsToWorkspace(
+  row: { workspaceId?: unknown; localConversationId?: unknown }, workspaceId: string, localConversationId: string,
+): boolean {
+  return Boolean(workspaceId && row.workspaceId === workspaceId && row.localConversationId === localConversationId);
+}
+
 /** Establish the local policy and team facade before any overdue routine starts. */
 export async function startLocalHarness(
   harness: Pick<LocalBizosHarness, "runtime" | "start" | "templates">,
@@ -2949,19 +3022,54 @@ async function serve(): Promise<void> {
   };
   const bizosToolOperation: Record<string, string> = {
     bizos_email_send: "tools/email-send", bizos_email_inbox: "tools/email-inbox",
+    bizos_site_create: "tools/site-create",
     bizos_site_publish: "tools/site-publish", bizos_site_unpublish: "tools/site-unpublish",
     bizos_image_generate: "tools/image-generate",
   };
-  const invokeBizosTool = async (tool: string, raw: unknown): Promise<unknown> => {
+  const invokeBizosTool = async (tool: string, raw: unknown, checkActive: () => void = () => undefined): Promise<unknown> => {
     if (!nativeToolsTransport || !bizosToolOperation[tool]) throw new HttpError(503, "bizos_tools_unavailable", "BizOS server tools are unavailable without the desktop bridge.");
     await refreshNativeToolScope();
     const scope = nativeToolScope;
     if (!scope) throw new HttpError(403, "bizos_account_unlinked", "Sign in to BizOS and link this workspace to an organization to use this tool.");
     const args = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
-    return nativeToolsTransport(bizosToolOperation[tool]!, { ...args, orgId: scope.orgId, workspaceId: scope.workspaceId });
+    const started = Date.now();
+    for (;;) {
+      checkActive();
+      await refreshNativeToolScope();
+      if (!nativeToolScope || nativeToolScope.orgId !== scope.orgId || nativeToolScope.workspaceId !== scope.workspaceId)
+        throw new HttpError(409, "workspace_changed", "The linked workspace changed during this tool call.");
+      let result: unknown;
+      try {
+        result = await nativeToolsTransport(bizosToolOperation[tool]!, { ...args, orgId: scope.orgId, workspaceId: scope.workspaceId });
+      } catch (error) {
+        if (tool !== "bizos_image_generate" || !(error instanceof ContinuityBridgeError) || error.code !== "operation_outcome_pending") throw error;
+        result = { pending: true };
+      }
+      if (tool !== "bizos_image_generate" || !result || typeof result !== "object" || (result as Record<string, unknown>).pending !== true) return result;
+      if (Date.now() - started > 8 * 60_000)
+        throw new HttpError(504, "image_pending", "Image generation is still processing. Retry with the same operation_id to recover the result.");
+      await new Promise(resolveWait => setTimeout(resolveWait, 3_000));
+    }
   };
   const packOf = (botId: string): PackService | null =>
     packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
+  async function deliverGeneratedImage(capability: TeamCapability, result: unknown, checkActive: () => void): Promise<void> {
+    if (!result || typeof result !== "object") throw new HttpError(502, "image_result_invalid", "Image generation returned no image.");
+    const row = result as Record<string, unknown>;
+    if (typeof row.url !== "string" || typeof row.artifactId !== "string")
+      throw new HttpError(502, "image_result_invalid", "Image generation returned no usable image URL.");
+    const target = targetForThreadId(capability.threadId);
+    if (!target) throw new HttpError(404, "not_found", "Image conversation is unavailable.");
+    const messageId = `generated-image-${row.artifactId}`;
+    if (harness.threads.transcript(target).some(message => message.id === messageId)) return;
+    const file = await downloadGeneratedImage(row.url, harness.storage.layout.root, row.artifactId);
+    checkActive();
+    harness.threads.appendGeneratedImage(capability, {
+      messageId, attachmentId: messageId, url: pathToFileURL(file.path).href,
+      path: file.path, fileName: file.fileName, mimeType: file.mimeType,
+      size: file.size, width: file.width, height: file.height,
+    });
+  }
   let origin = "";
   const server = createServer(async (request, response) => {
     try {
@@ -3007,7 +3115,9 @@ async function serve(): Promise<void> {
           if (operation === "cancel-routine") return facade!.cancelAgentRoutine(capability,input);
           if (operation === "bizos") {
             if (!BIZOS_TOOL_SPECS.some(tool => tool.name === parsed.tool)) throw new HttpError(404, "unknown_tool", "Unknown BizOS server tool.");
-            return invokeBizosTool(String(parsed.tool), parsed.arguments);
+            const result = await invokeBizosTool(String(parsed.tool), parsed.arguments, () => { teamBroker.authorize(bearer); });
+            if (parsed.tool === "bizos_image_generate") await deliverGeneratedImage(capability, result, () => { teamBroker.authorize(bearer); });
+            return result;
           }
           if (operation === "checkpoint") return facade!.checkpointTask(capability,input);
           if (operation === "send") return facade!.sendToChat(capability,input);
@@ -3365,6 +3475,7 @@ async function serve(): Promise<void> {
       if (appId && method === "PATCH") return sendJson(response, 200, { app: await facade.updateApp(appId, await bodyOf(request)) });
       if (method === "GET" && url.pathname === "/api/local/models") return sendJson(response, 200, await facade.modelCatalogs());
       if (method === "GET" && url.pathname === "/api/crons") return sendJson(response, 200, await facade.crons());
+      if (method === "POST" && url.pathname === "/api/crons") return sendJson(response, 201, await facade.createCron(await bodyOf(request)));
       const cronId = routeId(url.pathname, /^\/api\/crons\/([^/]+)$/);
       if (cronId && method === "PATCH") return sendJson(response, 200, await facade.patchCron(cronId, await bodyOf(request)));
       if (cronId && method === "DELETE") return sendJson(response, 200, await facade.deleteCron(cronId));
@@ -3625,8 +3736,10 @@ async function serve(): Promise<void> {
         ? BIZOS_TOOL_SPECS.map((tool) => ({
           name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
           call: async (argumentsValue: unknown) => {
-            teamBroker.authorize(session);
-            return invokeBizosTool(tool.name, argumentsValue);
+            const capability = teamBroker.authorize(session);
+            const result = await invokeBizosTool(tool.name, argumentsValue, () => { teamBroker.authorize(session); });
+            if (tool.name === "bizos_image_generate") await deliverGeneratedImage(capability, result, () => { teamBroker.authorize(session); });
+            return result;
           },
         })) : [];
       return [...teamTools, ...packTools, ...computerTools, ...contextTools, ...bizosTools];

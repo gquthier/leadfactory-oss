@@ -981,8 +981,15 @@ export function buildHandlers(
 
     "lbz:quickChats:list": () => harness.quickChats.list(),
     "lbz:quickChats:create": (args) => {
-      const input = asStrictRecord(at(args, 0), "input", ["requestId"] as const);
-      return harness.quickChats.create(asString(input.requestId, "requestId", 128));
+      const input = asStrictRecord(at(args, 0), "input", ["requestId", "source"] as const);
+      const requestId = asString(input.requestId, "requestId", 128);
+      if (input.source === undefined) return harness.quickChats.create(requestId);
+      const source = asStrictRecord(input.source, "source", ["threadId", "messageId", "excerpt"] as const);
+      return harness.quickChats.create({ requestId, source: {
+        threadId: asString(source.threadId, "source.threadId", 160),
+        messageId: asString(source.messageId, "source.messageId", 160),
+        excerpt: asString(source.excerpt, "source.excerpt", 500),
+      } });
     },
     "lbz:quickChats:get": args => harness.quickChats.get(asString(at(args, 0), "id", 64)),
     "lbz:quickChats:messages": args => harness.quickChats.messages(asString(at(args, 0), "id", 64), asOptionalString(at(args, 1), "before", 64)),

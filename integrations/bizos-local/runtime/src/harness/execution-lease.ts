@@ -64,6 +64,7 @@ export class LeaseGuard {
     tool: string,
     kind: EffectRecord["class"],
     argumentHash?: string,
+    requestId?: string,
   ): string {
     const lease = this.assert(threadId, tool);
     const id = randomUUID();
@@ -74,6 +75,7 @@ export class LeaseGuard {
       state: "prepared",
       generation: lease.generation,
       ...(argumentHash ? { argumentHash } : {}),
+      ...(requestId ? { requestId } : {}),
     });
     return id;
   }

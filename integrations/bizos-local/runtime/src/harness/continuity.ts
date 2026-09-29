@@ -69,6 +69,8 @@ export interface ArtifactVersion {
 export interface EffectRecord {
   id: string;
   tool: string;
+  /** Caller-supplied idempotency key for paid or external tools. */
+  requestId?: string;
   class: "read" | "mediated" | "supervised" | "uncontrolled";
   state: "prepared" | "sent" | "confirmed" | "failed" | "unknown";
   generation: number;
@@ -165,6 +167,24 @@ export class ContinuityStore {
         effects: [],
       };
     });
+  }
+  /** A .46 link with no verified OS (or a different one) must not project
+   * its cloud transcript into the currently selected company's thread. */
+  quarantineMismatchedWorkspace(threadId: string, workspaceId: string): boolean {
+    const current = this.state.conversations[threadId];
+    if (!current || current.link.workspaceId === workspaceId) return false;
+    const quarantine = this.storage.readJsonStrict<Array<{ threadId: string; workspaceId: string; conversation: Conversation }>>(
+      "continuity-quarantine.json", []);
+    this.storage.writeJson("continuity-quarantine.json", [
+      ...quarantine, { threadId, workspaceId, conversation: structuredClone(current) },
+    ]);
+    this.commit(state => {
+      delete state.conversations[threadId];
+      for (const [key, binding] of Object.entries(state.bindings)) if (binding.threadId === threadId) delete state.bindings[key];
+      for (const [key, value] of Object.entries(state.queued))
+        if (value && typeof value === "object" && (value as { threadId?: unknown }).threadId === threadId) delete state.queued[key];
+    });
+    return true;
   }
   /** Remove only a legacy local QuickChat projection/outbox. The remote
    * archive is never modified: QuickChat itself is local and ephemeral. */

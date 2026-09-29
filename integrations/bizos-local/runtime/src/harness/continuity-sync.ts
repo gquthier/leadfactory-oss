@@ -1176,9 +1176,7 @@ export class ConversationContinuity {
     return tools
       .filter(
         (tool) =>
-          !["recruit_agent", "cloud_computer_run", "schedule_routine"].includes(
-            tool.name,
-          ),
+          tool.name !== "cloud_computer_run",
       )
       .map((tool) => ({
         ...tool,
@@ -1198,16 +1196,10 @@ export class ConversationContinuity {
     if (!this.linked(threadId)) return perform();
     if (
       [
-        "recruit_agent",
-        "recruit",
-        "schedule_routine",
-        "routine",
         "cloud_computer_run",
       ].includes(tool)
     )
-      throw new Error(
-        "This linked execution cannot launch an unsupervised process or child mission.",
-      );
+      throw new Error("This linked execution cannot launch an unsupervised computer process.");
     const run = this.runs[localRunId];
     if (!run) throw new Error("Linked execution is not admitted.");
     this.guard.assert(threadId, tool);
@@ -1218,20 +1210,30 @@ export class ConversationContinuity {
         ? "read"
         : "mediated";
     const argsHash = payloadHash(args);
-    if (
-      this.store
-        .effects(threadId)
-        .some(
-          (e) =>
-            e.argumentHash === argsHash &&
-            e.tool === tool &&
-            ["sent", "unknown"].includes(e.state),
-        )
-    )
-      throw new Error(
-        "An identical operation has an unknown outcome; reconcile before repeating it.",
-      );
-    const operationId = this.guard.prepare(threadId, tool, kind, argsHash);
+    const input = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
+    const nested = input.arguments && typeof input.arguments === "object" && !Array.isArray(input.arguments)
+      ? input.arguments as Record<string, unknown> : input;
+    const requestId = typeof nested.operation_id === "string" && nested.operation_id.trim()
+      ? nested.operation_id.trim() : undefined;
+    const generation = this.guard.assert(threadId, tool).generation;
+    const dedupeConfirmed = ["bizos_image_generate", "bizos_site_create", "bizos_site_publish", "bizos_site_unpublish", "bizos_email_send", "schedule_routine", "recruit_agent"].includes(tool);
+    const previous = this.store.effects(threadId).find(e => e.tool === tool && (
+      (requestId && e.requestId === requestId)
+      || (e.argumentHash === argsHash && (!e.requestId || !requestId)
+        && (e.state === "prepared" || e.state === "sent" || e.state === "unknown"
+          || (dedupeConfirmed && (requestId || e.generation === generation))))
+    ));
+    if (previous) {
+      if (previous.argumentHash !== argsHash) throw new Error("operation_id was reused with different arguments.");
+      // The signed server broker owns the result ledger for these tools.
+      // Replaying the same operation_id there reconciles a pending image or
+      // retrieves a completed receipt without another local journal effect.
+      if (requestId && tool.startsWith("bizos_")) return perform();
+      if (previous.state === "confirmed") throw new Error("Operation already confirmed; reconcile the existing result before retrying.");
+      if (["prepared", "sent", "unknown"].includes(previous.state))
+        throw new Error("An identical operation has an unknown outcome; reconcile before repeating it.");
+    }
+    const operationId = this.guard.prepare(threadId, tool, kind, argsHash, requestId);
     const admitted = await this.call<{
       admitted: boolean;
       existingStatus?: string;
@@ -1247,16 +1249,9 @@ export class ConversationContinuity {
         `Operation already ${admitted.existingStatus ?? "submitted"}; reconcile instead of repeating.`,
       );
     this.guard.sent(threadId, operationId);
+    let result: T;
     try {
-      const result = await perform();
-      this.guard.update(threadId, operationId, "confirmed");
-      await this.call("runs/receipt", {
-        ...this.credentials(run),
-        operationId,
-        status: "confirmed",
-        receipt: "Host tool returned.",
-      });
-      return result;
+      result = await perform();
     } catch (error) {
       const status =
         error instanceof DocumentValidationError ? "failed" : "unknown";
@@ -1272,6 +1267,15 @@ export class ConversationContinuity {
       }).catch(() => undefined);
       throw error;
     }
+    // Results stay with the host or the signed broker, never in this effect
+    // journal (notably a short-lived hosted image URL).
+    this.guard.update(threadId, operationId, "confirmed");
+    // The host effect succeeded. A lost remote receipt must not turn it into
+    // an unknown outcome or withhold the image URL from the active run.
+    await this.call("runs/receipt", {
+      ...this.credentials(run), operationId, status: "confirmed", receipt: "Host tool returned.",
+    }).catch(() => undefined);
+    return result;
   }
   verified(localRunId: string, supervised: boolean): void {
     const run = this.runs[localRunId];

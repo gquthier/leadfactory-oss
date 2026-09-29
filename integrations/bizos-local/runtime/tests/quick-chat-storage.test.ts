@@ -5,12 +5,36 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Storage } from '../src/harness/storage.js';
 import { ThreadStore } from '../src/harness/threads.js';
 import { fixedClock } from '../src/harness/clock.js';
+import { QuickChatStore } from '../src/harness/quick-chats.js';
 
 const roots: string[] = [];
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'quick-purge-')); roots.push(root); return new Storage(root); };
 afterEach(() => { roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })); });
 
 describe('QuickChat owned preview cleanup', () => {
+  it('keeps a reused blank chat bound to the same request id after it receives messages and restarts', () => {
+    const storage = fixture();
+    const clock = fixedClock(Date.now());
+    const chats = new QuickChatStore(storage, clock);
+    const blank = chats.create('ordinary blank');
+    const comment = chats.create('comment:message-123');
+    expect(comment.id).toBe(blank.id);
+    chats.recordMessage({ id: 'message', threadId: `chat:${blank.id}`, seq: 1, role: 'user', createdAt: clock.nowIso(), blocks: [{ kind: 'text', text: 'A comment' }] });
+    expect(chats.create('comment:message-123').id).toBe(blank.id);
+    expect(new QuickChatStore(storage, clock).create('comment:message-123').id).toBe(blank.id);
+  });
+  it('keeps comments on different source messages in separate QuickChats', () => {
+    const storage = fixture();
+    const chats = new QuickChatStore(storage, fixedClock(Date.now()));
+    const sourceA = { threadId: 'local:thread:a', messageId: 'local:message:a', excerpt: 'First' };
+    const sourceB = { threadId: 'local:thread:a', messageId: 'local:message:b', excerpt: 'Second' };
+    const first = chats.create('comment:source-a', sourceA);
+    const second = chats.create('comment:source-b', sourceB);
+    expect(second.id).not.toBe(first.id);
+    expect(chats.create('comment:source-a', sourceA).id).toBe(first.id);
+    expect(chats.create('another-request-same-source', sourceA).id).toBe(first.id);
+    expect(new QuickChatStore(storage, fixedClock(Date.now())).create('comment:source-a', sourceA).id).toBe(first.id);
+  });
   it('deletes only unshared runtime previews, never business files or another transcript’s preview', () => {
     const storage = fixture();
     const previews = join(storage.layout.root, 'previews'); mkdirSync(previews);

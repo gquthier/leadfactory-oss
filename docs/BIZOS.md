@@ -172,12 +172,12 @@ fournisseur personnel. Une réponse perdue conserve l’identifiant du message e
 bloque une bascule jusqu’à récupération de ce même envoi.
 
 Le contexte d’entreprise importé arrive au CEO dans son brief système privé :
-aucune consigne technique n’est publiée comme message humain. Si un fil local
-existait avant l’activation de la continuité, ses douze derniers messages sont
-résumés dans un contexte privé borné (6 000 caractères et 16 Kio maximum),
-accompagné de son SHA-256 et transmis dans l’enveloppe privée du run cloud. Ce
-contexte n’apparaît jamais dans les événements, messages ou réponses publiques ;
-les anciens événements synthétiques `.46` sont masqués et ne sont plus envoyés.
+aucune consigne technique n’est publiée comme message humain. Les anciens
+messages locaux ne sont plus importés automatiquement à la liaison d'un fil :
+leurs lignes `.46` ne portent pas de preuve d'OS fiable. Un contexte privé déjà
+lié reste borné (6 000 caractères et 16 Kio maximum) et absent des événements,
+messages et réponses publiques ; les anciens événements synthétiques `.46`
+sont masqués et ne sont plus envoyés.
 Le statut et les runs BizOS exposent uniquement l’identifiant stable
 `bizos-mixture`, affiché par le Desktop comme **BizOS Mixture of Models**.
 
@@ -224,6 +224,29 @@ compte est lié et que les outils serveur sont disponibles. Chaque outil passe
 par son hôte et son contrôle d'autorisation ; un échec est rendu comme échec,
 sans déclaration de réussite. `cloud/send` reste destiné à une continuation
 quand le Mac est fermé et à la reprise des anciens envois déjà en cours.
+Le lot `.48` expose aussi `bizos_site_create` (`title`, `content`,
+`operation_id`) : il crée un brouillon simple et renvoie `siteId` et
+`versionId` pour `bizos_site_publish`, puis `bizos_site_unpublish` peut retirer
+la page. `schedule_routine` et `recruit_agent` restent montés dans les runs
+Codex/Claude liés, sous le contrôle de leur bail et de l'hôte local. La carte
+agent crée une routine par `POST /api/crons` avec `agent_id` et les champs du
+planificateur ; la réponse `item` est la ligne persistée, visible dans
+`GET /api/crons`.
+
+Pour une image, les répétitions avec le même `operation_id` réinterrogent le
+reçu du courtier signé sans enregistrer un nouvel effet local ni relancer une
+génération payante. Une réponse asynchrone est interrogée jusqu'au reçu final.
+L'image finale est copiée dans le profil privé du sidecar (HTTPS public,
+PNG/JPEG/WebP, 8 Mio maximum), puis ajoutée une fois au fil comme pièce jointe
+locale. L'URL source, qui peut expirer, n'est pas écrite dans le transcript ni
+dans le journal de continuité. L'attachement d'un fil local à une conversation
+cloud exige le `workspaceId` et le `localConversationId` exacts. Un second Mac
+vide peut restaurer le seul OS source de la même organisation vérifiée ; un
+profil déjà peuplé ou plusieurs OS sources ne sont jamais rapprochés par titre.
+Les anciens liens dont l'OS n'est pas vérifiable sont retirés de la projection
+et conservés dans la quarantaine locale. `POST /api/local/quick-chats` accepte une référence de
+message vérifiée (`sourceThreadId`, `sourceMessageId`) pour créer un seul
+QuickChat de commentaire avec citation persistée.
 Un fil déjà lié à la continuité conserve sa lease d'exécution locale pour
 autoriser et enregistrer ses messages d'agent ; cette lease n'envoie pas le
 tour d'inférence à `cloud/send`.

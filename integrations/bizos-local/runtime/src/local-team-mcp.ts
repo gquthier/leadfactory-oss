@@ -49,6 +49,9 @@ export const BIZOS_TOOL_SPECS = [{
   name: "bizos_email_inbox", description: "Read up to 30 recent messages in this company's BizOS inbox. The account and workspace must be linked.",
   inputSchema: { type: "object", properties: {}, additionalProperties: false },
 }, {
+  name: "bizos_site_create", description: "Create a simple unpublished BizOS landing page draft for this company from a title and content. Returns siteId and versionId; call bizos_site_publish with those IDs to put it online.",
+  inputSchema: { type: "object", properties: { title: { type: "string", maxLength: 220 }, content: { type: "string", maxLength: 1200 }, operation_id: { type: "string", description: "Stable id for this draft; reuse on retry." } }, required: ["title", "content", "operation_id"], additionalProperties: false },
+}, {
   name: "bizos_site_publish", description: "Publish an existing BizOS landing site version for this company; returns its public URL. Requires a valid brand snapshot.",
   inputSchema: { type: "object", properties: { site_id: { type: "string" }, version_id: { type: "string" }, operation_id: { type: "string", description: "Stable id for this publish; reuse on retry." } }, required: ["site_id", "operation_id"], additionalProperties: false },
 }, {
@@ -370,7 +373,7 @@ export async function handleLocalTeamMessage(
   if (method === "notifications/initialized" || method === "notifications/cancelled") return null;
   if (method === "ping") return reply({});
   if (method === "tools/list") {
-    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (localComputerEnabled() && toolsets.has("cloud"))).filter(tool => !toolsets.has("continuity") || !["recruit_agent","cloud_computer_run","schedule_routine"].includes(tool.name)).map((tool) => ({
+    const teamTools = LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (localComputerEnabled() && toolsets.has("cloud"))).filter(tool => !toolsets.has("continuity") || tool.name !== "cloud_computer_run").map((tool) => ({
       ...tool,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: isCloudToolName(tool.name) },
     }));

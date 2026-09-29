@@ -3491,9 +3491,19 @@ export class LocalBizosHarness {
   readonly quickChats = {
     expiredIds: () => this.quickChatStore.expiredIds(),
     list: async () => ({ chats: this.quickChatStore.list(), workspace: this.bindingOf()?.label ?? this.options.orgName() }),
-    create: async (requestId: string) => {
-      const chat = this.quickChatStore.create(requestId);
+    create: async (request: string | { requestId: string; source?: { threadId: string; messageId: string; excerpt: string } }) => {
+      const requestId = typeof request === "string" ? request : request.requestId;
+      const source = typeof request === "string" ? undefined : request.source;
+      const chat = this.quickChatStore.create(requestId, source);
       this.workspaceFor(this.quickChatStore.executor(chat.id)!);
+      if (source) {
+        const threadId = `chat:${chat.id}`;
+        const messageId = quickMessageId(`comment-source:${requestId}`);
+        if (!this.threadStore.get(threadId, messageId)) this.threadStore.append(threadId, {
+          id: messageId, role: "bot", deliveryState: "complete", botId: chat.id,
+          blocks: [{ kind: "text", text: `À propos de ce message :\n“${source.excerpt}”` }],
+        });
+      }
       return chat;
     },
     get: async (id: string) => {
@@ -3527,6 +3537,18 @@ export class LocalBizosHarness {
 
   readonly threads = {
     transcript: (target: ThreadTarget): ThreadMessage[] => this.threadStore.transcript(target),
+    appendGeneratedImage: (scope: { botId: string; threadId: string; runId: string }, input: {
+      messageId: string; attachmentId: string; path: string; url: string;
+      fileName: string; mimeType: string; size: number; width: number; height: number;
+    }): ThreadMessage => this.threadStore.append(scope.threadId, {
+      id: input.messageId, role: "bot", deliveryState: "complete", botId: scope.botId, runId: scope.runId,
+      blocks: [
+        { kind: "text", text: "Image créée." },
+        { kind: "image", url: input.url, alt: "Image créée", id: input.attachmentId,
+          path: input.path, fileName: input.fileName, mimeType: input.mimeType,
+          size: input.size, width: input.width, height: input.height },
+      ],
+    }),
     hasUnlinkedHistory: (target: ThreadTarget): boolean => this.threadStore.hasUnlinkedHistory(target),
     get: async (target: ThreadTarget): Promise<ThreadSnapshot> =>
       this.threadStore.snapshot(target, this.dispatcher.activeRunIds(threadIdForTarget(target))),

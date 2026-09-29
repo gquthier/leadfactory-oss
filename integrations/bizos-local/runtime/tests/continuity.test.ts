@@ -51,6 +51,17 @@ it("unlinked threads do not create an outbox; linked commits survive reconstruct
     store.accept("bot:a", [{ ...first[0]!, seq: 1, hash: "wrong" }]),
   ).toThrow();
 });
+it("quarantines a legacy link from a different or unverified OS before cloud projection", () => {
+  const { storage, store } = fixture();
+  store.link("bot:a", { ...binding, workspaceId: "os_old" });
+  store.capture(message(1, "old company private context"));
+  expect(store.quarantineMismatchedWorkspace("bot:a", "os_new")).toBe(true);
+  expect(store.status("bot:a")).toBeNull();
+  expect(new ContinuityStore(storage).status("bot:a")).toBeNull();
+  expect(storage.readJsonStrict<any>("continuity-quarantine.json", [])).toHaveLength(1);
+  store.link("bot:b", binding); // .46 did not record an OS id.
+  expect(store.quarantineMismatchedWorkspace("bot:b", "os_new")).toBe(true);
+});
 it("preserves a linked user message beyond the former 20k character cap", () => {
   const { store } = fixture();
   store.link("bot:a", binding);
@@ -287,6 +298,23 @@ it("lease expiry aborts supervised work and prevents a new effect; unknown effec
   expect(store.effects("bot:a")).toMatchObject([{ id: op, state: "unknown" }]);
   expect(guard.transferable("bot:a")).toBe(false);
   guard.close();
+});
+it("replays one operation_id through the signed broker without another local image effect", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "local-run": { requestId: "request", threadId: "bot:a", localRunId: "local-run", runtime: "codex", runId: "server-run", epoch: 1, turnId: "turn", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const transport = vi.fn(async (operation: string) => operation === "runs/admit" ? { admitted: true } : {});
+  const continuity = new ConversationContinuity(storage, transport as any);
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-run", generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  const perform = vi.fn(async () => ({ url: "https://fixture.example/generated.png", status: "completed" }));
+  const input = { tool: "bizos_image_generate", arguments: { prompt: "A blue bird", operation_id: "image-once" } };
+  expect(await continuity.execute("bot:a", "local-run", "bizos_image_generate", input, perform)).toEqual(await perform.mock.results[0]!.value);
+  expect(await continuity.execute("bot:a", "local-run", "bizos_image_generate", input, perform)).toEqual({ url: "https://fixture.example/generated.png", status: "completed" });
+  expect(perform).toHaveBeenCalledTimes(2); // The broker replays its receipt; it does not charge again.
+  expect(continuity.store.effects("bot:a")).toHaveLength(1);
+  await expect(continuity.execute("bot:a", "local-run", "bizos_image_generate", { tool: "bizos_image_generate", arguments: { prompt: "Changed", operation_id: "image-once" } }, perform)).rejects.toThrow(/operation_id|different arguments/i);
+  continuity.close();
 });
 it("keeps a pending user message visible after a transcript projection write fails", async () => {
   const { storage } = fixture();

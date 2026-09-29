@@ -80,6 +80,8 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
           ? { address: "fixture@createbizos.com", items: [{ subject: "Fixture inbox" }] }
           : call.operation === "tools/site-unpublish"
             ? { unpublished: true, siteId: call.body.site_id }
+          : call.operation === "tools/site-create"
+            ? { siteId: "site-created", versionId: "version-created", url: "https://fixture.bizos.cc", published: false }
           : call.operation === "inference/chat"
             ? { choices: [{ message: { role: "assistant", content: "Signed BizOS inference completed." }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 5 } }
           : null;
@@ -111,6 +113,7 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
       else if (String(last?.content).includes("CANCEL_ROUTINE")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "cancel_routine", arguments: JSON.stringify({ routine_id: cancelId }) } }] };
       else if (String(last?.content).includes("SEND_INBOX_TOOL")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "bizos_email_inbox", arguments: "{}" } }] };
       else if (String(last?.content).includes("UNPUBLISH_SITE_TOOL")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "bizos_site_unpublish", arguments: JSON.stringify({ site_id: "site-fixture", operation_id: "operation-fixture" }) } }] };
+      else if (String(last?.content).includes("CREATE_SITE_TOOL")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "bizos_site_create", arguments: JSON.stringify({ title: "Fixture title", content: "Fixture content", operation_id: "site-create-fixture" }) } }] };
       else if (String(last?.content).includes("CHECK_COMPUTER_TOOL")) message = { role: "assistant", content: "Computer tools checked." };
       else if (String(last?.content).includes("RECRUIT_SPECIALIST")) message = { role: "assistant", content: null, tool_calls: [{ id: randomUUID(), type: "function", function: { name: "recruit_agent", arguments: JSON.stringify({ name: "Lena", title: "Market researcher", description: "Research the market and report practical findings", initial_task: "Find three useful market signals" }) } }] };
       else if (String(last?.content).includes("Introduce yourself to the person")) message = { role: "assistant", content: "Hello, j'espère que tu vas bien. Ari m'a briefée pour étudier le marché et te partager des pistes concrètes. Tu peux me solliciter quand tu veux." };
@@ -203,6 +206,43 @@ describe.skipIf(!built)("real sidecar CEO routine ownership", () => {
     const call = bridgeCalls.slice(before).find(row => row.operation === "tools/site-unpublish");
     expect(call, JSON.stringify({ run, bridge: bridgeCalls.slice(before), logs: logs.slice(-500) })).toBeDefined();
     expect(call?.body).toMatchObject({ workspaceId: statusWorkspaceId, site_id: "site-fixture", operation_id: "operation-fixture" });
+  }, 30_000);
+
+  it("creates a site draft through the signed desktop bridge", async () => {
+    const before = bridgeCalls.length;
+    const run = await settle(await send(ceoThread, "CREATE_SITE_TOOL"), "create site tool turn");
+    expect(offeredTools, JSON.stringify({ run, bridge: bridgeCalls.slice(before), logs: logs.slice(-500) })).toContain("bizos_site_create");
+    const call = bridgeCalls.slice(before).find(row => row.operation === "tools/site-create");
+    expect(call?.body).toMatchObject({ workspaceId: statusWorkspaceId, title: "Fixture title", content: "Fixture content", operation_id: "site-create-fixture" });
+  }, 30_000);
+
+  it("creates a routine from the human card and shows it in the scheduler list", async () => {
+    const creation = await api("POST", "/api/crons", {
+      agent_id: workerId, name: "Human card reminder", prompt: "Send a short progress update",
+      frequency: "once", at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    expect(creation.status, JSON.stringify(creation.body)).toBe(201);
+    expect(creation.body.item).toMatchObject({ name: "Human card reminder", agent_id: workerId, status: "active" });
+    expect((await api("GET", "/api/crons")).body.items).toContainEqual(expect.objectContaining({ id: creation.body.item.id }));
+    const invalid = await api("POST", "/api/crons", { agent_id: "local:wrong:agent:missing", name: "Foreign", prompt: "No", frequency: "daily", time: "09:00" });
+    expect(invalid.status).toBe(422);
+  }, 30_000);
+
+  it("opens one dedicated QuickChat on a verified source message", async () => {
+    const sourceMessages = (await api("GET", `/api/collaboration/threads/${encodeURIComponent(ceoThread)}/messages`)).body.messages
+      .filter((message: any) => message.role === "assistant" && message.content);
+    const source = sourceMessages[0];
+    expect(source?.id).toBeTruthy();
+    const body = { requestId: "comment-fixture-1", sourceThreadId: ceoThread, sourceMessageId: source.id };
+    const first = await api("POST", "/api/local/quick-chats", body);
+    expect(first.status, JSON.stringify(first.body)).toBe(201);
+    const second = await api("POST", "/api/local/quick-chats", body);
+    expect(second.body.id).toBe(first.body.id);
+    const messages = await api("GET", `/api/local/quick-chats/${first.body.id}/messages`);
+    expect(messages.body.messages.filter((message: any) => String(message.blocks?.[0]?.text).includes("À propos de ce message"))).toHaveLength(1);
+    expect(sourceMessages[1]?.id).toBeTruthy();
+    const different = await api("POST", "/api/local/quick-chats", { ...body, requestId: "comment-fixture-2", sourceMessageId: sourceMessages[1].id });
+    expect(different.body.id).not.toBe(first.body.id);
   }, 30_000);
 
   it("mounts server computer tools on the next turn when signed availability changes, even on a free local plan", async () => {

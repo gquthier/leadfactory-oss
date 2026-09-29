@@ -5,9 +5,11 @@ import type { Storage } from "./storage.js";
 import { collapseMessages } from "./threads.js";
 import type { Bot, MessageBlock, Run, ThreadMessage } from "./types.js";
 
-export interface QuickChat { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt?: string; expiresAt: string; modelSelection?: PersonalModelSelection }
+export interface QuickChatSource { threadId: string; messageId: string; excerpt: string }
+export interface QuickChat { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt?: string; expiresAt: string; modelSelection?: PersonalModelSelection; source?: QuickChatSource }
 export const QUICK_CHATS_FILE = "quick-chats.json";
 export const EXPIRED_QUICK_CHATS_FILE = "expired-quick-chats.json";
+const REQUEST_ALIASES_FILE = "quick-chat-request-aliases.json";
 export const QUICK_CHAT_TTL_MS = 24 * 60 * 60 * 1000;
 const chatIdPattern = /^qchat_[a-f0-9]{32}$/;
 const validDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
@@ -27,6 +29,7 @@ function contentFingerprint(message: ThreadMessage): string | undefined {
 
 export class QuickChatStore {
   private chats: QuickChat[];
+  private requestAliases: Record<string, string>;
   private readonly expired: Set<string>;
   private readonly pendingPurge: Set<string>;
   private readonly fingerprints = new Map<string, Map<string, string>>();
@@ -40,11 +43,19 @@ export class QuickChatStore {
     const tombstones = storage.readJsonStrict<unknown>(EXPIRED_QUICK_CHATS_FILE, []);
     if (!Array.isArray(tombstones) || tombstones.some(id => typeof id !== "string" || !chatIdPattern.test(id))) throw new Error("expired-quick-chats.json is corrupt");
     this.expired = new Set(tombstones);
+    const aliases = storage.readJsonStrict<unknown>(REQUEST_ALIASES_FILE, {});
+    if (!aliases || typeof aliases !== "object" || Array.isArray(aliases)
+      || Object.entries(aliases).some(([request, chat]) => !chatIdPattern.test(request) || typeof chat !== "string" || !chatIdPattern.test(chat)))
+      throw new Error("quick-chat-request-aliases.json is corrupt");
+    this.requestAliases = aliases as Record<string, string>;
     this.pendingPurge = new Set(tombstones);
     for (const id of this.expired) storage.blockThread(`chat:${id}`);
     const raw = storage.readJsonStrict<unknown>(QUICK_CHATS_FILE, []);
     if (!Array.isArray(raw) || raw.some(row => !row || typeof row !== "object" || !chatIdPattern.test(row.id) || typeof row.title !== "string" || !validDate(row.createdAt) || !validDate(row.updatedAt) || (row.lastMessageAt !== undefined && !validDate(row.lastMessageAt))) || new Set(raw.map(row => row.id)).size !== raw.length) throw new Error("quick-chats.json is corrupt");
     if (raw.some(row => row.modelSelection !== undefined && !isPersonalModelSelection(row.modelSelection))) throw new Error("quick-chats.json model selection is corrupt");
+    if (raw.some(row => row.source !== undefined && (!row.source || typeof row.source !== "object"
+      || typeof row.source.threadId !== "string" || typeof row.source.messageId !== "string" || typeof row.source.excerpt !== "string")))
+      throw new Error("quick-chats.json source is corrupt");
     const legacyRuns = storage.readJson<Run[]>("runs.json", []);
     this.chats = raw.filter(row => !this.expired.has(row.id)).map(row => {
       const fingerprints = new Map<string, string>();
@@ -69,7 +80,8 @@ export class QuickChatStore {
       this.fingerprints.set(row.id, fingerprints);
       const updatedAt = lastMessageAt ?? row.createdAt;
       return { id: row.id, title: "QuickChat", createdAt: row.createdAt, updatedAt,
-        ...(lastMessageAt ? { lastMessageAt } : {}), ...(row.modelSelection ? { modelSelection: row.modelSelection } : {}), expiresAt: new Date(Date.parse(updatedAt) + QUICK_CHAT_TTL_MS).toISOString() };
+        ...(lastMessageAt ? { lastMessageAt } : {}), ...(row.modelSelection ? { modelSelection: row.modelSelection } : {}),
+        ...(row.source ? { source: row.source } : {}), expiresAt: new Date(Date.parse(updatedAt) + QUICK_CHAT_TTL_MS).toISOString() };
     });
     // UX-02 (.46): several QuickChats that never carried a message are one
     // intention repeated. Keep the newest empty one; the others expire now and
@@ -138,26 +150,44 @@ export class QuickChatStore {
     if (!chat || this.expired.has(id)) throw new Error("Chat not found in this workspace (it may have expired)");
     return { ...chat };
   }
-  create(requestId: string): QuickChat {
+  create(requestId: string, source?: QuickChatSource | boolean): QuickChat {
     this.sweep();
+    const dedicated = Boolean(source);
     const id = `qchat_${createHash("sha256").update(requestId).digest("hex").slice(0, 32)}`;
     if (this.expired.has(id)) throw new Error("QuickChat expired; create a new QuickChat with a new request id");
+    if (source && typeof source === "object") {
+      const bySource = this.chats.find(row => row.source?.threadId === source.threadId && row.source.messageId === source.messageId);
+      if (bySource) return { ...bySource };
+    }
+    const alias = this.requestAliases[id];
+    if (alias) {
+      const reused = this.chats.find(row => row.id === alias);
+      if (reused && !this.expired.has(alias)) return { ...reused };
+    }
     const existing = this.chats.find(row => row.id === id);
-    if (existing) return { ...existing };
+    if (existing) {
+      if (source && typeof source === "object" && (existing.source?.threadId !== source.threadId || existing.source.messageId !== source.messageId))
+        throw new Error("QuickChat request id belongs to another source message");
+      return { ...existing };
+    }
     // A new intention while an empty QuickChat is still open reuses it: the
     // sidebar never shows two blank chats (UX-02). Once someone wrote in it, a
     // new intention gets its own chat as before.
-    const blank = this.emptyChat();
+    const blank = dedicated ? undefined : this.emptyChat();
     if (blank) {
       // A new intention is activity: the reused blank chat gets a fresh day.
       const row = this.chats.find(chat => chat.id === blank.id)!;
       row.updatedAt = this.clock.nowIso();
       row.expiresAt = new Date(this.clock.now().getTime() + QUICK_CHAT_TTL_MS).toISOString();
+      this.requestAliases[id] = blank.id;
+      this.storage.writeJson(REQUEST_ALIASES_FILE, this.requestAliases);
       this.persist(); this.schedule();
       return { ...row };
     }
     const now = this.clock.nowIso();
-    const chat: QuickChat = { id, title: "QuickChat", createdAt: now, updatedAt: now, expiresAt: new Date(this.clock.now().getTime() + QUICK_CHAT_TTL_MS).toISOString() };
+    const chat: QuickChat = { id, title: "QuickChat", createdAt: now, updatedAt: now,
+      ...(source && typeof source === "object" ? { source } : {}),
+      expiresAt: new Date(this.clock.now().getTime() + QUICK_CHAT_TTL_MS).toISOString() };
     this.chats.push(chat); this.persist(); this.schedule(); return { ...chat };
   }
   recordMessage(message: ThreadMessage): void {

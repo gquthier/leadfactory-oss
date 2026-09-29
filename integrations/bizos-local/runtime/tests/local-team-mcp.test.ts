@@ -2,6 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 import { BIZOS_TOOL_SPECS, handleLocalTeamMessage, LOCAL_TEAM_TOOL_SPECS, toolsetsFromArgv } from "../src/local-team-mcp.js";
 
 describe("local team MCP", () => {
+  it("advertises site creation and routes the signed draft request", async () => {
+    const spec = BIZOS_TOOL_SPECS.find(tool => tool.name === "bizos_site_create");
+    expect(spec?.inputSchema.required).toEqual(["title", "content", "operation_id"]);
+    const bizos = vi.fn(async () => ({ siteId: "site-1", versionId: "version-1", published: false }));
+    const options = { toolsets: new Set(["team", "bizos"]), bizos };
+    const listed = await handleLocalTeamMessage({ id: 1, method: "tools/list" }, undefined, undefined, undefined, undefined, options);
+    expect(JSON.stringify(listed)).toContain("bizos_site_create");
+    const argumentsValue = { title: "Fixture", content: "A simple page", operation_id: "op-1" };
+    const called = await handleLocalTeamMessage({ id: 2, method: "tools/call", params: { name: "bizos_site_create", arguments: argumentsValue } },
+      undefined, undefined, undefined, undefined, options);
+    expect(bizos).toHaveBeenCalledWith({ tool: "bizos_site_create", arguments: argumentsValue });
+    expect(JSON.stringify(called)).toContain("version-1");
+  });
+
+  it("keeps recruitment and scheduling available to a linked Codex or Claude run", async () => {
+    const listed = await handleLocalTeamMessage({ id: 1, method: "tools/list" }, undefined, undefined, undefined, undefined,
+      { toolsets: new Set(["team", "continuity"]) });
+    expect(JSON.stringify(listed)).toContain('"name":"recruit_agent"');
+    expect(JSON.stringify(listed)).toContain('"name":"schedule_routine"');
+  });
   it("advertises and dispatches site unpublish only through the BizOS toolset", async () => {
     const spec = BIZOS_TOOL_SPECS.find(tool => tool.name === "bizos_site_unpublish");
     expect(spec?.inputSchema.required).toEqual(["site_id", "operation_id"]);
