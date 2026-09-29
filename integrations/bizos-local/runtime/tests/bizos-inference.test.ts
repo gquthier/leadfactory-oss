@@ -92,6 +92,26 @@ it("shows a clear Work Credits error without exposing an upstream provider", asy
   expect(JSON.stringify(events)).not.toMatch(/deepseek|internal-sku/);
 });
 
+it.each([
+  ["feature_disabled", "temporairement indisponible"],
+  ["budget_exhausted", "Budget d'inférence BizOS atteint"],
+  ["unlinked", "Connectez ce Mac"],
+  ["forbidden", "Connectez ce Mac"],
+  ["continuation_required", "tour d'outils BizOS"],
+  ["continuation_mismatch", "tour d'outils BizOS"],
+])("explains BizOS refusal %s without exposing server details", async (code, expected) => {
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve) => {
+    startOpenAiTurn({ baseUrl: "", apiKey: "", model: "bizos-mixture", system: "", text: "Hello", threadId: "bot:ceo", runId: "run_fixture", dynamicTools: [],
+      chatCompletion: async () => { throw new ContinuityBridgeError(403, code, "deepseek/private-provider-token", true); },
+      onEvent(event) { events.push(event); if (event.type === "turn.completed") resolve(); },
+    });
+  });
+  const failure = events.find((event) => event.type === "runtime.error");
+  expect(JSON.stringify(failure)).toContain(expected);
+  expect(JSON.stringify(events)).not.toMatch(/deepseek|private-provider-token/);
+});
+
 it("dispatches a BizOS CEO turn locally and persists the recruited agent and routine", async () => {
   const root = mkdtempSync(join(tmpdir(), "bizos-local-ceo-")); roots.push(root);
   const broker = new LocalTeamBroker();

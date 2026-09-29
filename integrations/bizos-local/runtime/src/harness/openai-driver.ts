@@ -48,6 +48,29 @@ const MAX_ARG_CHARS = 32_000;
 const MAX_TOOL_OUTPUT = 10_000;
 const MAX_ANSWER_CHARS = 60_000;
 
+function bizosBridgeErrorMessage(code: string): string {
+  switch (code) {
+    case "insufficient_credits":
+    case "insufficient_work_credits":
+      return "Crédits BizOS insuffisants. Rechargez vos Work Credits pour continuer.";
+    case "rate_limited":
+      return "BizOS reçoit trop de demandes. Réessayez dans un instant.";
+    case "inference_disabled":
+    case "feature_disabled":
+      return "L'inférence BizOS est temporairement indisponible.";
+    case "budget_exhausted":
+      return "Budget d'inférence BizOS atteint pour ce tour. Envoyez un nouveau message pour continuer.";
+    case "unlinked":
+    case "forbidden":
+      return "Connectez ce Mac à votre compte et à votre organisation BizOS, puis réessayez.";
+    case "continuation_required":
+    case "continuation_mismatch":
+      return "Le tour d'outils BizOS a perdu sa continuité. Relancez votre demande dans un nouveau message.";
+    default:
+      return "L'inférence BizOS a échoué. Réessayez.";
+  }
+}
+
 /** The runtime run id is opaque but not UUID-shaped. Derive a UUID so a
  * resumed local run keeps the same credit admission identity. */
 function clientTurnUuid(runId: string): string {
@@ -322,10 +345,7 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
       const raw = error instanceof Error ? error.message : String(error);
       const message = input.chatCompletion
         ? error instanceof ContinuityBridgeError
-          ? error.code === "insufficient_credits" || error.code === "insufficient_work_credits" ? "Crédits BizOS insuffisants. Rechargez vos Work Credits pour continuer."
-            : error.code === "rate_limited" ? "BizOS reçoit trop de demandes. Réessayez dans un instant."
-            : error.code === "inference_disabled" ? "L'inférence BizOS est temporairement indisponible."
-            : "L'inférence BizOS a échoué. Réessayez."
+          ? bizosBridgeErrorMessage(error.code)
           : raw === `${label} returned a malformed chat response.` ? raw : "L'inférence BizOS a échoué. Réessayez."
         : input.apiKey ? raw.split(input.apiKey).join("[key]") : raw;
       emit({ type: "runtime.error", message });
