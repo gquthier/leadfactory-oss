@@ -81,6 +81,8 @@ describe("the protected list", () => {
     expect(windowsCliExecutionBlocked("win32")).toBe(true);
     expect(windowsCliExecutionBlocked("darwin")).toBe(false);
     expect(windowsCliExecutionBlocked("linux")).toBe(false);
+    expect(() => seatbeltLaunch("codex.cmd", ["app-server"], "(version 1)", "win32"))
+      .toThrow(/OS-enforced secret shield/);
   });
 });
 

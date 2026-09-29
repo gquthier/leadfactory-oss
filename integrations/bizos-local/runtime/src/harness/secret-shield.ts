@@ -155,14 +155,17 @@ export function seatbeltAvailable(platform: NodeJS.Platform = process.platform):
   return platform === "darwin" && existsSync(SANDBOX_EXEC);
 }
 
-/** Wrap a CLI launch in `sandbox-exec` when the platform supports it; the
- * command is otherwise launched as-is (Linux/Windows have no seatbelt). */
+/** Wrap a CLI launch in `sandbox-exec` when the platform supports it.
+ * Windows must fail closed even if a future caller bypasses the driver guard. */
 export function seatbeltLaunch(
   command: string,
   args: readonly string[],
   profile: string,
   platform: NodeJS.Platform = process.platform,
 ): { command: string; args: string[]; sandboxed: boolean } {
+  if (windowsCliExecutionBlocked(platform)) {
+    throw new Error("Windows agent CLI requires an OS-enforced secret shield.");
+  }
   if (!seatbeltAvailable(platform)) return { command, args: [...args], sandboxed: false };
   return { command: SANDBOX_EXEC, args: ["-p", profile, command, ...args], sandboxed: true };
 }
