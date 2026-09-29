@@ -201,12 +201,16 @@ un DM d'agent, un QuickChat ou un groupe. Le choix est conservé par fil dans
 renvoyés par le pont Desktop signé. Une conversation cloud ou une politique
 `cloudFallback` n'est pas requise. Le statut annonce `bizos-mixture` et, lorsque
 le compte est lié, le coût de 1 Work Credit par tour.
+Un fil déjà lié à la continuité garde toutefois sa politique d'exécution
+activée pour obtenir la lease locale qui autorise ses messages d'agent.
 
 Le message reste traité par le dispatcher local. Le driver Chat Completions
 envoie chaque complétion non streaming par HMAC `inference/chat` vers Electron
 main, qui signe la route SaaS. Le sidecar n'envoie ni clé, ni URL fournisseur,
 ni modèle amont. Un `clientTurnId` UUID reste stable pendant la boucle d'outils
-et chaque complétion a son propre `requestId` UUID. La réponse publique ne
+et chaque complétion a son propre `requestId` UUID. Après la première,
+`previousRequestId` rattache la complétion suivante au transcript exact des
+appels et résultats d'outils du même tour. La réponse publique ne
 contient que le nom opaque BizOS. Si le serveur renvoie un jeton opaque
 `reasoning_details` nécessaire à la continuité d'un appel d'outil, le runtime
 le recopie tel quel dans le message assistant suivant, après validation de sa
@@ -218,6 +222,9 @@ compte est lié et que les outils serveur sont disponibles. Chaque outil passe
 par son hôte et son contrôle d'autorisation ; un échec est rendu comme échec,
 sans déclaration de réussite. `cloud/send` reste destiné à une continuation
 quand le Mac est fermé et à la reprise des anciens envois déjà en cours.
+Un fil déjà lié à la continuité conserve sa lease d'exécution locale pour
+autoriser et enregistrer ses messages d'agent ; cette lease n'envoie pas le
+tour d'inférence à `cloud/send`.
 QuickChat permet aussi le choix et l'inférence BizOS ; comme avec les autres
 fournisseurs, ce fil sans identité d'agent n'a pas les outils d'équipe ni les
 capacités d'action d'un CEO.

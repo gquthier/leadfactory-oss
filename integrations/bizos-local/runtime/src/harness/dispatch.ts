@@ -1876,9 +1876,10 @@ export class Dispatcher {
     }
 
     const continuity = this.deps.continuity;
-    // BizOS inference has its own signed admission and still executes here.
-    // It must not acquire a server execution lease for a foreground turn.
-    const linked = !bizos && continuity?.linked(threadId) === true;
+    // A linked conversation still needs its local execution lease to persist
+    // agent messages. BizOS inference stays in this dispatcher; only the
+    // model completion crosses the signed bridge.
+    const linked = continuity?.linked(threadId) === true;
     // A linked Claude turn is always host bounded and manually approved,
     // even when this workspace enables bypass for ordinary local agents; and
     // no shared conversation (another member wrote in it) runs with bypass.
@@ -1886,7 +1887,7 @@ export class Dispatcher {
     const effectiveSkipPermissions = bypassAllowedFor({ skipPermissions, linked, provider, sharedWithOthers });
     if (linked && !options.linkedReady && !continuity!.guard.get(threadId)) {
       this.preparing.set(threadId, queued);
-      void continuity!.prepare(threadId, queued.runId, provider, () => {
+      void continuity!.prepare(threadId, queued.runId, bizos ? "codex" : provider, () => {
         const active = this.active.get(threadId);
         if (active?.runId === queued.runId) { active.cancelled = true; this.deps.onRunStopped?.(queued.runId); active.handle?.stop(); }
       }).then(() => {
@@ -1967,7 +1968,10 @@ export class Dispatcher {
       ...(this.deps.dynamicTools?.(bot, runContext) ?? []),
       ...(linked ? continuity!.portableTools(threadId, queued.runId) : []),
     ];
-    const dynamicTools = hostTools && linked ? continuity!.tools(threadId, queued.runId, hostTools) : hostTools;
+    // BizOS's host tools are the local agent's authenticated tool surface.
+    // The generic continuity wrapper filters recruitment and routines, which
+    // are precisely the actions this local BizOS turn must be able to run.
+    const dynamicTools = hostTools && linked && !bizos ? continuity!.tools(threadId, queued.runId, hostTools) : hostTools;
     const toolSurface = [
       ...Object.keys(mountedServers).map((name) => `mcp:${name}`),
       ...(dynamicTools ?? []).map((tool) => `tool:${tool.name}`),
@@ -2068,7 +2072,7 @@ export class Dispatcher {
     };
 
     let handle: CodexTurnHandle;
-    if (linked && provider !== "claude") continuity!.markNativeUncontrolled(threadId);
+    if (linked && provider !== "claude" && provider !== "bizos") continuity!.markNativeUncontrolled(threadId);
     if (provider === "bizos") {
       handle = (this.deps.startOpenAiTurn ?? defaultStartOpenAiTurn)({
         baseUrl: "", apiKey: "", model: BIZOS_INFERENCE_PROVIDER.model, label: BIZOS_INFERENCE_PROVIDER.label,

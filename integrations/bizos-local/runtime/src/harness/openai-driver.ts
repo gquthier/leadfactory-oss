@@ -241,10 +241,12 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
       let calls = 0;
       let attributed = false;
       const clientTurnId = clientTurnUuid(input.runId);
+      let previousRequestId: string | undefined;
       for (let round = 0; round < MAX_ROUNDS; round++) {
         if (cancelled) return;
+        const requestId = input.chatCompletion ? randomUUID() : undefined;
         const answer = await complete(input, {
-          ...(input.chatCompletion ? { clientTurnId, requestId: randomUUID(), max_tokens: 4096 } : { model: input.model, stream: true }),
+          ...(input.chatCompletion ? { clientTurnId, requestId, ...(previousRequestId ? { previousRequestId } : {}), max_tokens: 4096 } : { model: input.model, stream: true }),
           messages,
           ...(tools.length ? { tools } : {}),
         }, aborter.signal, (delta) => {
@@ -254,11 +256,14 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
           if (!input.chatCompletion) emit({ type: "content.delta", streamKind: "assistant_text", delta });
         });
         if (cancelled) return;
+        if (requestId) previousRequestId = requestId;
         if (answer.finish === "length") throw new Error(`${label} stopped at its output limit; the answer is incomplete.`);
         if (answer.finish === "content_filter") throw new Error(`${label} withheld the answer (content filter).`);
         if (!attributed) { emit({ type: "external.model.verified" }); attributed = true; }
         if (answer.usage) emit({ type: "token-usage", input: answer.usage.input, output: answer.usage.output, ...(answer.usage.cached !== undefined ? { cachedInput: answer.usage.cached } : {}) });
         const requested = answer.calls.filter(Boolean);
+        if (input.chatCompletion && requested.some((call) => !call.id || !call.name))
+          throw new Error("BizOS returned a malformed tool call.");
         if (!answer.content.trim() && !requested.length) throw new Error(`${label} returned an empty answer.`);
         if (answer.content.trim() && (!input.chatCompletion || !requested.length)) {
           if (input.chatCompletion) emit({ type: "content.delta", streamKind: "assistant_text", delta: answer.content });
@@ -270,7 +275,7 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
           role: "assistant",
           content: answer.content || null,
           ...(input.chatCompletion && answer.reasoningDetails ? { reasoning_details: answer.reasoningDetails } : {}),
-          tool_calls: echoed.map((call) => ({ ...call.extra, id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } })),
+          tool_calls: echoed.map((call) => ({ ...(input.chatCompletion ? {} : call.extra), id: call.id, type: "function", function: { name: call.name, arguments: call.arguments || "{}" } })),
         });
         for (let index = 0; index < echoed.length; index++) {
           if (cancelled) return;

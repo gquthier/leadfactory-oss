@@ -13,6 +13,7 @@ import { CollaborationFacade, LocalTeamBroker } from "../src/sidecar.js";
 import { LOCAL_TEAM_TOOL_SPECS } from "../src/local-team-mcp.js";
 import { emptyDurableIndex } from "../src/sidecar-contract.js";
 import type { ContinuityTransport } from "../src/continuity-bridge.js";
+import { canonicalEventHash } from "../src/harness/continuity-sync.js";
 
 const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -23,7 +24,7 @@ it("runs BizOS tool calls through the host and sends only opaque completions ove
   const effects: string[] = [];
   const reasoningDetails = [{ type: "reasoning.encrypted", data: "bizos-reasoning:11111111-1111-4111-8111-111111111111" }];
   const complete = async (body: Record<string, unknown>) => {
-    requests.push(body);
+    requests.push(structuredClone(body));
     const last = (body.messages as Array<Record<string, unknown>>).at(-1)!;
     if (last.role === "tool" && effects.length === 1) return { choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "routine", type: "function", function: { name: "schedule_routine", arguments: "{}" } }] }, finish_reason: "tool_calls" }] };
     if (last.role === "tool") return { choices: [{ message: { role: "assistant", content: "L'agent et la routine existent." }, finish_reason: "stop" }], usage: { prompt_tokens: 11, completion_tokens: 7 } };
@@ -42,6 +43,11 @@ it("runs BizOS tool calls through the host and sends only opaque completions ove
   expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
   expect(JSON.stringify(events)).not.toContain("Agent créé avant vérification");
   expect(requests).toHaveLength(3);
+  expect(requests[0]).not.toHaveProperty("previousRequestId");
+  expect(requests[1]!.previousRequestId).toBe(requests[0]!.requestId);
+  expect(requests[2]!.previousRequestId).toBe(requests[1]!.requestId);
+  expect((requests[1]!.messages as unknown[]).slice(0, (requests[0]!.messages as unknown[]).length)).toEqual(requests[0]!.messages);
+  expect((requests[2]!.messages as unknown[]).slice(0, (requests[1]!.messages as unknown[]).length)).toEqual(requests[1]!.messages);
   expect((requests[1]!.messages as Array<Record<string, unknown>>).find((message) => message.role === "assistant")?.reasoning_details).toEqual(reasoningDetails);
   const turnIds = requests.map((body) => body.clientTurnId);
   const requestIds = requests.map((body) => body.requestId);
@@ -91,9 +97,29 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
   const broker = new LocalTeamBroker();
   const workspaceId = "local:fixture:workspace";
   const orgId = randomUUID();
-  const bridge: ContinuityTransport = async <T>(operation: string) => {
-    expect(operation).toBe("status");
-    return { linked: true, toolsAvailable: true, orgId, workspaceId } as T;
+  const conversationId = randomUUID();
+  const continuityEvents: Array<Record<string, unknown>> = [];
+  const bridgeOperations: string[] = [];
+  const bridge: ContinuityTransport = async <T>(operation: string, body: Record<string, unknown>) => {
+    bridgeOperations.push(operation);
+    let result: unknown;
+    if (operation === "status") result = { linked: true, toolsAvailable: true, orgId, workspaceId, userId: "owner", installationId: "install" };
+    else if (operation === "policies/get") result = { policy: { enabled: true, modelRuntime: "codex", cloudFallback: null, autoContinue: false } };
+    else if (operation === "conversations/read") result = { events: continuityEvents.filter((row) => Number(row.sequence) > Number(body.after)), hasMore: false, latestCheckpointId: null };
+    else if (operation === "conversations/append") {
+      for (const event of body.events as Array<Record<string, unknown>>) if (!continuityEvents.some((row) => row.eventId === event.eventId)) continuityEvents.push({ ...event, sequence: String(continuityEvents.length + 1), contentHash: canonicalEventHash(event as never), createdAt: new Date().toISOString() });
+      result = { head: String(continuityEvents.length), receipts: [] };
+    }
+    else if (operation === "conversations/ack") result = { acknowledgedThrough: body.through };
+    else if (operation === "devices/list") result = { devices: [] };
+    else if (operation === "runs/start") result = { runId: randomUUID(), epoch: 1, leaseUntil: new Date(Date.now() + 60_000).toISOString() };
+    else if (operation === "runs/claim") result = { turnId: randomUUID(), leaseToken: "fixture-lease", leaseUntil: new Date(Date.now() + 60_000).toISOString() };
+    else if (operation === "runs/finish") {
+      for (const event of (body.finalEvents ?? []) as Array<Record<string, unknown>>) if (!continuityEvents.some((row) => row.eventId === event.eventId)) continuityEvents.push({ ...event, sequence: String(continuityEvents.length + 1), contentHash: canonicalEventHash(event as never), createdAt: new Date().toISOString() });
+      result = { finished: true };
+    }
+    else throw new Error(`unexpected continuity operation ${operation}`);
+    return result as T;
   };
   let facade!: CollaborationFacade;
   const requests: Record<string, unknown>[] = [];
@@ -101,6 +127,7 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
     rootDir: root, homeDir: root, baseUrl: "", readSessionCookie: async () => "", orgName: () => "Fixture",
     execPath: "/missing/node", packaged: false, runAsNodeAvailable: false, mcpScriptPath: "/missing/mcp", devices: false,
     environment: { PATH: "/nowhere", BIZOS_LOCAL_PLAN: "pro" },
+    continuityTransport: bridge,
     bizosSelected: (threadId) => facade.bizosDestination(threadId) === "bizos",
     bizosChat: async (_threadId, body) => {
       requests.push(body);
@@ -127,6 +154,7 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
   });
   facade = new CollaborationFacade(harness, "fixture", broker, emptyDurableIndex(), null, () => undefined, bridge);
   const ceo = await harness.bots.create({ name: "CEO" });
+  harness.continuity.store.link(`bot:${ceo.id}`, { conversationId, installationId: "install", accountId: "owner", orgId, agentId: "ceo", workspaceId });
   const publicThread = `local:fixture:thread:bot:${ceo.id}`;
   expect(await facade.executionDestination(publicThread, "bizos")).toMatchObject({ destination: "bizos", available: true, creditCost: 1 });
   const sent = await harness.threads.send({ botId: ceo.id }, { text: "Hire Analyst and schedule a market watch" });
@@ -139,6 +167,8 @@ it("dispatches a BizOS CEO turn locally and persists the recruited agent and rou
   expect(run).toMatchObject({ state: "completed", inference: { kind: "bizos", model: "bizos-mixture" } });
   expect((await harness.bots.list()).some((bot) => bot.name === "Analyst")).toBe(true);
   expect((await harness.routines.list()).some((routine) => routine.name === "Market watch")).toBe(true);
+  expect(bridgeOperations).toContain("runs/claim");
+  expect(bridgeOperations).not.toContain("cloud/send");
   expect(requests).toHaveLength(3);
   expect(JSON.stringify(requests)).not.toMatch(/openrouter|deepseek/i);
   harness.stop();
