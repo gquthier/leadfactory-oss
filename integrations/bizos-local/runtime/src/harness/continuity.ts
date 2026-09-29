@@ -76,6 +76,8 @@ export interface EffectRecord {
   generation: number;
   argumentHash?: string;
   receipt?: string;
+  /** Bounded local tool receipt; lets a repeated model call read an effect without performing it again. */
+  result?: unknown;
 }
 export interface ProviderBinding {
   threadId: string;
@@ -379,6 +381,25 @@ export class ContinuityStore {
         if (event.seq! > c.head + 1) throw new Error("conversation inbox gap");
         c.head = Math.max(c.head, event.seq!);
       }
+      // A restored profile can share an installation with a newer copy. Read
+      // the canonical journal before sending its outbox, then move only
+      // unsent events beyond sequences that copy already committed. Their
+      // event ids and contents stay fixed; a matching receipt above is never
+      // rewritten or dispatched again.
+      const ownHead = c.events.reduce((highest, event) => event.seq !== undefined
+        && event.originInstallationId === c.link.installationId
+        ? Math.max(highest, event.localSequence) : highest, 0);
+      const pending = c.events.filter(event => event.seq === undefined);
+      if (pending.some(event => event.localSequence <= ownHead)) {
+        let next = ownHead + 1;
+        for (const event of pending) {
+          const { hash: _hash, ...unhashed } = event;
+          event.localSequence = next++;
+          event.hash = payloadHash({ ...unhashed, localSequence: event.localSequence });
+        }
+      }
+      c.nextLocalSequence = Math.max(c.nextLocalSequence, ownHead + 1);
+      for (const event of pending) c.nextLocalSequence = Math.max(c.nextLocalSequence, event.localSequence + 1);
       delete c.error;
     });
   }

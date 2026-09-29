@@ -69,6 +69,16 @@ export class BizosInferenceSelection {
     this.storage.writeJson(FILE, this.state);
     return this.status(threadId);
   }
+  async inherit(sourceThreadId: string, targetThreadIds: string[]): Promise<void> {
+    if (!thread(sourceThreadId) || targetThreadIds.some(id => !thread(id)))
+      throw new Error("Unknown local conversation.");
+    const saved = this.state.selections[sourceThreadId];
+    if (!saved) throw new Error("BizOS is not selected for the source conversation.");
+    const scope = await this.current();
+    if (!matches(scope, saved)) throw new Error("BizOS selection belongs to another account or workspace.");
+    for (const id of targetThreadIds) this.state.selections[id] = scope;
+    this.storage.writeJson(FILE, this.state);
+  }
   async requireSelected(threadId: string): Promise<Scope> {
     const saved = this.state.selections[threadId];
     if (!saved) throw new Error("BizOS is not selected for this conversation.");

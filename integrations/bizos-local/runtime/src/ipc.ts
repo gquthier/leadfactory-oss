@@ -305,7 +305,7 @@ export function asBotPatch(value: unknown): Record<string, unknown> {
 const ATTACHMENT_KEYS = ["id", "name", "mimeType", "size", "dataUrl", "url"] as const;
 const SEND_KEYS = ["text", "mentionBotIds", "attachments", "replyToMessageId", "role"] as const;
 const GROUP_PATCH_KEYS = ["name", "memberIds", "pinned", "archived"] as const;
-const ROUTINE_CREATE_KEYS = ["botId", "name", "prompt", "trigger", "enabled", "endsAt"] as const;
+const ROUTINE_CREATE_KEYS = ["id", "botId", "name", "prompt", "trigger", "enabled", "endsAt"] as const;
 
 /** `endsAt`: an ISO instant, or null to clear. Future-ness is the store's call. */
 function asRoutineEndsAt(value: unknown, field: string): string | null {
@@ -1004,6 +1004,7 @@ export function buildHandlers(
     },
 
     "lbz:threads:get": (args) => harness.threads.get(asThreadTarget(at(args, 0))),
+    "lbz:threads:transcript": async (args) => harness.threads.transcript(asThreadTarget(at(args, 0))),
     "lbz:threads:messages": (args) =>
       harness.threads.messages(asThreadTarget(at(args, 0)), asOptionalString(at(args, 1), "before", 64)),
     "lbz:threads:after": (args) => {
@@ -1054,6 +1055,7 @@ export function buildHandlers(
     "lbz:routines:create": (args) => {
       const input = asStrictRecord(at(args, 0), "input", ROUTINE_CREATE_KEYS);
       return harness.routines.create({
+        ...(input.id === undefined ? {} : { id: asString(input.id, "input.id", 64) }),
         botId: asString(input.botId, "input.botId", 64),
         name: asDisplayName(input.name, "input.name", 80),
         prompt: asString(input.prompt, "input.prompt", 6000),

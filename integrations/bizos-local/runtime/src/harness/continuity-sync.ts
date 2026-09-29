@@ -1306,6 +1306,7 @@ export class ConversationContinuity {
       ? nested.operation_id.trim() : undefined;
     const generation = this.guard.assert(threadId, tool).generation;
     const dedupeConfirmed = RECONCILABLE_EFFECT_TOOLS.has(tool);
+    const locallyRecoverable = tool === "recruit_agent" || tool === "schedule_routine";
     const previous = this.store.effects(threadId).find(e => e.tool === tool && (
       (requestId && e.requestId === requestId)
       || (e.argumentHash === argsHash && (!e.requestId || !requestId)
@@ -1318,7 +1319,15 @@ export class ConversationContinuity {
       // Replaying the same operation_id there reconciles a pending image or
       // retrieves a completed receipt without another local journal effect.
       if (requestId && tool.startsWith("bizos_")) return perform();
-      if (previous.state === "confirmed") throw new Error("Operation already confirmed; reconcile the existing result before retrying.");
+      if (previous.state === "confirmed") {
+        if (locallyRecoverable && previous.result !== undefined) return previous.result as T;
+        if (locallyRecoverable) {
+          const recovered = await perform(); // the sidecar's stable tool journal reads the existing result
+          this.store.effect(threadId, { ...previous, result: recovered });
+          return recovered;
+        }
+        throw new Error("Operation already confirmed; reconcile the existing result before retrying.");
+      }
       if (["prepared", "sent", "unknown"].includes(previous.state))
         throw new Error("An identical operation has an unknown outcome; reconcile before repeating it.");
     }
@@ -1371,12 +1380,22 @@ export class ConversationContinuity {
         this.guard.update(threadId, operationId, "failed", receipt);
         throw new Error(receipt);
       }
+      if (remote?.status === "confirmed") {
+        // The host tool must be read-through idempotent for a confirmed
+        // broker effect. Its result is recovered locally; the broker's
+        // terminal receipt must never be replaced with different wording.
+        const reconciled = await perform();
+        if (locallyRecoverable) this.store.effect(threadId, { ...this.store.effects(threadId).find(row => row.id === operationId)!, result: reconciled });
+        this.guard.update(threadId, operationId, "confirmed", remote.receipt ?? "Host tool returned.");
+        return reconciled;
+      }
       try {
         const reconciled = await perform();
-        this.guard.update(threadId, operationId, "confirmed", "Recovered the existing broker result after an uncertain response.");
+        if (locallyRecoverable) this.store.effect(threadId, { ...this.store.effects(threadId).find(row => row.id === operationId)!, result: reconciled });
+        this.guard.update(threadId, operationId, "confirmed", "Host tool returned.");
         await this.call("runs/receipt", {
-          ...this.credentials(run), operationId, status: "confirmed", receipt: "Recovered the existing broker result.",
-        });
+          ...this.credentials(run), operationId, status: "confirmed", receipt: "Host tool returned.",
+        }).catch(() => undefined);
         return reconciled;
       } catch {
         const receipt = "The operation could not be verified after consulting the broker; it was marked failed and can be retried explicitly.";
@@ -1387,8 +1406,9 @@ export class ConversationContinuity {
         throw new Error(receipt);
       }
     }
-    // Results stay with the host or the signed broker, never in this effect
-    // journal (notably a short-lived hosted image URL).
+    // Keep only local team tool receipts here. Broker results, especially a
+    // short-lived hosted image URL, remain at the signed broker.
+    if (locallyRecoverable) this.store.effect(threadId, { ...this.store.effects(threadId).find(row => row.id === operationId)!, result });
     this.guard.update(threadId, operationId, "confirmed");
     // The host effect succeeded. A lost remote receipt must not turn it into
     // an unknown outcome or withhold the image URL from the active run.

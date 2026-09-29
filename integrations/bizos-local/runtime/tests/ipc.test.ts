@@ -192,6 +192,7 @@ function fakeHarness() {
     quickChats: Object.fromEntries(["list", "create", "get", "messages", "send", "stop", "answer"].map(action => [action, record(`quickChats.${action}`)])),
     threads: {
       get: record("threads.get", { messages: [] }),
+      transcript: record("threads.transcript", []),
       messages: record("threads.messages", { messages: [], olderCursor: null }),
       after: record("threads.after", { messages: [], nextCursor: "msg_1", hasMore: false }),
       message: record("threads.message", null),
@@ -465,6 +466,7 @@ describe("handlers", () => {
       "lbz:quickChats:stop": ["chat-id", {}],
       "lbz:quickChats:answer": ["chat-id", { runId: "run-id", askId: "ask-id", answer: { kind: "deny" } }],
       "lbz:threads:get": [target],
+      "lbz:threads:transcript": [target],
       "lbz:threads:messages": [target, "msg_1"],
       "lbz:threads:after": [target, "msg_1", 100],
       "lbz:threads:message": [target, "msg_1"],

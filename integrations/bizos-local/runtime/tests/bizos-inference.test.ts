@@ -153,6 +153,8 @@ it.each([true, false])("dispatches a BizOS CEO turn locally with continuity poli
     return result as T;
   };
   let facade!: CollaborationFacade;
+  let ceoThread = "";
+  const childRequests: string[] = [];
   const requests: Record<string, unknown>[] = [];
   const harness = new LocalBizosHarness({
     rootDir: root, homeDir: root, baseUrl: "", readSessionCookie: async () => "", orgName: () => "Fixture",
@@ -160,7 +162,11 @@ it.each([true, false])("dispatches a BizOS CEO turn locally with continuity poli
     environment: { PATH: "/nowhere", BIZOS_LOCAL_PLAN: "pro" },
     continuityTransport: bridge,
     bizosSelected: (threadId) => facade.bizosDestination(threadId) === "bizos",
-    bizosChat: async (_threadId, body) => {
+    bizosChat: async (threadId, body) => {
+      if (threadId !== ceoThread) {
+        childRequests.push(threadId);
+        return { choices: [{ message: { role: "assistant", content: "Bonjour, je suis Analyste et je suivrai les signaux du marché." }, finish_reason: "stop" }] };
+      }
       requests.push(body);
       const last = (body.messages as Array<Record<string, unknown>>).at(-1)!;
       const tools = body.tools as Array<{ function: { name: string } }>;
@@ -185,6 +191,7 @@ it.each([true, false])("dispatches a BizOS CEO turn locally with continuity poli
   });
   facade = new CollaborationFacade(harness, "fixture", broker, emptyDurableIndex(), null, () => undefined, bridge);
   const ceo = await harness.bots.create({ name: "CEO" });
+  ceoThread = `bot:${ceo.id}`;
   harness.continuity.store.link(`bot:${ceo.id}`, { conversationId, installationId: "install", accountId: "owner", orgId, agentId: "ceo", workspaceId });
   const publicThread = `local:fixture:thread:bot:${ceo.id}`;
   expect(await facade.executionDestination(publicThread, "bizos")).toMatchObject({ destination: "bizos", available: true, creditCost: 1 });
@@ -197,6 +204,15 @@ it.each([true, false])("dispatches a BizOS CEO turn locally with continuity poli
   }
   expect(run).toMatchObject({ state: "completed", inference: { kind: "bizos", model: "bizos-mixture" } });
   expect((await harness.bots.list()).some((bot) => bot.name === "Analyst")).toBe(true);
+  const analyst = (await harness.bots.list()).find((bot) => bot.name === "Analyst")!;
+  for (let n = 0; n < 500 && !(await harness.threads.get({ botId: analyst.id })).messages
+    .some((message) => message.role === "bot" && message.blocks.some(block => block.kind === "text" && block.text.includes("Bonjour"))); n++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect((await harness.threads.get({ botId: analyst.id })).messages
+    .some((message) => message.role === "bot" && message.blocks.some(block => block.kind === "text" && block.text.includes("Bonjour")))).toBe(true);
+  expect(facade.bizosDestination(`bot:${analyst.id}`)).toBe("bizos");
+  expect(childRequests).toContain(`bot:${analyst.id}`);
   expect((await harness.routines.list()).some((routine) => routine.name === "Market watch")).toBe(true);
   expect(bridgeOperations).toContain("runs/claim");
   expect(bridgeOperations).not.toContain("cloud/send");

@@ -169,6 +169,22 @@ export class RoutineStore {
   }
 
   create(input: CreateRoutineInput): Routine {
+    if (input.id) {
+      const existing = this.routines.find(routine => routine.id === input.id);
+      if (existing) {
+        // The supplied id is a durable effect key. Compare the original
+        // immutable fields after normalization; a one-off may now be in the
+        // past, and a later pause must not be undone by a retry.
+        const trigger = normalizeTrigger(input.trigger);
+        const endsAt = input.endsAt ? new Date(input.endsAt).toISOString() : null;
+        if (existing.botId !== input.botId || existing.name !== String(input.name ?? "").trim().slice(0, 80)
+          || existing.prompt !== String(input.prompt ?? "").trim().slice(0, 6000)
+          || !trigger || JSON.stringify(existing.trigger) !== JSON.stringify(trigger)
+          || (existing.endsAt ?? null) !== endsAt)
+          throw new Error("routine id was reused with different arguments");
+        return { ...existing };
+      }
+    }
     const trigger = normalizeTrigger(input.trigger, { now: this.clock.now() });
     if (!trigger) throw new RoutineTriggerError("invalid routine trigger");
     const name = String(input.name ?? "").trim().slice(0, 80);
@@ -177,7 +193,7 @@ export class RoutineStore {
     const endsAt = normalizeEndsAt(input.endsAt, this.clock.now());
     assertRunsBeforeEnd(trigger, endsAt, this.clock.now());
     const routine: Routine = {
-      id: newId("rtn"),
+      id: input.id ?? newId("rtn"),
       botId: input.botId,
       name,
       prompt,

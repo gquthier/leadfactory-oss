@@ -24,6 +24,13 @@ Messages awaiting a server receipt remain visible from the ledger even if the
 NDJSON projection write fails. Storage errors are raised; corrupt security
 ledgers are not reset to empty.
 
+When a restored profile shares an installation with a newer copy, canonical
+events from that installation set the minimum outbox sequence. Pending events
+are rebased above it before upload, retaining their event IDs and content;
+acknowledged events keep their original receipts. A stale forward message
+cursor after projection is reset to the first local transcript page, with
+`cursorReset: true`, so a polling client can merge by message ID and continue.
+
 Projection keeps pre-link local history before the shared archive. Matching local
 messages retain attachments, reply metadata and timestamps while canonical text
 is refreshed. Polling forward from the last pre-link message reaches new shared
@@ -94,6 +101,18 @@ the supervised CLI process group. Every host tool call is admitted at the server
 again with an operation UUID, target and full argument hash. Pending/unknown
 operations cannot be repeated automatically. Aborting a process does not undo a
 remote form submission or any other external effect.
+
+Recruitment and routine creation retain their successful local result with the
+confirmed effect. Repeating the same operation returns that result without
+executing the tool again. If the host reply was lost before the result was
+saved, the existing recruitment journal or deterministic routine ID supplies
+the result. A confirmed broker receipt is read, never rewritten with a new
+terminal message. Routine replay compares normalized immutable fields and
+preserves subsequent pause state.
+When a BizOS model turn recruits an agent, its signed model selection is also
+set on the recruit's new direct chat and team group before the introduction and
+initial task start. The selection is checked against the current organization
+and workspace before inheritance.
 
 | Capability | Linked behavior | Automatic transfer |
 | --- | --- | --- |

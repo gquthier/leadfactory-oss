@@ -4,7 +4,7 @@ import { localComputerEnabled } from "./computer/release.js";
 import { ContinuityBridgeError, desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
 import { cliCredentialPaths, runtimeProtectedPaths } from "./harness/secret-shield.js";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -1325,6 +1325,7 @@ export class CollaborationFacade {
     if (before && after) throw new HttpError(400, "invalid_cursor", "Use before or after, not both.");
     let raw: ThreadMessage[] = [];
     let olderCursor: string | null = null;
+    let cursorReset = false;
     if (before) {
       const internal = this.internalMessageId(before);
       const found = await this.invoke<ThreadMessage | null>("lbz:threads:message", [target, internal]);
@@ -1340,7 +1341,13 @@ export class CollaborationFacade {
           "lbz:threads:after", [target, cursor, 200],
         );
         if (!page) {
-          if (first) throw new HttpError(409, "cursor_unknown", "Message cursor is not present in this local thread.");
+          if (first) {
+            // A projected thread can replace its local message ids while an
+            // older desktop is still polling. Replay from the first durable
+            // row; the desktop merges by id and then advances normally.
+            raw = await this.invoke<ThreadMessage[]>("lbz:threads:transcript", [target]);
+            cursorReset = true;
+          }
           break;
         }
         first = false;
@@ -1370,8 +1377,9 @@ export class CollaborationFacade {
     return {
       threadId,
       messages,
-      nextCursor: messages.at(-1)?.id ?? after ?? null,
+      nextCursor: messages.at(-1)?.id ?? (cursorReset ? raw.at(-1)?.id ?? null : after ?? null),
       olderCursor,
+      ...(cursorReset ? { cursorReset: true } : {}),
     };
   }
 
@@ -2246,10 +2254,12 @@ export class CollaborationFacade {
       if (current.runId !== capability.runId || current.botId !== capability.botId || current.threadId !== capability.threadId) {
         throw new HttpError(403, "invalid_team_scope", "The routine capability changed before it could be committed.");
       }
+      const routineId = `rtn_${createHash("sha256").update(JSON.stringify({ runId: capability.runId, ownerId, name, prompt, trigger, endsAt })).digest("hex").slice(0, 20)}`;
+      const existed = (await this.invoke<Routine[]>("lbz:routines:list", [])).some(row => row.id === routineId);
       const routine = await this.invoke<Routine>("lbz:routines:create", [{
-        botId: ownerId, name, prompt, trigger, enabled: true, ...(endsAt ? { endsAt } : {}),
+        id: routineId, botId: ownerId, name, prompt, trigger, enabled: true, ...(endsAt ? { endsAt } : {}),
       }]);
-      this.recordTeamEvent("routine.created", {
+      if (!existed) this.recordTeamEvent("routine.created", {
         actorBotId: capability.botId,
         ownerBotId: ownerId,
         runId: this.runId(capability.runId),
@@ -2776,6 +2786,13 @@ export class CollaborationFacade {
         this.index.roleAffiliations[bot.id] = { templateId: blueprint.templateId, roleSlug: blueprint.slug };
       }
       this.persistIndex(this.index);
+
+      // The greeting and the first team task are real child turns. They use
+      // the parent's signed BizOS source when the recruiter used that model,
+      // even though their new DM and group had no prior model selection.
+      if (sourceRun?.inference?.kind === "bizos") {
+        await this.bizos.inherit(capability.threadId, [`bot:${bot.id}`, `group:${group.id}`]);
+      }
 
       const task = initialTask ?? `Introduce yourself briefly as ${appliedName}, confirm your bounded responsibility (${appliedDescription}), and state the first concrete step you can take.`;
       // A recruit's own DM is visible to the person from its first turn. The

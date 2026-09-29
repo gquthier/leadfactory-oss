@@ -51,6 +51,26 @@ it("unlinked threads do not create an outbox; linked commits survive reconstruct
     store.accept("bot:a", [{ ...first[0]!, seq: 1, hash: "wrong" }]),
   ).toThrow();
 });
+it("rebases an unsent event when a restored installation has already used its local sequence", () => {
+  const { storage, store } = fixture();
+  store.link("bot:a", binding);
+  store.capture(message(1, "first"));
+  const first = store.pending("bot:a")[0]!;
+  store.accept("bot:a", [{ ...first, seq: 1, originInstallationId: binding.installationId }]);
+  store.capture(message(2, "new request from restored profile"));
+  const pending = store.pending("bot:a")[0]!;
+  expect(pending.localSequence).toBe(2);
+  const remote = { ...first, eventId: "accepted-on-other-copy", localSequence: 2,
+    content: "previously accepted request", localMessageId: undefined,
+    seq: 2, originInstallationId: binding.installationId };
+  store.accept("bot:a", [remote]);
+  const recovered = new ContinuityStore(storage).pending("bot:a")[0]!;
+  expect(recovered.eventId).toBe(pending.eventId);
+  expect(recovered.localSequence).toBe(3);
+  expect(recovered.hash).toBe(payloadHash((({ hash: _hash, ...row }) => row)(recovered)));
+  store.capture(message(3, "next request"));
+  expect(store.pending("bot:a").map(row => row.localSequence)).toEqual([3, 4]);
+});
 it("quarantines a legacy link from a different or unverified OS before cloud projection", () => {
   const { storage, store } = fixture();
   store.link("bot:a", { ...binding, workspaceId: "os_old" });
@@ -410,6 +430,76 @@ it("reconciles an uncertain broker effect immediately and clears the continuity 
   expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "confirmed" }]);
   expect(receipts.at(-1)).toMatchObject({ status: "confirmed" });
   continuity.close();
+});
+it("recovers a broker-confirmed effect without changing its terminal receipt", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "local-run": { requestId: "request", threadId: "bot:a", localRunId: "local-run", runtime: "codex", runId: "server-run", epoch: 1, turnId: "turn", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const args = { name: "Analyst", initial_task: "Introduce yourself" };
+  const receipts: string[] = [];
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    if (operation === "runs/admit") return { admitted: true } as never;
+    if (operation === "runs/receipt") {
+      receipts.push(String(body.status));
+      throw new Error("idempotency_conflict");
+    }
+    if (operation === "runs/effect") return { operationId: body.operationId, status: "confirmed",
+      receipt: "Host tool returned.", target: "recruit_agent", argsHash: payloadHash(args) } as never;
+    return {} as never;
+  });
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-run", generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  let attempts = 0;
+  const result = await continuity.execute("bot:a", "local-run", "recruit_agent", args, async () => {
+    attempts++;
+    if (attempts === 1) throw new Error("sidecar response lost after effect");
+    return { agentId: "agent-1" };
+  });
+  expect(result).toEqual({ agentId: "agent-1" });
+  expect(attempts).toBe(2);
+  expect(receipts).toEqual(["unknown"]);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ state: "confirmed", receipt: "Host tool returned." }]);
+  continuity.close();
+});
+it("returns a confirmed recruitment receipt without executing the effect twice", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "local-run": { requestId: "request", threadId: "bot:a", localRunId: "local-run", runtime: "codex", runId: "server-run", epoch: 1, turnId: "turn", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const transport = async (operation: string) => operation === "runs/admit" ? { admitted: true } : {};
+  const continuity = new ConversationContinuity(storage, transport as any);
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-run", generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  const perform = vi.fn(async () => ({ agentId: "analyst" }));
+  expect(await continuity.execute("bot:a", "local-run", "recruit_agent", { name: "Analyst" }, perform)).toEqual({ agentId: "analyst" });
+  expect(await continuity.execute("bot:a", "local-run", "recruit_agent", { name: "Analyst" }, perform)).toEqual({ agentId: "analyst" });
+  expect(perform).toHaveBeenCalledTimes(1);
+  continuity.close();
+  const reopened = new ConversationContinuity(storage, transport as any);
+  reopened.guard.install("bot:a", { runId: "server-run", generation: 1, leaseToken: "lease", expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  expect(await reopened.execute("bot:a", "local-run", "recruit_agent", { name: "Analyst" }, perform)).toEqual({ agentId: "analyst" });
+  expect(perform).toHaveBeenCalledTimes(1);
+  reopened.close();
+});
+it("reuses a routine identity after a lost tool reply and preserves later pause state", async () => {
+  const { storage } = fixture();
+  const { RoutineStore } = await import("../src/harness/routines.js");
+  const { fixedClock } = await import("../src/harness/clock.js");
+  const clock = fixedClock(Date.parse("2026-09-29T10:00:00Z"));
+  const store = new RoutineStore(storage, clock);
+  const input = { id: "rtn_recover", botId: "bot-a", name: "Review", prompt: "Check evidence",
+    trigger: { kind: "schedule" as const, frequency: "interval" as const, everyMinutes: 10 } };
+  const first = store.create(input);
+  store.update(first.id, { enabled: false });
+  expect(new RoutineStore(storage, clock).create(input)).toMatchObject({ id: first.id, enabled: false });
+  expect(store.list()).toHaveLength(1);
+  expect(() => store.create({ ...input, prompt: "Different work" })).toThrow(/different arguments/);
+  const once = { ...input, id: "rtn_once", trigger: { kind: "schedule" as const,
+    frequency: "once" as const, at: "2026-09-29T10:10:00+00:00" } };
+  const createdOnce = store.create(once);
+  const later = new RoutineStore(storage, fixedClock(Date.parse("2026-09-29T11:00:00Z")));
+  expect(later.create(once)).toMatchObject({ id: createdOnce.id,
+    trigger: { kind: "schedule", frequency: "once", at: "2026-09-29T10:10:00.000Z" } });
+  expect(later.list()).toHaveLength(2);
 });
 it("marks an irreconcilable broker effect failed with a clear error so later effects can run", async () => {
   const { storage } = fixture();

@@ -503,6 +503,8 @@ export interface Routine {
 }
 
 export interface CreateRoutineInput {
+  /** Trusted idempotency identity for a tool-originated routine. */
+  id?: string;
   botId: string;
   name: string;
   prompt: string;

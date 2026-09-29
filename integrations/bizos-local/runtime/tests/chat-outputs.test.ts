@@ -420,6 +420,22 @@ describe("skip-all is one global switch", () => {
 });
 
 describe("sidecar contract", () => {
+  it("restarts forward pagination when a projected message cursor disappeared", async () => {
+    const { harness, facade } = setup();
+    const bot = await harness.bots.create({ name: "Vega" });
+    await harness.threads.send({ botId: bot.id }, { text: "Keep this message" });
+    const threadId = `local:fixture:thread:bot:${bot.id}`;
+    const replay = await facade.messagePage(threadId,
+      new URL("http://127.0.0.1/x?after=local%3Afixture%3Amessage%3Amsg_removed_projection&limit=1"));
+    expect(replay).toMatchObject({ cursorReset: true,
+      messages: [{ content: "Keep this message" }] });
+    expect(replay.nextCursor).toBe(replay.messages[0]!.id);
+    const next = await facade.messagePage(threadId,
+      new URL(`http://127.0.0.1/x?after=${encodeURIComponent(replay.nextCursor!)}`));
+    expect(next).not.toHaveProperty("cursorReset");
+    expect(next.messages).toEqual([]);
+  });
+
   it("keeps `content` exactly as before and adds attachments, links, preview and the weighed ask beside it", async () => {
     const { harness, facade, turns } = setup();
     const bot = await harness.bots.create({ name: "Vega" });
