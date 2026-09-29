@@ -34,6 +34,7 @@ import {
   type RuntimeEvent,
 } from "./codex-driver.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
+import { windowsCliExecutionBlocked } from "./secret-shield.js";
 import { redactSecrets, redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
 import { labelForTool } from "./style.js";
@@ -272,6 +273,13 @@ export function cursorToolTitle(toolCall: unknown): string {
 }
 
 export function startCursorTurn(input: CursorTurnInput): CodexTurnHandle {
+  if (windowsCliExecutionBlocked()) {
+    queueMicrotask(() => {
+      input.onEvent({ type: "runtime.error", message: "Cursor on Windows requires an OS-enforced secret shield before CLI execution is available.", setup: true });
+      input.onEvent({ type: "turn.completed", ok: false, stopReason: "secret_shield_unavailable" });
+    });
+    return { stop: () => {}, respond: () => "unavailable", sessionId: () => null, settled: () => true };
+  }
   const state = {
     settled: false,
     stopRequested: false,

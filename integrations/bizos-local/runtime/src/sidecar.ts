@@ -3,7 +3,7 @@ import { BizosInferenceSelection } from "./harness/bizos-inference.js";
 import { localComputerEnabled } from "./computer/release.js";
 import { ContinuityBridgeError, desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
-import { cliCredentialPaths, runtimeProtectedPaths } from "./harness/secret-shield.js";
+import { cliCredentialPaths, runtimeProtectedPaths, windowsCliExecutionBlocked } from "./harness/secret-shield.js";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
@@ -1169,10 +1169,10 @@ export class CollaborationFacade {
       session: { userId: this.userId, workspaceId: this.workspaceId, access: "owner" as const },
       capabilities: { ...LOCAL_BACKEND_CAPABILITIES, computer: this.harness.computerToolsAvailable() },
       providers: {
-        supported: LOCAL_PROVIDERS,
+        supported: windowsCliExecutionBlocked() ? ["ollama"] : LOCAL_PROVIDERS,
         configured: [...new Set([...plans.filter((plan) => plan.status !== "disconnected").map((plan) => plan.provider), ...(inference.providers.some(provider => provider.kind === "ollama") ? ["ollama"] : [])])],
         selected: selectedExternal?.kind === "ollama" ? "ollama" : settings.local.provider ?? null,
-        recruitment: { codex: true, claude: true, cursor: true, ollama: true },
+        recruitment: { codex: !windowsCliExecutionBlocked(), claude: !windowsCliExecutionBlocked(), cursor: !windowsCliExecutionBlocked(), ollama: true },
       },
       humans: [{ userId: this.userId, displayName: "Local owner", email: null, isSelf: true }],
       agents: visibleBots.map((bot) => this.agent(bot, true)),
@@ -1817,10 +1817,10 @@ export class CollaborationFacade {
     return {
       mode: "local-harness", backendMode: "local", settings, plans, models, tools,
       providers: {
-        supported: LOCAL_PROVIDERS,
-        recruitment: { codex: true, claude: true, cursor: true, ollama: true },
+        supported: windowsCliExecutionBlocked() ? ["ollama"] : LOCAL_PROVIDERS,
+        recruitment: { codex: !windowsCliExecutionBlocked(), claude: !windowsCliExecutionBlocked(), cursor: !windowsCliExecutionBlocked(), ollama: true },
         toolSurface: {
-          computer: { codex: true, claude: true, api: true, ollama: true, cursor: true },
+          computer: { codex: !windowsCliExecutionBlocked(), claude: !windowsCliExecutionBlocked(), api: true, ollama: true, cursor: !windowsCliExecutionBlocked() },
         },
       },
       inference: {
@@ -3845,7 +3845,7 @@ async function serve(): Promise<void> {
         workspaceDir,
         ...(sharedBrainPath ? { sharedBrainPath } : {}),
         sandbox,
-        supportedProviders: ["codex", "claude", "cursor", "ollama"],
+        supportedProviders: windowsCliExecutionBlocked() ? ["ollama"] : ["codex", "claude", "cursor", "ollama"],
         peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name, ...(peer.title ? { title: peer.title } : {}) })),
         mcpToolNames: [
           ...LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (!serverComputer && localComputerEnabled())).map(tool => tool.name),
