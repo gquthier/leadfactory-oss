@@ -161,6 +161,28 @@ it("configures BizOS cloud execution with only the opaque mixture identifier", a
   expect(JSON.stringify(calls)).not.toMatch(/gemini|deepseek|openrouter|qwen|anthropic/i);
   continuity.close();
 });
+it("repairs a disabled imported policy for a local CLI turn without authorizing cloud execution", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const calls: Array<{ operation: string; body: Record<string, unknown> }> = [];
+  const continuity = new ConversationContinuity(storage, async (operation, body) => {
+    calls.push({ operation, body });
+    if (operation === "policies/get") return { policy: { enabled: false, modelRuntime: "claude", cloudFallback: null, autoContinue: false } } as never;
+    if (operation === "policies/set") return { ok: true } as never;
+    if (operation === "status") return { orgId: binding.orgId, userId: binding.accountId, installationId: binding.installationId, workspaceId: "workspace-a", machineName: "QA Mac" } as never;
+    if (operation === "runs/start") return { runId: "run-1", epoch: 1, leaseUntil: new Date(Date.now() + 60_000).toISOString() } as never;
+    if (operation === "runs/claim") return { turnId: "turn-1", leaseToken: "lease-1", leaseUntil: new Date(Date.now() + 60_000).toISOString() } as never;
+    throw new Error(`unexpected ${operation}`);
+  });
+  continuity.store.link("bot:a", binding);
+  vi.spyOn(continuity, "sync").mockResolvedValue();
+  await continuity.prepare("bot:a", "local-1", "codex", () => undefined);
+  expect(calls.find(call => call.operation === "policies/set")?.body.policy).toEqual({
+    enabled: true, modelRuntime: "codex", cloudFallback: null, autoContinue: false,
+  });
+  expect(calls.find(call => call.operation === "runs/start")?.body.cloudFallback).toBeNull();
+  continuity.close();
+});
 it("does not advance memory after disk failure or silently reset a corrupt continuity ledger", () => {
   const { storage, store } = fixture();
   store.link("bot:a", binding);
