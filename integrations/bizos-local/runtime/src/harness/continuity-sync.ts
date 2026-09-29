@@ -10,9 +10,10 @@ import {
 } from "./continuity.js";
 import { LeaseGuard, type ExecutionLease } from "./execution-lease.js";
 import { Storage, writeFileAtomic } from "./storage.js";
-import type {
-  ContinuityIdentity,
-  ContinuityTransport,
+import {
+  ContinuityBridgeError,
+  type ContinuityIdentity,
+  type ContinuityTransport,
 } from "../continuity-bridge.js";
 import type { ThreadMessage } from "./types.js";
 import { waitForCliShutdown } from "./procs.js";
@@ -744,7 +745,11 @@ export class ConversationContinuity {
    * because no safe result-recovery closure survives a process restart. */
   private async reconcileInterruptedEffects(threadId: string): Promise<string[]> {
     const notices: string[] = [];
-    for (const effect of this.store.effects(threadId).filter(row => ["prepared", "sent", "unknown"].includes(row.state))) {
+    // Native CLI tools are recorded locally as `uncontrolled` and are never
+    // admitted by the broker: there is no broker row to reconcile, and asking
+    // for one would block every later turn of the conversation.
+    for (const effect of this.store.effects(threadId).filter(row => row.class !== "uncontrolled"
+      && ["prepared", "sent", "unknown"].includes(row.state))) {
       const run = Object.values(this.runs).reverse().find(candidate => candidate.threadId === threadId
         && candidate.runId && candidate.epoch === effect.generation && candidate.turnId && candidate.leaseToken);
       if (!run) {
@@ -757,7 +762,17 @@ export class ConversationContinuity {
         remote = await this.call<BrokerEffect>("runs/effect", {
           ...this.scope(threadId), runId: run.runId, epoch: run.epoch, operationId: effect.id,
         });
-      } catch { /* the terminal receipt below is still authoritative */ }
+      } catch (error) {
+        // The broker never admitted this operation (e.g. runs/admit failed after
+        // the local journal entry): nothing was authorized, and runs/receipt
+        // would only answer not_found. Close it locally.
+        if (error instanceof ContinuityBridgeError && error.status === 404 && error.code === "not_found") {
+          this.guard.update(threadId, effect.id, "failed", "The broker never admitted this operation; it was closed as failed.");
+          notices.push(`Previous ${effect.tool} operation was never admitted and was marked failed; you can continue safely.`);
+          continue;
+        }
+        /* otherwise the terminal receipt below is still authoritative */
+      }
       if (remote) this.assertBrokerEffect(effect, remote);
       if (remote?.status === "confirmed" || remote?.status === "failed") {
         this.guard.update(threadId, effect.id, remote.status, remote.receipt ?? `Broker reports ${remote.status}.`);

@@ -781,3 +781,106 @@ it.each(["immediate", "already-terminal"])(
     recovered.stop();
   },
 );
+
+// Regression (.50): a linked Codex turn records `native_cli_tools` as an
+// uncontrolled local effect that the broker never admits. The next turn's
+// reconciliation asked the broker for a receipt, got not_found (404) and
+// abandoned every later turn of that conversation, whatever the engine.
+function notAdmittedBroker(options: { admitFails?: boolean } = {}) {
+  const calls: Array<{ operation: string; body: Record<string, unknown> }> = [];
+  const admitted = new Set<string>();
+  let started = 0;
+  const transport = async (operation: string, body: Record<string, unknown>) => {
+    calls.push({ operation, body });
+    const { ContinuityBridgeError } = await import("../src/continuity-bridge.js");
+    switch (operation) {
+      case "status": return { orgId: binding.orgId, userId: binding.accountId, installationId: binding.installationId, workspaceId: "workspace-a", machineName: "QA Mac" } as never;
+      case "policies/get": return { policy: { enabled: true, modelRuntime: "codex", cloudFallback: null, autoContinue: false } } as never;
+      case "runs/start": started++; return { runId: `run-${started}`, epoch: 1, leaseUntil: new Date(Date.now() + 60_000).toISOString() } as never;
+      case "runs/claim": return { turnId: `turn-${started}`, leaseToken: `lease-${started}`, leaseUntil: new Date(Date.now() + 60_000).toISOString() } as never;
+      case "runs/admit":
+        if (options.admitFails) throw new ContinuityBridgeError(503, "continuity_unavailable", "BizOS continuity continuity_unavailable (503)");
+        admitted.add(String(body.operationId));
+        return { admitted: true } as never;
+      case "runs/effect": case "runs/receipt":
+        if (!admitted.has(String(body.operationId))) throw new ContinuityBridgeError(404, "not_found", "BizOS continuity not_found (404)");
+        return (operation === "runs/receipt" ? { recorded: true } : {}) as never;
+      case "runs/finish": return { finished: true } as never;
+      case "conversations/read": return { events: [], hasMore: false } as never;
+      case "conversations/ack": return { acknowledgedThrough: "0" } as never;
+      case "devices/list": return { devices: [] } as never;
+      default: throw new Error(`unexpected ${operation}`);
+    }
+  };
+  return { calls, transport };
+}
+
+it.each(["claude", "codex"])("a linked Codex turn never blocks the next %s turn on its unreported native effect", async (next) => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const broker = notAdmittedBroker();
+  const continuity = new ConversationContinuity(storage, broker.transport);
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+
+  await continuity.prepare("bot:a", "local-codex", "codex", () => undefined);
+  continuity.markNativeUncontrolled("bot:a");
+  await continuity.finish("bot:a", "local-codex", true);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ tool: "native_cli_tools", class: "uncontrolled", state: "unknown" }]);
+
+  broker.calls.length = 0;
+  await expect(continuity.prepare("bot:a", "local-next", next, () => undefined)).resolves.toEqual({ notices: [] });
+  const operations = broker.calls.map(call => call.operation);
+  expect(operations).not.toContain("runs/receipt");
+  expect(operations).not.toContain("runs/effect");
+  expect(broker.calls.find(call => call.operation === "runs/start")?.body.modelRuntime).toBe(next);
+  continuity.close();
+});
+
+it("closes locally a prepared effect the broker never admitted, without a receipt", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const broker = notAdmittedBroker({ admitFails: true });
+  const continuity = new ConversationContinuity(storage, broker.transport);
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+
+  await continuity.prepare("bot:a", "local-1", "claude", () => undefined);
+  const perform = vi.fn(async () => "never");
+  await expect(continuity.execute("bot:a", "local-1", "schedule_routine", { prompt: "Every Monday" }, perform))
+    .rejects.toThrow(/continuity_unavailable/);
+  expect(perform).not.toHaveBeenCalled();
+  await continuity.finish("bot:a", "local-1", true);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ tool: "schedule_routine", state: "prepared" }]);
+
+  broker.calls.length = 0;
+  const { notices } = await continuity.prepare("bot:a", "local-2", "claude", () => undefined);
+  expect(notices).toEqual([expect.stringMatching(/never admitted.*marked failed/)]);
+  expect(continuity.store.effects("bot:a")).toMatchObject([{ tool: "schedule_routine", state: "failed" }]);
+  const operations = broker.calls.map(call => call.operation);
+  expect(operations).toContain("runs/effect");
+  expect(operations).not.toContain("runs/receipt");
+  expect(operations).toContain("runs/start");
+  continuity.close();
+});
+
+it("unblocks a conversation already blocked by a .50 inherited unknown native effect", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { "old-codex": {
+    requestId: "request-old", threadId: "bot:a", localRunId: "old-codex", runtime: "codex",
+    runId: "server-run-old", epoch: 1, claimId: "claim-old", turnId: "turn-old", leaseToken: "lease-old",
+    processStopped: true, finished: true,
+  } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const broker = notAdmittedBroker();
+  const continuity = new ConversationContinuity(storage, broker.transport);
+  continuity.store.link("bot:a", { ...binding, workspaceId: "workspace-a" });
+  continuity.store.effect("bot:a", {
+    id: "native-old", tool: "native_cli_tools", class: "uncontrolled", state: "unknown", generation: 1,
+  });
+
+  await expect(continuity.prepare("bot:a", "local-claude", "claude", () => undefined)).resolves.toEqual({ notices: [] });
+  const operations = broker.calls.map(call => call.operation);
+  expect(operations).not.toContain("runs/receipt");
+  expect(operations).not.toContain("runs/effect");
+  expect(operations).toContain("runs/start");
+  continuity.close();
+});
