@@ -61,13 +61,31 @@ export class ThreadStore {
     const ids = new Set(canonical.map(row => row.id));
     const local = new Map<string, ThreadMessage>();
     const after = new Map<string | null, ThreadMessage[]>();
+    const localRows = collapseMessages(rows);
+    const preLinkTailId = this.continuity!.store.preLinkTail(threadId);
+    const preLinkTailIndex = preLinkTailId ? localRows.findIndex(row => row.id === preLinkTailId) : -1;
     let anchor: string | null = null;
-    for (const row of collapseMessages(rows)) {
+    for (const [index, row] of localRows.entries()) {
       local.set(row.id, row);
       if (ids.has(row.id)) anchor = row.id;
       else {
         const recorded = this.continuity!.store.projectionAnchor(threadId, row.id);
-        const position = recorded === undefined ? anchor : recorded;
+        let position = recorded === undefined ? anchor : recorded;
+        if (recorded === undefined && !anchor) {
+          if (preLinkTailIndex >= 0 && index <= preLinkTailIndex) position = null;
+          else {
+            // Older ledgers did not record presentation anchors. Use the
+            // canonical chronology for their post-link local rows, while
+            // rows known to predate this link stay before the archive.
+            const localAt = Date.parse(row.createdAt);
+            if (Number.isFinite(localAt)) {
+              for (const shared of canonical) {
+                const sharedAt = Date.parse(shared.createdAt);
+                if (Number.isFinite(sharedAt) && sharedAt <= localAt) position = shared.id;
+              }
+            }
+          }
+        }
         after.set(position, [...(after.get(position) ?? []), row]);
       }
     }

@@ -740,6 +740,44 @@ it("linked projections keep pre-link history before new messages and preserve lo
   continuity.close();
 });
 
+it("pages local replies after a canonical cursor when an older profile has no projection anchors", async () => {
+  const { storage } = fixture();
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const { ThreadStore } = await import("../src/harness/threads.js");
+  const { systemClock } = await import("../src/harness/clock.js");
+  const continuity = new ConversationContinuity(storage);
+  const prelink = { id: "prelink", threadId: "bot:a", seq: 1, role: "bot" as const,
+    blocks: [{ kind: "text" as const, text: "Local history" }], createdAt: "2026-09-29T13:00:00Z" };
+  storage.appendNdjson(storage.threadPath("bot:a"), prelink);
+  storage.appendNdjson(storage.threadPath("bot:a"), { ...prelink, id: "prelink-last", seq: 2,
+    createdAt: "2026-09-29T13:00:01Z" });
+  storage.appendNdjson(storage.threadPath("bot:a"), prelink); // streamed update of an older row
+  continuity.store.link("bot:a", binding);
+  continuity.store.accept("bot:a", [{ eventId: "canonical", schemaVersion: 1,
+    localSequence: 1, baseRevision: "0", kind: "message", author: "human",
+    content: "Earlier cloud message", hash: payloadHash("Earlier cloud message"),
+    seq: 1, createdAt: "2026-09-29T12:00:00Z" }]);
+  const local = [
+    { id: "local-user", threadId: "bot:a", seq: 3, role: "user" as const,
+      blocks: [{ kind: "text" as const, text: "New prompt" }], createdAt: "2026-09-29T14:00:00Z" },
+    { id: "local-final", threadId: "bot:a", seq: 4, role: "bot" as const,
+      blocks: [{ kind: "text" as const, text: "Final answer" }], createdAt: "2026-09-29T14:00:01Z" },
+  ];
+  for (const row of local) storage.appendNdjson(storage.threadPath("bot:a"), row);
+  storage.appendNdjson(storage.threadPath("bot:a"), local[1]!); // replayed final write remains one bubble
+  const threads = new ThreadStore(storage, systemClock, continuity);
+  expect(threads.transcript({ botId: "a" }).map(row => row.id))
+    .toEqual(["prelink", "prelink-last", "canonical", "local-user", "local-final"]);
+  expect(threads.pageAfter({ botId: "a" }, "canonical")?.messages.map(row => row.id))
+    .toEqual(["local-user", "local-final"]);
+  const reopened = new ThreadStore(storage, systemClock, new ConversationContinuity(storage));
+  expect(reopened.pageAfter({ botId: "a" }, "canonical")?.messages.map(row => row.id))
+    .toEqual(["local-user", "local-final"]);
+  expect(reopened.transcript({ botId: "a" }).map(row => row.id))
+    .toEqual(["prelink", "prelink-last", "canonical", "local-user", "local-final"]);
+  continuity.close();
+});
+
 it("local attachment-only and control messages stay after an imported remote archive across restart", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } =

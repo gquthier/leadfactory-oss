@@ -107,6 +107,8 @@ interface Conversation {
   hiddenContext?: { kind: "prior-local-transcript"; content: string; createdAt: string };
   /** Local presentation only; never included in provider or server events. */
   projectionAnchors?: Record<string, string | null>;
+  /** Last local row present before the link, so older history stays private and first in the projection. */
+  preLinkTailId?: string;
   error?: string;
 }
 function legacyHiddenContext(threadId: string, event: NeutralEvent): boolean {
@@ -157,9 +159,22 @@ export class ContinuityStore {
       )
     )
       throw new Error("conversation already linked to another local thread");
+    let preLinkTailId: string | undefined;
+    let preLinkTailSequence = -1;
+    for (const row of this.storage.readNdjson<unknown>(this.storage.threadPath(threadId))) {
+      if (row && typeof row === "object") {
+        const candidate = row as { id?: unknown; seq?: unknown };
+        if (typeof candidate.id === "string" && typeof candidate.seq === "number"
+          && Number.isSafeInteger(candidate.seq) && candidate.seq > preLinkTailSequence) {
+          preLinkTailId = candidate.id;
+          preLinkTailSequence = candidate.seq;
+        }
+      }
+    }
     this.commit((s) => {
       s.conversations[threadId] = {
         link,
+        ...(preLinkTailId ? { preLinkTailId } : {}),
         nextLocalSequence: 1,
         head: 0,
         acknowledgedThrough: 0,
@@ -235,6 +250,9 @@ export class ContinuityStore {
     messageId: string,
   ): string | null | undefined {
     return this.state.conversations[threadId]?.projectionAnchors?.[messageId];
+  }
+  preLinkTail(threadId: string): string | undefined {
+    return this.state.conversations[threadId]?.preLinkTailId;
   }
   anchorProjection(
     threadId: string,

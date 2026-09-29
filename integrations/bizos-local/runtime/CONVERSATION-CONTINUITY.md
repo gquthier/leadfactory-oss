@@ -39,6 +39,10 @@ New local-only messages record the last visible message as a durable presentatio
 anchor, so attachment-only replies and control messages stay after an imported
 archive even when that archive contains no matching local message IDs. These
 anchors stay in the local ledger and are not uploaded.
+The link records the last pre-link local row. Older profiles without that
+boundary or per-message anchors place their remaining local rows after the
+latest canonical message no later than the row timestamp. This keeps final
+local replies reachable by forward polling from the canonical cursor.
 
 The first explicit link starts from that boundary; it does not import old native
 CLI chats. A second installation discovers an authorized BizOS conversation and
