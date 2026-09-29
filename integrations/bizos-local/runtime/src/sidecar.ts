@@ -21,7 +21,7 @@ import {
 import { createReadStream, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { downloadGeneratedImage, MAX_IMAGE_BYTES } from "./generated-image.js";
 import { spawn, spawnSync } from "node:child_process";
@@ -99,11 +99,14 @@ import { CloudLink, CloudLinkError, DEFAULT_WEB_ORIGIN, webOrigin } from "./clou
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_ROOT_VARIABLE = "LOCALBIZOS_SIDECAR_STATE";
-const defaultStateRoot = resolve(join(homedir(), "Library", "Application Support", "BizOS-local-harness"));
+const defaultAppDataRoot = process.platform === "win32"
+  ? resolve(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"))
+  : resolve(join(homedir(), "Library", "Application Support"));
+const defaultStateRoot = join(defaultAppDataRoot, "BizOS-local-harness");
 const stateRoot = resolve(process.env[STATE_ROOT_VARIABLE] ?? defaultStateRoot);
 const descriptorPath = resolve(
   process.env.LOCALBIZOS_SIDECAR_DESCRIPTOR
-    ?? join(homedir(), "Library", "Application Support", "BizOS-desktop", "local-harness.json"),
+    ?? join(defaultAppDataRoot, "BizOS-desktop", "local-harness.json"),
 );
 const harnessRoot = join(stateRoot, "runtime");
 /** Absolute paths the desktop asks the shield to cover (JSON array, e.g. its
@@ -111,7 +114,7 @@ const harnessRoot = join(stateRoot, "runtime");
 function desktopProtectedPaths(): string[] {
   try {
     const parsed: unknown = JSON.parse(process.env.LOCALBIZOS_PROTECTED_PATHS ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string" && value.startsWith("/")) : [];
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string" && isAbsolute(value)) : [];
   } catch {
     return [];
   }
@@ -267,6 +270,7 @@ function safeHarnessEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const key of [
     "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM", "COLORTERM", "PATH",
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "SystemRoot", "ComSpec",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
     "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
     // The local plan tier override (entitlement.ts) is read by the harness.

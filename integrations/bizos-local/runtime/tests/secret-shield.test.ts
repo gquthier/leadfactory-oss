@@ -13,6 +13,7 @@ import {
   seatbeltDenyReadProfile,
   seatbeltLaunch,
   secretShieldEnabled,
+  windowsCliExecutionBlocked,
 } from "../src/harness/secret-shield.js";
 
 function fixture() {
@@ -74,6 +75,12 @@ describe("the protected list", () => {
     expect(secretShieldEnabled({ LOCALBIZOS_SECRET_SHIELD: "0" })).toBe(false);
     expect(secretShieldEnabled({ LOCALBIZOS_SECRET_SHIELD: "off" })).toBe(false);
     expect(secretShieldEnabled({ LOCALBIZOS_SECRET_SHIELD: "1" })).toBe(true);
+  });
+
+  it("blocks Windows CLI turns regardless of the support escape hatch", () => {
+    expect(windowsCliExecutionBlocked("win32")).toBe(true);
+    expect(windowsCliExecutionBlocked("darwin")).toBe(false);
+    expect(windowsCliExecutionBlocked("linux")).toBe(false);
   });
 });
 

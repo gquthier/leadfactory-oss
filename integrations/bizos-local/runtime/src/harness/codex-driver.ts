@@ -21,7 +21,7 @@ import { cleanChildEnvironment } from "./child-env.js";
 import { augmentedPath } from "./env-path.js";
 import type { CodexModelProvider } from "./inference.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
-import { codexShieldConfig, seatbeltDenyReadProfile, seatbeltLaunch, secretShieldEnabled } from "./secret-shield.js";
+import { codexShieldConfig, seatbeltDenyReadProfile, seatbeltLaunch, secretShieldEnabled, windowsCliExecutionBlocked } from "./secret-shield.js";
 import { redactSecretsInText } from "./redact.js";
 import { classifyError, computeBackoff, RETRY_MAX_ATTEMPTS } from "./retry.js";
 import { isRichToolResult, toolResultText } from "./tool-result.js";
@@ -480,6 +480,13 @@ interface PendingRequest {
 }
 
 export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
+  if (windowsCliExecutionBlocked()) {
+    queueMicrotask(() => {
+      input.onEvent({ type: "runtime.error", message: "Codex on Windows requires an OS-enforced secret shield before CLI execution is available.", setup: true });
+      input.onEvent({ type: "turn.completed", ok: false, stopReason: "secret_shield_unavailable" });
+    });
+    return { stop: () => {}, respond: () => "unavailable", sessionId: () => null, settled: () => true };
+  }
   const mcpServers = input.mcpServers ?? {};
   const retryScale = input.retryScale ?? 1;
   const messagePhases = new Map<string, "commentary" | "final_answer">();
