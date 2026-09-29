@@ -119,6 +119,23 @@ it("restores a .50 quarantined OS link without a second local conversation", () 
   expect(storage.readJsonStrict<unknown[]>("continuity-quarantine.json", [])).toHaveLength(1);
   expect(store.restoreQuarantinedWorkspace("bot:a", { workspaceId: "os_x", orgId: binding.orgId, userId: binding.accountId, installationId: binding.installationId })).toBe(false);
 });
+it("retires an already imported duplicate agent link while restoring the original thread", () => {
+  const { storage, store } = fixture();
+  storage.writeJson("continuity-imported-remote.json", [binding.conversationId]);
+  store.link("bot:a", { ...binding, workspaceId: "os_x" });
+  store.capture(message(1, "original outbox"));
+  store.quarantineMismatchedWorkspace("bot:a", "local:instance:workspace");
+  store.link("bot:b", { ...binding, workspaceId: "os_x" });
+  store.capture({ ...message(2, "duplicate outbox"), threadId: "bot:b" });
+  store.link("bot:a", { ...binding, conversationId: "new-conversation", workspaceId: "os_x" });
+  expect(store.restoreQuarantinedWorkspace("bot:a", { workspaceId: "os_x", orgId: binding.orgId,
+    userId: binding.accountId, installationId: binding.installationId })).toBe(true);
+  expect(store.status("bot:a")?.conversationId).toBe(binding.conversationId);
+  expect(store.status("bot:b")).toBeNull();
+  expect(store.pending("bot:a").map(event => event.content)).toEqual(["original outbox", "duplicate outbox"]);
+  expect(store.supersededThreads()).toEqual(["bot:b"]);
+  expect(new ContinuityStore(storage).links()).toHaveLength(1);
+});
 it("refuses sync and cloud calls when a stale link belongs to another OS", async () => {
   const { storage } = fixture();
   const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");

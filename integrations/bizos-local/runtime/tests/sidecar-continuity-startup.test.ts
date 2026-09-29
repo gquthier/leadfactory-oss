@@ -8,12 +8,14 @@ import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { Storage } from "../src/harness/storage.js";
 import { ContinuityStore } from "../src/harness/continuity.js";
+import { BotStore } from "../src/harness/bots.js";
+import { systemClock } from "../src/harness/clock.js";
 
 const runtime = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const script = join(runtime, "dist/sidecar.js");
 const built = existsSync(script) && existsSync(join(runtime, "dist/agency-kit/lib/app.mjs"));
 
-it.skipIf(!built)("starts with an os_x bridge without quarantining its existing link, transcript or outbox", async () => {
+it.skipIf(!built)("preserves an os_x link and retires an imported .50 duplicate on restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "lbz-continuity-startup-"));
   const state = join(root, "state");
   const storage = new Storage(join(state, "runtime"));
@@ -73,6 +75,34 @@ it.skipIf(!built)("starts with an os_x bridge without quarantining its existing 
     expect(reopened.links().some(row => row.link.conversationId === "conversation-duplicate")).toBe(false);
     expect(readFileSync(storage.threadPath("bot:existing"), "utf8")).toBe(before);
     expect(storage.readJsonStrict("continuity-quarantine.json", [])).toEqual([]);
+
+    child.kill("SIGTERM");
+    await new Promise(resolveExit => child!.once("exit", resolveExit));
+    child = undefined;
+    const damaged = new ContinuityStore(storage);
+    damaged.quarantineMismatchedWorkspace("bot:existing", "local:instance:workspace");
+    storage.writeJson("continuity-imported-remote.json", [link.conversationId]);
+    damaged.link("bot:duplicate", link);
+    damaged.link("bot:existing", { ...link, conversationId: "conversation-duplicate" });
+    const bots = new BotStore(storage, systemClock);
+    bots.create({ name: "Original CEO" }, "existing");
+    bots.create({ name: "CEO" }, "duplicate");
+    child = spawn(process.execPath, [script, "serve"], { cwd: runtime, env: {
+      HOME: home, PATH: "/usr/bin:/bin", TMPDIR: root, LOCALBIZOS_SIDECAR_STATE: state,
+      LOCALBIZOS_SIDECAR_DESCRIPTOR: descriptorPath, LOCALBIZOS_NATIVE_COMPUTER_DESCRIPTOR: bridgePath,
+    }, stdio: ["ignore", "pipe", "pipe"] });
+    child.stderr?.on("data", chunk => { logs += chunk.toString(); });
+    const recoveryDeadline = Date.now() + 30_000;
+    while (!existsSync(descriptorPath) && Date.now() < recoveryDeadline && child.exitCode === null)
+      await new Promise(resolveWait => setTimeout(resolveWait, 50));
+    expect(existsSync(descriptorPath), logs).toBe(true);
+    const recovered = new ContinuityStore(storage);
+    expect(recovered.status("bot:existing")?.conversationId).toBe(link.conversationId);
+    expect(recovered.status("bot:duplicate")).toBeNull();
+    expect(recovered.pending("bot:existing").map(event => event.content)).toEqual(["Unsent message"]);
+    expect(recovered.supersededThreads()).toEqual(["bot:duplicate"]);
+    expect(new BotStore(storage, systemClock).get("duplicate")?.archived).toBe(true);
+    expect(readFileSync(storage.threadPath("bot:existing"), "utf8")).toBe(before);
   } finally {
     if (child && child.exitCode === null) {
       child.kill("SIGTERM");

@@ -1222,6 +1222,7 @@ export class CollaborationFacade {
         const identity = await continuity.identity();
         for (const threadId of continuity.store.quarantinedThreads())
           continuity.store.restoreQuarantinedWorkspace(threadId, identity);
+        await archiveSupersededThreads(this.harness);
         const listing = await continuity.list() as { conversations: Array<{
           conversationId: string; agentId: string; audience: string; title: string; localConversationId: string | null; workspaceId?: string;
         }> };
@@ -1270,9 +1271,12 @@ export class CollaborationFacade {
       const [bots, groups, chats] = await Promise.all([
         this.invoke<Bot[]>("lbz:bots:list"), this.invoke<Group[]>("lbz:groups:list"), this.harness.quickChats.list(),
       ]);
+      const superseded = new Set(this.harness.continuity.store.supersededThreads());
       const targets: ThreadTarget[] = [
-        ...bots.filter(bot => !bot.archived && !bot.id.startsWith("qchat_")).map(bot => ({ botId: bot.id })),
-        ...groups.filter(group => !group.archived).map(group => ({ groupId: group.id })),
+        ...bots.filter(bot => !bot.archived && !bot.id.startsWith("qchat_")
+          && !superseded.has(`bot:${bot.id}`)).map(bot => ({ botId: bot.id })),
+        ...groups.filter(group => !group.archived
+          && !superseded.has(`group:${group.id}`)).map(group => ({ groupId: group.id })),
         ...chats.chats.map(chat => ({ chatId: chat.id })),
       ];
       for (const target of targets) {
@@ -3022,6 +3026,15 @@ export async function startLocalHarness(
   }
 }
 
+async function archiveSupersededThreads(harness: LocalBizosHarness): Promise<void> {
+  const retired = new Set(harness.continuity.store.supersededThreads());
+  if (!retired.size) return;
+  for (const bot of await harness.bots.list())
+    if (!bot.archived && retired.has(`bot:${bot.id}`)) await harness.bots.update(bot.id, { archived: true });
+  for (const group of await harness.groups.list())
+    if (!group.archived && retired.has(`group:${group.id}`)) await harness.groups.update(group.id, { archived: true });
+}
+
 async function serve(): Promise<void> {
   privateDirectory(stateRoot);
   privateDirectory(harnessRoot);
@@ -3859,6 +3872,7 @@ async function serve(): Promise<void> {
     if (identity.workspaceId && identity.orgId && identity.userId && identity.installationId) {
       for (const threadId of harness.continuity.store.quarantinedThreads())
         harness.continuity.store.restoreQuarantinedWorkspace(threadId, identity);
+      await archiveSupersededThreads(harness);
       for (const { threadId } of harness.continuity.store.links())
         harness.continuity.store.quarantineMismatchedWorkspace(threadId, identity.workspaceId);
     }

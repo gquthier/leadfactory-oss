@@ -209,6 +209,9 @@ export class ContinuityStore {
     const rows = this.storage.readJsonStrict<Array<{ threadId: string; superseded?: boolean }>>("continuity-quarantine.json", []);
     return [...new Set(rows.filter(row => !row.superseded).map(row => row.threadId))];
   }
+  supersededThreads(): string[] {
+    return this.storage.readJsonStrict<string[]>("continuity-superseded-threads.json", []);
+  }
   /** A .50/.51 startup could quarantine a valid OS link against the local
    * facade id, then attach a duplicate conversation. Restore only a link whose
    * full desktop identity still matches. Preserve any unsent duplicate outbox. */
@@ -226,9 +229,23 @@ export class ContinuityStore {
     if (current && (current.link.workspaceId !== identity.workspaceId
       || current.link.orgId !== identity.orgId || current.link.accountId !== identity.userId
       || current.link.installationId !== identity.installationId)) return false;
+    const imported = new Set(this.storage.readJsonStrict<string[]>("continuity-imported-remote.json", []));
+    const aliases = new Set<string>();
+    if (imported.has(original.link.conversationId)) {
+      for (const row of rows)
+        if (!row.superseded && row.threadId !== threadId && row.conversation.link.conversationId === original.link.conversationId
+          && row.conversation.link.workspaceId === identity.workspaceId) aliases.add(row.threadId);
+      for (const [otherThreadId, conversation] of Object.entries(this.state.conversations))
+        if (otherThreadId !== threadId && conversation.link.conversationId === original.link.conversationId
+          && conversation.link.workspaceId === identity.workspaceId) aliases.add(otherThreadId);
+    }
+    if (Object.entries(this.state.conversations).some(([otherThreadId, conversation]) => otherThreadId !== threadId
+      && conversation.link.conversationId === original.link.conversationId && !aliases.has(otherThreadId))) return false;
     const target = current?.link.conversationId === original.link.conversationId ? structuredClone(current) : original;
-    const donors = [...matching.map(row => row.conversation), ...(current ? [current] : [])]
-      .filter(donor => donor !== target);
+    const aliasRows = rows.filter(row => aliases.has(row.threadId));
+    const aliasCurrent = new Map([...aliases].flatMap(id => this.state.conversations[id] ? [[id, structuredClone(this.state.conversations[id]!)] as const] : []));
+    const donors = [...matching.map(row => row.conversation), ...(current ? [current] : []),
+      ...aliasRows.map(row => row.conversation), ...aliasCurrent.values()];
     for (const donor of donors) {
       const known = new Set(target.events.map(event => event.eventId));
       for (const event of donor.events.filter(event => event.seq === undefined && !known.has(event.eventId))) {
@@ -241,11 +258,24 @@ export class ContinuityStore {
       for (const effect of donor.effects)
         if (!target.effects.some(row => row.id === effect.id)) target.effects.push(effect);
     }
-    this.commit(state => { state.conversations[threadId] = target; });
-    const remaining = rows.filter(row => !matching.includes(row));
+    this.commit(state => {
+      state.conversations[threadId] = target;
+      for (const alias of aliases) {
+        delete state.conversations[alias];
+        for (const [key, binding] of Object.entries(state.bindings)) if (binding.threadId === alias) delete state.bindings[key];
+        for (const [key, value] of Object.entries(state.queued))
+          if (value && typeof value === "object" && (value as { threadId?: unknown }).threadId === alias) delete state.queued[key];
+      }
+    });
+    const remaining = rows.filter(row => !matching.includes(row) && !aliasRows.includes(row));
     if (current && current.link.conversationId !== target.link.conversationId)
       remaining.push({ threadId, workspaceId: current.link.workspaceId!, conversation: structuredClone(current), superseded: true });
+    for (const alias of aliases) {
+      const archived = aliasCurrent.get(alias) ?? aliasRows.filter(row => row.threadId === alias).at(-1)?.conversation;
+      if (archived) remaining.push({ threadId: alias, workspaceId: identity.workspaceId, conversation: structuredClone(archived), superseded: true });
+    }
     this.storage.writeJson("continuity-quarantine.json", remaining);
+    if (aliases.size) this.storage.writeJson("continuity-superseded-threads.json", [...new Set([...this.supersededThreads(), ...aliases])]);
     return true;
   }
   /** Remove only a legacy local QuickChat projection/outbox. The remote
