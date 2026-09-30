@@ -82,6 +82,7 @@ import { ContextReferenceError } from "./harness/context-reference.js";
 import { COMPUTER_TOOL_SPECS, isComputerToolName } from "./computer/tools.js";
 import { BoatError, CloudComputer, CloudComputerError } from "./computer/cloud.js";
 import { RemoteServerComputerBackend } from "./computer/remote-server.js";
+import { HumanSessionError } from "./computer/human-session.js";
 import { Storage } from "./harness/storage.js";
 import { AgencyService } from "./harness/agency.js";
 import { EcommerceService } from "./harness/ecommerce.js";
@@ -2586,6 +2587,20 @@ export class CollaborationFacade {
     }
   }
 
+  /** The desktop reports a Take control session when the person gives the
+   * computer back: `{ startedAt, endedAt?, url? }`. The agent's next turn is
+   * told once. Owner-bearer only, like every panel route. */
+  async computerHumanSession(id: string, raw: unknown): Promise<{ recorded: true }> {
+    try {
+      return await this.harness.computer.recordHumanSession(this.computerBotId(id), raw);
+    } catch (error) {
+      if (error instanceof HumanSessionError) {
+        throw new HttpError(error.status, error.status === 404 ? "not_found" : "invalid_payload", error.message);
+      }
+      throw error;
+    }
+  }
+
   /** The panel names an agent by its public id (`local:<instance>:agent:…`);
    * a bare bot id is accepted too. */
   private computerBotId(id: string): string {
@@ -3364,6 +3379,10 @@ async function serve(): Promise<void> {
       const computerRelease = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/release$/);
       if (computerRelease && method === "POST") {
         return sendJson(response, 200, await facade.computerRelease(computerRelease, await bodyOf(request)));
+      }
+      const computerHumanSession = routeId(url.pathname, /^\/api\/local\/computer\/([^/]+)\/human-session$/);
+      if (computerHumanSession && method === "POST") {
+        return sendJson(response, 200, await facade.computerHumanSession(computerHumanSession, await bodyOf(request)));
       }
       if (method === "GET" && url.pathname === "/api/local/dashboard-summary") return sendJson(response, 200, await facade.localDashboardSummary());
       // The web dashboard link (device-code flow + snapshot push). The device

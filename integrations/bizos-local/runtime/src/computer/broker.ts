@@ -26,6 +26,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { parseComputerActions, settleMs, ComputerActionError } from "./actions.js";
 import type { ComputerManager, ComputerRequester, ComputerRequesterInput } from "./manager.js";
+import { HUMAN_CONTROL_MESSAGE, isHumanControlError } from "./human-session.js";
 import { formatObservation } from "./observe.js";
 import { MAX_ACTIONS } from "./types.js";
 
@@ -159,8 +160,12 @@ export async function handleComputerCall(
     }
     return { status: 400, payload: { ok: false, error: `unknown computer operation ${op || "(missing)"}` } };
   } catch (error) {
+    // The person holding the seat is not a failure to retry around: one
+    // sentence, whichever layer (manager, desktop bridge, cloud seat) said it.
     const message =
-      error instanceof ComputerActionError
+      isHumanControlError(error)
+        ? HUMAN_CONTROL_MESSAGE
+        : error instanceof ComputerActionError
         ? `${error.message} (at most ${MAX_ACTIONS} actions per call)`
         : error instanceof Error
           ? error.message

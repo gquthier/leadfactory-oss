@@ -194,6 +194,7 @@ describe.skipIf(!built)("Desktop-managed entitlement real HTTP boundary", () => 
       ["POST","/api/local/cloud-computer/key",{apiKey:"synthetic"}], ["POST","/api/local/cloud-computer/wake",{}],
       ["POST","/api/local/cloud-computer/desktop",{}], ["GET","/api/local/computer/qa",undefined],
       ["POST","/api/local/computer/qa/setup",{}], ["POST","/api/local/computer/qa/control",{}], ["POST","/api/local/computer/qa/release",{}],
+      ["POST","/api/local/computer/qa/human-session",{startedAt:new Date().toISOString()}],
     ] as const) expect(await api(method,path,body)).toMatchObject({status:503,body:{error:{code:"computer_disabled"}}});
     expect((await api("GET","/api/local/cloud-computer",undefined,"")).status).toBe(401);
     expect((await api("POST","/api/internal/local-team/cloud",{tool:"cloud_computer_wake"},"forged")).status).toBe(401);

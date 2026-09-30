@@ -30,7 +30,10 @@ describe("slim local brief", () => {
   it("fits the budget, keeps the promises that matter and drops internal ids", () => {
     const brief = buildLocalBrief({ bot: BOT, orgName: "Acme", manifest: MANIFEST, hasComputer: true, teamTools: true });
     const before = buildPersonaPrompt({ bot: BOT, orgName: "Acme", since: [], roster: [BOT], sharedFolders: [MANIFEST.workspaceDir], hasComputer: true, localArchitecture: MANIFEST });
-    expect(brief.length).toBeLessThan(3900);
+    // .54: the computer line now says the person can Take control of it and
+    // that their logins stay the agent's (~100 chars more than before).
+    expect(brief.length).toBeLessThan(4100);
+    expect(buildLocalBrief({ bot: BOT, orgName: "Acme", manifest: MANIFEST, hasComputer: true, computerKind: "cloud", teamTools: true }).length).toBeLessThan(4100);
     // The .52 confidentiality line is in both; it does not count for slimness.
     const shared = PROMPT_CONFIDENTIALITY.length;
     expect(before.length - shared).toBeGreaterThan((brief.length - shared) * 3);

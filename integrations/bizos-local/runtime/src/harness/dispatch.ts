@@ -43,6 +43,7 @@ import {
   type TaskCheckpoint,
 } from "./task.js";
 import { loadMemory } from "./memory.js";
+import { humanSessionContextLine, type ComputerKind, type HumanSessionNote } from "../computer/human-session.js";
 import type { Clock } from "./clock.js";
 import type { BotStore } from "./bots.js";
 import {
@@ -290,6 +291,15 @@ export interface DispatchDependencies {
    * says nothing about a computer — a bot told it has tools that are not
    * mounted spends its turn discovering that. */
   hasComputer?(bot: Bot): boolean;
+  /** Which computer it is (the persistent cloud one, or the browser on this
+   * Mac): only the words the agent is told change. Absent ⇒ local. */
+  computerKind?(bot: Bot): ComputerKind;
+  /** The person drove this agent's computer (Take control) since its last
+   * turn: shown once to its next answering turn, then consumed. */
+  humanComputerSessions?: {
+    peek(botId: string): HumanSessionNote | null;
+    consume(botId: string, seen: HumanSessionNote): boolean;
+  };
   localArchitecture?(input: { bot: Bot; threadId: string; executionPolicy?: TurnExecutionPolicy }): LocalArchitectureManifest;
   /** Raised when a run ends and the window is not focused. */
   onRunFinished?(input: { bot: Bot; outcome: "completed" | "failed"; preview: string }): void;
@@ -2032,15 +2042,26 @@ export class Dispatcher {
     const ephemeralCli = provider === "codex" || provider === "claude";
     const resumeCursor = linked || native || ephemeralCli || (provider === "cursor" && Object.keys(mountedServers).length > 0) ? null :
       this.cursors[policyKey] === policyFingerprint ? (this.cursors[cursorKey] ?? null) : null;
+    // The person used this agent's computer themselves since its last turn:
+    // one line for the next turn that answers them (not a routine's), and
+    // only when the computer is mounted — the line tells it to look there.
+    const humanSession = !threadId.startsWith("chat:") && !queued.routineId && !queued.heartbeat
+      && this.computerMounted(bot, toolSurface)
+      ? this.deps.humanComputerSessions?.peek(bot.id) ?? null : null;
+    const computerNote = humanSession
+      ? humanSessionContextLine(humanSession, { kind: this.deps.computerKind?.(bot) ?? "local", now: this.deps.clock.now() })
+      : undefined;
     // Codex and Claude get a fresh native session and full portable replay.
     // Cursor retains its policy-bound native continuity.
     const local = linked || native || threadId.startsWith("chat:") ? null : this.localPromptFor(bot, queued, {
       provider: provider as PlanProvider, tools: toolSurface, excludeMessageId: message.id, resumeCursor, cursorKey, writableRoots, skipPermissions,
+      ...(computerNote ? { computerNote } : {}),
     });
     const basePersona = local ? local.system : this.personaFor(bot, threadId, {
       replayHistory: !linked && !resumeCursor, provider, tools: toolSurface, excludeMessageId: message.id,
       ...(external?.kind === "api" ? { apiLabel: external.label } : {}),
       ...(queued.executionPolicy ? { executionPolicy: queued.executionPolicy } : {}),
+      ...(computerNote ? { computerNote } : {}),
     });
 
     const persona = [basePersona, portableContext].filter(Boolean).join("\n\n");
@@ -2199,6 +2220,8 @@ export class Dispatcher {
     }
     turn.handle = handle;
     if (turn.discarded) { handle.stop(); return; }
+    // Given to a turn that started: said once, then gone.
+    if (humanSession) this.deps.humanComputerSessions?.consume(bot.id, humanSession);
     if (turn.cancelled) handle.stop();
     if (plan) {
       this.deps.pinPlan?.(cursorKey, plan.id);
@@ -2313,6 +2336,12 @@ export class Dispatcher {
     return true;
   }
 
+  /** This bot has a computer and this turn mounts its tools. */
+  private computerMounted(bot: Bot, tools: string[]): boolean {
+    return Boolean(this.deps.hasComputer?.(bot))
+      && tools.some((tool) => tool === "mcp:bizos_computer" || tool === "mcp:local_team_actions" || tool === "tool:computer_observe");
+  }
+
   /**
    * The local prompt, split by what the provider session already holds.
    *
@@ -2335,6 +2364,7 @@ export class Dispatcher {
     cursorKey: string;
     writableRoots: string[];
     skipPermissions: boolean;
+    computerNote?: string;
   }): { system: string; resumedSystem?: string; developerInstructions?: string; turnPrefix: string; sessionContext: SessionContext } | null {
     const { threadId } = queued;
     const architecture = this.deps.localArchitecture?.({
@@ -2382,9 +2412,8 @@ export class Dispatcher {
       } } : {}),
       ...(shared.folders.length ? { grantedFolders: shared.folders } : {}),
       ...(shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(this.deps.hasComputer?.(bot)
-        && runtime.tools.some((tool) => tool === "mcp:bizos_computer" || tool === "mcp:local_team_actions" || tool === "tool:computer_observe")
-        ? { hasComputer: true } : {}),
+      ...(this.computerMounted(bot, runtime.tools)
+        ? { hasComputer: true, computerKind: this.deps.computerKind?.(bot) ?? "local" } : {}),
       teamTools: runtime.tools.some((tool) => tool === "mcp:local_team_actions" || tool === "tool:checkpoint_task"),
       memory,
     });
@@ -2399,6 +2428,7 @@ export class Dispatcher {
       ...(task ? { task } : {}),
       fresh,
       ephemeralReplay,
+      ...(runtime.computerNote ? { computerNote: runtime.computerNote } : {}),
     }), onboardingNote].filter(Boolean).join("\n\n");
 
     const key = runtime.cursorKey;
@@ -2471,6 +2501,7 @@ export class Dispatcher {
     tools: string[];
     excludeMessageId: string;
     executionPolicy?: TurnExecutionPolicy;
+    computerNote?: string;
   }): string {
     if (threadId.startsWith("chat:")) {
       const ephemeralReplay = runtime.provider === "codex" || runtime.provider === "claude";
@@ -2526,9 +2557,9 @@ export class Dispatcher {
       sharedFolders: [this.deps.workspaceFor(bot)],
       ...(!nativeProvider(runtime.provider) && shared.folders.length ? { grantedFolders: shared.folders } : {}),
       ...(!nativeProvider(runtime.provider) && shared.fullDiskRead ? { fullDiskRead: true } : {}),
-      ...(this.deps.hasComputer?.(bot)
-        && runtime.tools.some((tool) => tool === "mcp:bizos_computer" || tool === "mcp:local_team_actions" || tool === "tool:computer_observe")
-        ? { hasComputer: true } : {}),
+      ...(this.computerMounted(bot, runtime.tools)
+        ? { hasComputer: true, computerKind: this.deps.computerKind?.(bot) ?? "local",
+          ...(runtime.computerNote ? { computerNote: runtime.computerNote } : {}) } : {}),
       ...(architecture ? { localArchitecture: {
         ...architecture,
         sandbox: settings.local.permissions === "skip-all" ? "danger-full-access" as const : settings.local.sandbox,

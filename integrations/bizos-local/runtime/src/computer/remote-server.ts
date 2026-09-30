@@ -3,6 +3,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ContinuityTransport } from "../continuity-bridge.js";
 import type { CapturedFrame } from "./host.js";
+import { ComputerInHumanControlError, isHumanControlError } from "./human-session.js";
 import type {
   ComputerAction, ComputerActionResult, ComputerDownloadResult, ComputerObservation,
   ComputerState, ManagedComputerBackend,
@@ -68,12 +69,19 @@ export class RemoteServerComputerBackend implements ManagedComputerBackend {
   private async call(botId: string, op: string, extra: Record<string, unknown> = {}): Promise<ServerResult> {
     const orgId = this.orgId();
     if (!orgId) throw new Error("Link this workspace to a BizOS organization to use Computer.");
-    return this.transport<ServerResult>(`computer/${op}`, {
-      orgId,
-      workspaceId: serverComputerId("workspace", this.workspaceId()),
-      agentId: serverComputerId("agent", botId),
-      ...extra,
-    });
+    try {
+      return await this.transport<ServerResult>(`computer/${op}`, {
+        orgId,
+        workspaceId: serverComputerId("workspace", this.workspaceId()),
+        agentId: serverComputerId("agent", botId),
+        ...extra,
+      });
+    } catch (error) {
+      // The person holds the seat (Take control from the panel, straight to
+      // the server): say so, not "request refused (409)".
+      if (isHumanControlError(error)) throw new ComputerInHumanControlError();
+      throw error;
+    }
   }
 
   private remember(botId: string, result: ServerResult): ComputerObservation {

@@ -37,6 +37,7 @@ import { computerCallBody, isComputerToolName } from "../computer/tools.js";
 import { richToolResult, type RichToolResult } from "./tool-result.js";
 import type { ComputerHost } from "../computer/host.js";
 import { ComputerManager, type ComputerEvent } from "../computer/manager.js";
+import { HUMAN_SESSIONS_FILE, HumanSessionError, HumanSessionNotes, parseHumanSession, type ComputerKind } from "../computer/human-session.js";
 import { NativeComputerBackend } from "../computer/native.js";
 import type { ComputerState, ManagedComputerBackend } from "../computer/types.js";
 import { systemClock, type Clock } from "./clock.js";
@@ -562,6 +563,8 @@ export class LocalBizosHarness {
    * one is keyed by nothing but its age. */
   private cursorCatalog: { at: number; value: ModelCatalog } | null = null;
   private readonly computerManager: ComputerManager;
+  /** Take control sessions the agent has not been told about yet. */
+  private readonly humanSessions: HumanSessionNotes;
   private readonly boatComputer: BoatComputerBackend | null = null;
   private readonly computerListeners = new Set<(event: ComputerEvent) => void>();
   private computerBroker: ComputerBroker | null = null;
@@ -575,6 +578,10 @@ export class LocalBizosHarness {
     this.clock = options.clock ?? systemClock;
     this.storage = new Storage(options.rootDir);
     this.continuity = new ConversationContinuity(this.storage, options.continuityTransport);
+    this.humanSessions = new HumanSessionNotes({
+      read: () => this.storage.readJson<unknown>(HUMAN_SESSIONS_FILE, {}),
+      write: (notes) => this.storage.writeJson(HUMAN_SESSIONS_FILE, notes),
+    });
     this.storageRootRealPath = realpathSync(this.storage.layout.root);
     this.settingsStore = new SettingsStore(
       this.storage,
@@ -731,6 +738,8 @@ export class LocalBizosHarness {
       ...(options.fetchLinkPreview ? { fetchLinkPreview: options.fetchLinkPreview } : {}),
       // Only a build with a machine tells its bots they have one.
       hasComputer: bot => !bot.id.startsWith("qchat_") && this.computerToolsAvailable(),
+      computerKind: () => this.computerKind(),
+      humanComputerSessions: this.humanSessions,
       sharedAccess: (bot) => ({
         folders: this.effectiveSharedFolders(bot),
         fullDiskRead: this.settingsStore.get().access.fullDiskRead,
@@ -3349,6 +3358,7 @@ export class LocalBizosHarness {
       // Its computer too: the browser is destroyed and the fact that it had one
       // is forgotten, so a reused id cannot inherit a logged-in browser.
       this.computerManager.forget(id);
+      this.humanSessions.forget(id);
       if (bot) {
         this.storage.removeDirectory(join(this.storage.layout.workspacesDir, safeFileName(bot.id)));
         // Its folder in the second brain is not erased: it holds notes the
@@ -3781,7 +3791,25 @@ export class LocalBizosHarness {
     /** The latest full frame of this agent's screen (the cloud computer's is
      * the last one an action produced — no round trip). */
     frame: async (botId: string) => this.computerManager.frame(botId),
+    /**
+     * The person gave the computer back after driving it themselves (Take
+     * control, from the panel). That went straight to the machine, so this
+     * report is the only way the agent learns of it: its next answering turn
+     * gets one line, then the note is consumed.
+     */
+    recordHumanSession: async (botId: string, raw: unknown): Promise<{ recorded: true }> => {
+      const bot = this.botStore.get(botId);
+      if (!bot || bot.id.startsWith("qchat_")) throw new HumanSessionError(404, "Agent not found.");
+      this.humanSessions.record(bot.id, parseHumanSession(raw, this.clock.now().getTime()));
+      return { recorded: true };
+    },
   };
+
+  /** Which computer an agent gets right now, in the words it is told: the
+   * persistent cloud machine, or the browser on this Mac. */
+  computerKind(): ComputerKind {
+    return this.computerManager?.backendKind() === "container" ? "cloud" : "local";
+  }
 
   /** Whether this build can give its agents a computer right now: the
    * native one (Electron), or a configured cloud computer. */
