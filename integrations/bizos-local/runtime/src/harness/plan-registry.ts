@@ -116,7 +116,10 @@ export class PlanRegistry {
                 : null,
           }
         : emptyRouting();
-    return { plans, routing };
+    const dismissedMachine = Array.isArray(raw.dismissedMachine)
+      ? [...new Set(raw.dismissedMachine.filter((family): family is PlanProvider => family === "codex" || family === "claude" || family === "cursor"))]
+      : [];
+    return { plans, routing, ...(dismissedMachine.length ? { dismissedMachine } : {}) };
   }
 
   private persist(): void {
@@ -198,6 +201,27 @@ export class PlanRegistry {
     this.cached.plans.push(plan);
     this.persist();
     return { ...plan };
+  }
+
+  /** The owner disconnected this family's machine account: stop re-detecting it. */
+  dismissMachine(provider: PlanProvider): void {
+    const current = new Set(this.cached.dismissedMachine ?? []);
+    if (current.has(provider)) return;
+    current.add(provider);
+    this.cached.dismissedMachine = [...current];
+    this.persist();
+  }
+
+  /** The owner connected this family again: detection may import it. */
+  undismissMachine(provider: PlanProvider): void {
+    if (!this.cached.dismissedMachine?.includes(provider)) return;
+    this.cached.dismissedMachine = this.cached.dismissedMachine.filter((family) => family !== provider);
+    if (!this.cached.dismissedMachine.length) delete this.cached.dismissedMachine;
+    this.persist();
+  }
+
+  machineDismissed(provider: PlanProvider): boolean {
+    return this.cached.dismissedMachine?.includes(provider) === true;
   }
 
   remove(id: string): boolean {
@@ -297,9 +321,14 @@ export class PlanRegistry {
    * (no secret copy). Idempotent when plans already exist.
    */
   seedFromMachine(input: SeedFromMachineInput): ConnectedPlan[] {
-    if (this.cached.plans.length > 0) return this.list();
+    // Per family since .54: a Mac that signs in to Claude Code after Codex was
+    // imported gets its Claude row too. A family already listed, or one the
+    // owner disconnected, is left alone.
+    const firstRun = this.cached.plans.length === 0;
+    const wanted = (provider: PlanProvider): boolean =>
+      !this.machineDismissed(provider) && !this.cached.plans.some((plan) => plan.provider === provider);
     const created: ConnectedPlan[] = [];
-    if (input.codexAuthenticated) {
+    if (input.codexAuthenticated && wanted("codex")) {
       created.push(
         this.createReferencing({
           provider: "codex",
@@ -308,11 +337,10 @@ export class PlanRegistry {
           status: "connected",
           ...(input.codexEmailHint ? { emailHint: input.codexEmailHint } : {}),
           createdAt: input.nowIso,
-          settingsVisible: false,
         }),
       );
     }
-    if (input.claudeAuthenticated) {
+    if (input.claudeAuthenticated && wanted("claude")) {
       created.push(
         this.createReferencing({
           provider: "claude",
@@ -321,11 +349,10 @@ export class PlanRegistry {
           status: "connected",
           ...(input.claudeEmailHint ? { emailHint: input.claudeEmailHint } : {}),
           createdAt: input.nowIso,
-          settingsVisible: false,
         }),
       );
     }
-    if (input.cursorAuthenticated) {
+    if (input.cursorAuthenticated && wanted("cursor")) {
       created.push(
         this.createReferencing({
           provider: "cursor",
@@ -334,11 +361,10 @@ export class PlanRegistry {
           status: "connected",
           ...(input.cursorEmailHint ? { emailHint: input.cursorEmailHint } : {}),
           createdAt: input.nowIso,
-          settingsVisible: false,
         }),
       );
     }
-    if (created[0] && !this.cached.routing.activePlanId) {
+    if (firstRun && created[0] && !this.cached.routing.activePlanId) {
       this.cached.routing.activePlanId = created[0].id;
       this.persist();
     }

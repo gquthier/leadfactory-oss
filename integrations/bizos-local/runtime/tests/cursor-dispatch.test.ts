@@ -85,7 +85,9 @@ describe("Cursor dispatch MCP surface", () => {
       mode: "local",
       local: { provider: "cursor", activePlanId: "pln_cursor_fixture" },
     });
-    expect(await harness.plans.list()).toHaveLength(1);
+    // .54 detects each family of this Mac on its own: a developer machine's
+    // Codex or Claude login may add a row here. The Cursor fixture is the one.
+    expect((await harness.plans.list()).filter((plan) => plan.provider === "cursor")).toHaveLength(1);
     const first = await harness.bots.create({ name: "Alpha" });
     const second = await harness.bots.create({ name: "Beta" });
 

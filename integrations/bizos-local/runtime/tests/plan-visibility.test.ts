@@ -11,7 +11,9 @@ afterEach(() => {
 });
 
 describe("plans shown in Simple Settings", () => {
-  it("hides a machine-discovered account until the owner adds it, across restarts", () => {
+  // Gauthier, 2026-09-30 (.54): the accounts this Mac is signed in to are
+  // shown at once, with their status; "Add Provider" is no longer needed.
+  it("shows a machine-discovered account at once, across restarts", () => {
     const root = mkdtempSync(join(tmpdir(), "bizos-plan-visibility-"));
     roots.push(root);
     const storage = new Storage(root);
@@ -22,7 +24,8 @@ describe("plans shown in Simple Settings", () => {
       codexAuthenticated: true,
     });
     expect(seeded).toHaveLength(1);
-    expect(plans.publicList()[0]?.settingsVisible).toBe(false);
+    expect(plans.publicList()[0]?.settingsVisible).not.toBe(false);
+    expect(new PlanRegistry(storage).publicList()[0]?.settingsVisible).not.toBe(false);
 
     plans.update(seeded[0]!.id, { settingsVisible: true });
     expect(new PlanRegistry(storage).publicList()[0]?.settingsVisible).toBe(true);

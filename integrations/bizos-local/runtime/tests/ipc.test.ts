@@ -116,6 +116,11 @@ function fakeHarness() {
       setInference: record("runtime.setInference", { mode: "local" }),
       setPermissions: record("runtime.setPermissions", { mode: "local" }),
     },
+    smartRouting: {
+      state: record("smartRouting.state", { enabled: false }),
+      configure: record("smartRouting.configure", { enabled: true }),
+      decisions: record("smartRouting.decisions", []),
+    },
     plans: {
       list: record("plans.list", []),
       refreshUsage: record("plans.refreshUsage", undefined),
@@ -409,6 +414,9 @@ describe("handlers", () => {
       "lbz:inference:test": ["prv_abc123def456"],
       "lbz:runtime:selectModel": [{ scope: { kind: "workspace" }, selection: { source: "plan", planId: "pln_test_abc123", model: "" } }],
       "lbz:runtime:setInference": [{ source: "provider", providerId: "prv_abc123def456" }],
+      "lbz:smart:state": [],
+      "lbz:smart:configure": [{ enabled: true, preference: "economy" }],
+      "lbz:smart:decisions": [20],
       "lbz:runtime:setPermissions": [{ permissions: "ask" }],
       "lbz:brain:roots": [],
       "lbz:brain:scan": ["workspaces"],

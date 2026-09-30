@@ -213,6 +213,8 @@ interface CollaborationMessage {
    * reply, and one proposal the person accepts or changes. Absent otherwise. */
   quickReplies?: string[];
   proposal?: { kind: "company-name"; value: string };
+  /** Additive (2026-09-30): the model "Smart choice" picked for this reply. */
+  modelRoute?: { label: string; level: "simple" | "medium" | "hard"; family: "codex" | "claude" };
 }
 
 class HttpError extends Error {
@@ -1070,6 +1072,8 @@ export class CollaborationFacade {
     const askBlock = [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "ask" }> => block.kind === "ask");
     const quickReplies = message.role === "bot" ? [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "quick_replies" }> => block.kind === "quick_replies")?.choices : undefined;
     const proposal = message.role === "bot" ? [...publicBlocks].reverse().find((block): block is Extract<MessageBlock, { kind: "proposal" }> => block.kind === "proposal") : undefined;
+    // "Smart choice" ran this reply: one grey line names the model it picked.
+    const modelRoute = message.role === "bot" && message.runId ? this.harness.smartRouting?.noteForRun(message.runId) ?? null : null;
     return {
       id: this.messageId(message.id),
       threadId: publicThreadId,
@@ -1091,6 +1095,7 @@ export class CollaborationFacade {
       ...(askBlock ? { ask: askOf(askBlock) } : {}),
       ...(quickReplies?.length ? { quickReplies } : {}),
       ...(proposal ? { proposal: { kind: proposal.proposalKind, value: proposal.value } } : {}),
+      ...(modelRoute ? { modelRoute } : {}),
     };
   }
 
@@ -1825,14 +1830,16 @@ export class CollaborationFacade {
 
   async localRuntime() {
     void this.invoke("lbz:plans:refreshUsage").catch(() => undefined);
-    const [settings, plans, models, tools, inference] = await Promise.all([
+    const [settings, plans, models, tools, inference, smartRouting] = await Promise.all([
       this.invoke<RuntimeSettings>("lbz:runtime:getSettings"), this.invoke("lbz:plans:list"),
       this.invoke("lbz:runtime:models"), this.invoke("lbz:runtime:toolsStatus"),
       this.invoke<{ providers: unknown[]; presets: unknown[] }>("lbz:inference:list"),
+      this.invoke("lbz:smart:state").catch(() => null),
     ]);
     const source = settings.local.inferenceProviderId ? "provider" : settings.local.activePlanId ? "plan" : "auto";
     return {
       mode: "local-harness", backendMode: "local", settings, plans, models, tools,
+      ...(smartRouting ? { smartRouting } : {}),
       providers: {
         supported: LOCAL_PROVIDERS,
         recruitment: { codex: true, claude: true, cursor: true, ollama: true },
@@ -1883,6 +1890,12 @@ export class CollaborationFacade {
     const model = requiredString(input.model, "model", 120);
     return this.invoke("lbz:runtime:setSettings", [{ mode: "local", local: { model } }]);
   }
+  smartRouting() { return this.invoke("lbz:smart:state"); }
+  async configureSmartRouting(raw: unknown) {
+    const input = objectBody(raw, ["enabled", "preference", "apiKey", "preferredFamily"]);
+    return this.invoke("lbz:smart:configure", [input]);
+  }
+  smartDecisions(limit: number) { return this.invoke("lbz:smart:decisions", [limit]); }
   inferenceProviders() { return this.invoke("lbz:inference:list"); }
   async addInferenceProvider(raw: unknown) { return this.invoke("lbz:inference:add", [raw]); }
   async updateInferenceProvider(id: string, raw: unknown) { return this.invoke("lbz:inference:update", [id, raw]); }
@@ -3511,6 +3524,13 @@ async function serve(): Promise<void> {
       if (method === "POST" && url.pathname === "/api/local/model-selection") return sendJson(response, 200, await facade.selectModel(await bodyOf(request)));
       if (method === "POST" && url.pathname === "/api/local/runtime/inference") {
         return sendJson(response, 200, { settings: await facade.setInference(await bodyOf(request)) });
+      }
+      if (method === "GET" && url.pathname === "/api/local/smart-routing") {
+        const limit = Number(url.searchParams.get("limit") ?? "20");
+        return sendJson(response, 200, { state: await facade.smartRouting(), decisions: await facade.smartDecisions(Number.isInteger(limit) ? limit : 20) });
+      }
+      if (method === "POST" && url.pathname === "/api/local/smart-routing") {
+        return sendJson(response, 200, { state: await facade.configureSmartRouting(await bodyOf(request)) });
       }
       if (method === "POST" && url.pathname === "/api/local/runtime/model") {
         return sendJson(response, 200, { settings: await facade.setModel(await bodyOf(request)) });

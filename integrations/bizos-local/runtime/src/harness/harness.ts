@@ -71,6 +71,11 @@ import {
 } from "./mcp-mount.js";
 import { PlanRegistry, MAX_PLAN_LABEL } from "./plan-registry.js";
 import { failoverCooldownUntil, failoverPlan as routeFailover, isPlanHealthy, resolvePlan } from "./plan-router.js";
+import {
+  chooseCandidate, classifyTurn, isSmartPreference, levelForScore, modelForLevel,
+  MAX_SMART_DECISIONS, SMART_DECISIONS_FILE, SMART_KEY_FILE, TYPESAFE_KEY,
+  type CatalogOption, type SmartCandidate, type SmartDecision, type SmartDecisionRecord, type SmartFamily, type SmartPreference,
+} from "./smart-routing.js";
 import type { PlanProvider, PublicPlan } from "./plan-types.js";
 import { RoutineStore } from "./routines.js";
 import { RunStore } from "./runs.js";
@@ -309,6 +314,8 @@ export interface HarnessOptions {
   deniedDirs?: string[];
   /** Paths no agent command may read, per provider turn (`secret-shield.ts`). */
   protectedPaths?: DispatchDependencies["protectedPaths"];
+  /** Test seam: the `fetch` "Smart choice" asks TypeSafe with. */
+  smartFetch?: typeof fetch;
   /** Test seam handed straight to the dispatcher. */
   startTurn?: DispatchDependencies["startTurn"];
   startOpenAiTurn?: DispatchDependencies["startOpenAiTurn"];
@@ -726,6 +733,8 @@ export class LocalBizosHarness {
         options.onLocalRunStopped?.(runId);
       },
       workspaceFor: (bot) => this.workspaceFor(bot),
+      smartRoute: (input) => this.decideSmartRoute(input),
+      recordSmartRoute: (input) => this.recordSmartRoute(input),
       ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
       ...(options.linkPreviews !== undefined ? { linkPreviews: options.linkPreviews } : {}),
       ...(options.fetchLinkPreview ? { fetchLinkPreview: options.fetchLinkPreview } : {}),
@@ -1077,8 +1086,25 @@ export class LocalBizosHarness {
 
   /** Import ~/.codex, ~/.claude and the machine's Cursor account as
    * connected plans when the registry is empty. */
+  /** When each family was last probed for a machine account (ms). */
+  private machineProbeAt: Partial<Record<"codex" | "claude", number>> = {};
+
   private async seedPlansFromMachine(): Promise<void> {
-    if (this.planRegistry.list().length > 0) return;
+    // Per family (.54): the owner sees every account this Mac is signed in to
+    // without adding it by hand. A family already listed, or disconnected by
+    // the owner, is not probed; a family that was not signed in is probed
+    // again at most once a minute (Settings refreshes often).
+    const nowMs = this.clock.now().getTime();
+    const due = (family: "codex" | "claude"): boolean =>
+      !this.planRegistry.machineDismissed(family) &&
+      !this.planRegistry.list().some((plan) => plan.provider === family) &&
+      nowMs - (this.machineProbeAt[family] ?? -Infinity) >= 60_000;
+    const probeCodex = due("codex");
+    const probeClaude = due("claude");
+    if (!probeCodex && !probeClaude) return;
+    if (probeCodex) this.machineProbeAt.codex = nowMs;
+    if (probeClaude) this.machineProbeAt.claude = nowMs;
+    const wasEmpty = this.planRegistry.list().length === 0;
     const env = this.environment();
     const home = this.homeDir;
     // In PARALLEL: this runs inside `start()`, before the window is usable,
@@ -1092,13 +1118,17 @@ export class LocalBizosHarness {
       }
     };
     const [codex, claude] = await Promise.all([
-      settle(probeCodexStatus(undefined, env, undefined, { packaged: this.options.packaged, managedRoot: this.managedCliRoot() })),
-      settle(
-        probeClaudeStatus(undefined, env, undefined, {
-          packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
-          configDir: join(home, ".claude"),
-        }),
-      ),
+      probeCodex
+        ? settle(probeCodexStatus(undefined, env, undefined, { packaged: this.options.packaged, managedRoot: this.managedCliRoot() }))
+        : Promise.resolve(null),
+      probeClaude
+        ? settle(
+            probeClaudeStatus(undefined, env, undefined, {
+              packaged: this.options.packaged, managedRoot: this.managedCliRoot(),
+              configDir: join(home, ".claude"),
+            }),
+          )
+        : Promise.resolve(null),
     ]);
     const claudeEmailHint = claude?.emailHint;
     this.planRegistry.seedFromMachine({
@@ -1108,8 +1138,8 @@ export class LocalBizosHarness {
       claudeAuthenticated: claude?.found === true && claude.authenticated === true,
       ...(claudeEmailHint ? { claudeEmailHint } : {}),
     });
-    const active = this.planRegistry.getActive();
-    if (active) {
+    const active = wasEmpty ? this.planRegistry.getActive() : null;
+    if (active && this.settingsStore.get().local.smart?.enabled !== true) {
       this.settingsStore.set({
         local: { activePlanId: active.id, provider: active.provider },
       });
@@ -1133,7 +1163,7 @@ export class LocalBizosHarness {
   private importMachineCursorPlan(): void {
     if (this.cursorSeed) return;
     this.cursorSeed = (async () => {
-      if (this.planRegistry.list().some((plan) => plan.provider === "cursor")) return;
+      if (this.planRegistry.machineDismissed("cursor") || this.planRegistry.list().some((plan) => plan.provider === "cursor")) return;
       const status = await probeCursorStatus(undefined, this.environment(), undefined, {
         packaged: this.options.packaged,
       });
@@ -1144,7 +1174,6 @@ export class LocalBizosHarness {
         label: "Cursor",
         homePath: join(this.homeDir, ".cursor"),
         status: "connected",
-        settingsVisible: false,
         ...(status.emailHint ? { emailHint: status.emailHint } : {}),
         createdAt: this.clock.nowIso(),
       });
@@ -1360,6 +1389,183 @@ export class LocalBizosHarness {
     return change;
   }
 
+  // ── "Smart choice" (Choix intelligent) ─────────────────────────────────
+  //
+  // Local plans only. The TypeSafe key is the owner's own, stored 0600 next
+  // to `providers.json` and never read back by anything but the classifier.
+
+  private smartLog: SmartDecisionRecord[] | null = null;
+
+  /** The settings patch that turns the mode off and keeps the preference. */
+  private smartOff(): { smart?: { enabled: false; preference: SmartPreference } } {
+    const current = this.settingsStore.get().local.smart;
+    return current?.enabled ? { smart: { enabled: false, preference: current.preference } } : {};
+  }
+
+  private smartKey(): string | null {
+    try {
+      const raw = this.storage.readJson<{ apiKey?: unknown } | null>(SMART_KEY_FILE, null);
+      return typeof raw?.apiKey === "string" && TYPESAFE_KEY.test(raw.apiKey) ? raw.apiKey : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private smartDecisions(): SmartDecisionRecord[] {
+    if (!this.smartLog) {
+      try {
+        const raw = this.storage.readJson<{ decisions?: unknown } | null>(SMART_DECISIONS_FILE, null);
+        this.smartLog = Array.isArray(raw?.decisions)
+          ? (raw!.decisions as SmartDecisionRecord[]).filter((row) => row && typeof row.runId === "string" && typeof row.label === "string").slice(-MAX_SMART_DECISIONS)
+          : [];
+      } catch {
+        this.smartLog = [];
+      }
+    }
+    return this.smartLog;
+  }
+
+  /** Healthy Codex and Claude plans, with what their CLI said about usage. */
+  private smartCandidates(): SmartCandidate[] {
+    const nowMs = this.clock.now().getTime();
+    return this.planRegistry.list().flatMap((plan) => {
+      if ((plan.provider !== "codex" && plan.provider !== "claude") || !isPlanHealthy(plan, nowMs)) return [];
+      const windows = plan.usage?.windows ?? [];
+      const wide = windows.filter((window) => !window.limitName);
+      const pool = wide.length ? wide : windows;
+      const usedPct = pool.length ? Math.max(...pool.map((window) => window.usedPct)) : null;
+      return [{
+        planId: plan.id,
+        family: plan.provider as SmartFamily,
+        priority: plan.priority,
+        usageReached: plan.usage?.reached === true || (usedPct !== null && usedPct >= 100),
+        usedPct,
+      }];
+    });
+  }
+
+  /** The plan's catalog when it answers quickly, the shipped floor otherwise
+   * (the lookup keeps running and warms the cache for the next turn). */
+  private async smartCatalog(family: SmartFamily, planId: string): Promise<{ options: CatalogOption[]; source: "live" | "static" }> {
+    const floor = family === "claude" ? STATIC_CLAUDE_MODELS : STATIC_CODEX_MODELS;
+    const staticCatalog = { options: floor.options.map((option) => ({ ...option, isDefault: option.id === floor.default })), source: "static" as const };
+    const lookup = this.modelsFor(family, planId).then(
+      (response) => ({
+        options: response.models.map((row) => ({ id: row.id, label: row.label, ...(row.isDefault ? { isDefault: true } : {}) })),
+        source: response.source === "live" ? ("live" as const) : ("static" as const),
+      }),
+      () => staticCatalog,
+    );
+    const timer = new Promise<typeof staticCatalog>((resolve) => { const handle = setTimeout(() => resolve(staticCatalog), 800); handle.unref?.(); });
+    const catalog = await Promise.race([lookup, timer]);
+    return catalog.options.length ? catalog : staticCatalog;
+  }
+
+  private async decideSmartRoute(input: { threadId: string; runId: string; text: string; attachments: number; origin: "owner" | "system" }): Promise<SmartDecision | null> {
+    const local = this.settingsStore.get().local;
+    if (local.smart?.enabled !== true) return null;
+    const candidate = chooseCandidate(this.smartCandidates(), local.provider ?? null);
+    if (!candidate) return null;
+    const apiKey = input.origin === "owner" ? this.smartKey() : null;
+    const [classification, catalog] = await Promise.all([
+      classifyTurn({
+        text: input.text,
+        attachments: input.attachments,
+        apiKey,
+        ...(this.options.smartFetch ? { fetchImpl: this.options.smartFetch } : {}),
+      }),
+      this.smartCatalog(candidate.family, candidate.planId),
+    ]);
+    const preference = local.smart.preference;
+    const level = levelForScore(classification.score, preference);
+    const model = modelForLevel(candidate.family, level, catalog.options);
+    if (!model) return null;
+    const fallback = input.origin === "system" ? "not_owner_text" : classification.fallback;
+    return {
+      planId: candidate.planId,
+      family: candidate.family,
+      model: model.model,
+      label: model.label,
+      ...(model.effort ? { effort: model.effort } : {}),
+      level,
+      score: classification.score,
+      preference,
+      source: classification.source,
+      reason: classification.reason,
+      ...(fallback ? { fallback } : {}),
+      ...(classification.confidence !== undefined ? { confidence: classification.confidence } : {}),
+      ...(classification.latencyMs !== undefined ? { latencyMs: classification.latencyMs } : {}),
+      ...(classification.inputTokens !== undefined ? { inputTokens: classification.inputTokens } : {}),
+      catalog: catalog.source,
+    };
+  }
+
+  private recordSmartRoute(input: { runId: string; threadId: string; decision: SmartDecision }): void {
+    const log = this.smartDecisions();
+    log.push({ at: this.clock.nowIso(), runId: input.runId, threadId: input.threadId, ...input.decision });
+    if (log.length > MAX_SMART_DECISIONS) log.splice(0, log.length - MAX_SMART_DECISIONS);
+    this.storage.writeJson(SMART_DECISIONS_FILE, { version: 1, decisions: log });
+  }
+
+  /** Settings → Usage → Default model, and the grey line under a reply. */
+  readonly smartRouting = {
+    state: () => {
+      const local = this.settingsStore.get().local;
+      const candidates = this.smartCandidates();
+      return {
+        enabled: local.smart?.enabled === true,
+        preference: local.smart?.preference ?? "balanced",
+        preferredFamily: local.provider === "codex" || local.provider === "claude" ? local.provider : null,
+        hasKey: this.smartKey() !== null,
+        families: [...new Set(candidates.map((candidate) => candidate.family))],
+        lastDecision: this.smartDecisions().at(-1) ?? null,
+      };
+    },
+    configure: async (input: { enabled?: unknown; preference?: unknown; apiKey?: unknown; preferredFamily?: unknown }) => {
+      const current = this.settingsStore.get().local.smart;
+      if (input.preference !== undefined && !isSmartPreference(input.preference)) {
+        throw new SettingsError('preference must be "economy", "balanced" or "best"');
+      }
+      if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new SettingsError("enabled must be a boolean");
+      if (input.preferredFamily !== undefined && input.preferredFamily !== null && input.preferredFamily !== "codex" && input.preferredFamily !== "claude") {
+        throw new SettingsError('preferredFamily must be "codex", "claude" or null');
+      }
+      if (input.apiKey !== undefined) {
+        if (typeof input.apiKey !== "string") throw new SettingsError("apiKey must be a string");
+        const key = input.apiKey.trim();
+        if (key && !TYPESAFE_KEY.test(key)) throw new SettingsError("that is not a TypeSafe API key");
+        if (key) this.storage.writeJson(SMART_KEY_FILE, { apiKey: key, savedAt: this.clock.nowIso() });
+        else this.storage.removeFile(join(this.storage.layout.root, SMART_KEY_FILE), true);
+      }
+      const enabled = typeof input.enabled === "boolean" ? input.enabled : current?.enabled === true;
+      const preference = isSmartPreference(input.preference) ? input.preference : (current?.preference ?? "balanced");
+      if (input.enabled !== undefined || input.preference !== undefined || input.preferredFamily !== undefined) {
+        this.settingsStore.set({
+          local: {
+            smart: { enabled, preference },
+            ...(input.preferredFamily !== undefined ? { provider: input.preferredFamily } : {}),
+            // On: the workspace no longer names one plan or provider, so no
+            // turn without its own /model is pinned past the router.
+            ...(input.enabled === true ? { activePlanId: null, inferenceProviderId: null, inferenceModel: null } : {}),
+          },
+        });
+        if (input.enabled === true) {
+          this.planRegistry.setActive(null);
+          this.planRegistry.clearAllPins();
+          // Warm the catalogs so the first smart turn names live models.
+          for (const candidate of this.smartCandidates()) void this.modelsFor(candidate.family, candidate.planId).catch(() => undefined);
+        }
+      }
+      return this.smartRouting.state();
+    },
+    decisions: (limit = 50) => this.smartDecisions().slice(-Math.max(1, Math.min(MAX_SMART_DECISIONS, limit))).reverse(),
+    /** What the grey line under this run's reply says, if a smart pick ran it. */
+    noteForRun: (runId: string): { label: string; level: SmartDecision["level"]; family: SmartFamily } | null => {
+      const row = [...this.smartDecisions()].reverse().find((record) => record.runId === runId);
+      return row ? { label: row.label, level: row.level, family: row.family } : null;
+    },
+  };
+
   readonly runtime = {
     /** Validate everything before a single scope-owned persistence operation.
      * Selecting never mutates a connector's shared default or starts inference. */
@@ -1397,7 +1603,8 @@ export class LocalBizosHarness {
       const effectiveSelection = { ...selection, model };
       if (scope.kind === "agent") this.botStore.update(scope.agentId, selectionBotFields(effectiveSelection));
       else if (scope.kind === "quickchat") this.quickChatStore.setModelSelection(scope.chatId, effectiveSelection);
-      else this.settingsStore.set({ local: { model, inferenceModel: selection.source === "provider" ? model : null, inferenceProviderId: selection.source === "provider" ? selection.providerId : null, activePlanId: selection.source === "plan" ? selection.planId : null, provider: family } });
+      // A concrete workspace default IS the owner's choice: "Smart choice" steps aside.
+      else this.settingsStore.set({ local: { model, inferenceModel: selection.source === "provider" ? model : null, inferenceProviderId: selection.source === "provider" ? selection.providerId : null, activePlanId: selection.source === "plan" ? selection.planId : null, provider: family, ...this.smartOff() } });
       return { scope, selection: effectiveSelection };
     },
     getSettings: async () => this.settingsWithPermissionTransition(),
@@ -1434,11 +1641,11 @@ export class LocalBizosHarness {
         const plan = this.planRegistry.setActive(input.planId);
         if (!plan) throw new SettingsError("unknown plan");
         this.settingsStore.set({
-          local: { activePlanId: plan.id, provider: plan.provider, inferenceProviderId: null, inferenceModel: null, ...modelFor(plan.provider) },
+          local: { activePlanId: plan.id, provider: plan.provider, inferenceProviderId: null, inferenceModel: null, ...modelFor(plan.provider), ...this.smartOff() },
         });
       } else {
         if (!input.providerId || !this.inferenceStore.get(input.providerId)) throw new SettingsError("unknown provider");
-        this.settingsStore.set({ local: { inferenceProviderId: input.providerId, inferenceModel: null, model: this.inferenceStore.get(input.providerId)!.model } });
+        this.settingsStore.set({ local: { inferenceProviderId: input.providerId, inferenceModel: null, model: this.inferenceStore.get(input.providerId)!.model, ...this.smartOff() } });
       }
       this.catalog = null;
       return this.settingsStore.get();
@@ -2782,6 +2989,7 @@ export class LocalBizosHarness {
       importDefault?: boolean;
     }): Promise<{ planId: string; loginStarted: boolean; loginError?: string }> => {
       const provider = input.provider;
+      this.planRegistry.undismissMachine(provider);
       if (provider === "cursor") return this.connectCursorPlan(input.label);
       const key = `${provider}:${input.importDefault === true}:${input.label?.slice(0, MAX_PLAN_LABEL) ?? ""}`;
       const inFlight = this.planConnects.get(key);
@@ -2882,7 +3090,12 @@ export class LocalBizosHarness {
       return work;
     },
     disconnect: async (planId: string): Promise<{ removed: boolean }> => {
+      const plan = this.planRegistry.get(planId);
+      const machineHome = plan ? join(this.homeDir, plan.provider === "codex" ? ".codex" : plan.provider === "claude" ? ".claude" : ".cursor") : null;
       const removed = this.planRegistry.remove(planId);
+      // The owner said no to this Mac's own account: detection must not bring
+      // it back on the next refresh. Connecting the family again lifts it.
+      if (removed && plan && (plan.codexHome ?? plan.configDir ?? plan.cursorHome) === machineHome) this.planRegistry.dismissMachine(plan.provider);
       // Keep an explicit selection as unavailable instead of falling back to another account.
       return { removed };
     },
