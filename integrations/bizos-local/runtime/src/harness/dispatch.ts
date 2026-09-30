@@ -777,7 +777,14 @@ export class Dispatcher {
     if (this.deps.threads.get(threadId, input.messageId)) {
       throw new Error("the initial task message already exists and will not be dispatched twice");
     }
-    const message = this.deps.threads.append(threadId, target.groupId
+    // A linked group journals an agent message only under a linked run of
+    // THAT conversation. The recruiter's run belongs to its own chat, so its
+    // words would have no execution authority there, the append would throw
+    // and the recruit's first task would never start — every recruitment
+    // after the team group got auto-linked (R53). There the handoff stands as
+    // a system line; the recruit's answer is journaled by its own run.
+    const asAgent = Boolean(target.groupId) && this.deps.continuity?.linked(threadId) !== true;
+    const message = this.deps.threads.append(threadId, asAgent
       ? { id: input.messageId, role: "bot", botId: scope.botId, deliveryState: "complete", blocks: [{ kind: "text", text: input.text }] }
       : { id: input.messageId, role: "system", blocks: [{ kind: "text", text: input.text }] });
     this.deps.events.publish({ type: "thread.message.created", threadId, message });
