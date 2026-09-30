@@ -99,6 +99,34 @@ it("shows a clear Work Credits error without exposing an upstream provider", asy
 });
 
 it.each([
+  ["fr-FR", "Limite de 4 h atteinte — réinitialisation dans 12 min"],
+  ["en-US", "4-hour limit reached — resets in 12 min"],
+])("shows the server usage-limit message in locale %s", async (locale, expected) => {
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve) => {
+    startOpenAiTurn({ baseUrl: "", apiKey: "", model: "bizos-mixture", system: "", text: "Hello", threadId: "bot:ceo", runId: "run_fixture", dynamicTools: [], locale,
+      chatCompletion: async () => { throw new ContinuityBridgeError(429, "usage_limit_reached", "upstream/private-provider", true,
+        { fr: "Limite de 4 h atteinte — réinitialisation dans 12 min", en: "4-hour limit reached — resets in 12 min" }); },
+      onEvent(event) { events.push(event); if (event.type === "turn.completed") resolve(); },
+    });
+  });
+  expect(JSON.stringify(events)).toContain(expected);
+  expect(JSON.stringify(events)).not.toMatch(/upstream|private-provider/);
+});
+
+it("falls back to a clear usage-limit message when the server translation is absent", async () => {
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve) => {
+    startOpenAiTurn({ baseUrl: "", apiKey: "", model: "bizos-mixture", system: "", text: "Hello", threadId: "bot:ceo", runId: "run_fixture", dynamicTools: [], locale: "en-US",
+      chatCompletion: async () => { throw new ContinuityBridgeError(429, "usage_limit_reached", "internal/private-provider", true); },
+      onEvent(event) { events.push(event); if (event.type === "turn.completed") resolve(); },
+    });
+  });
+  expect(JSON.stringify(events)).toContain("Usage limit reached");
+  expect(JSON.stringify(events)).not.toMatch(/internal|private-provider/);
+});
+
+it.each([
   ["feature_disabled", "temporairement indisponible"],
   ["budget_exhausted", "Budget d'inférence BizOS atteint"],
   ["unlinked", "Connectez ce Mac"],
@@ -139,6 +167,7 @@ it.each([true, false])("dispatches a BizOS CEO turn locally with continuity poli
     }
     else if (operation === "conversations/ack") result = { acknowledgedThrough: body.through };
     else if (operation === "devices/list") result = { devices: [] };
+    else if (operation === "devices/presence") result = { ok: true };
     else if (operation === "runs/start") {
       startBodies.push(body);
       if (!policyEnabled && (body.localOnly !== true || body.cloudFallback !== null)) throw new Error("disabled policy requires a local-only lease");

@@ -15,7 +15,7 @@
 import type { CodexDynamicTool, CodexTurnHandle, RuntimeEvent } from "./codex-driver.js";
 import { isRichToolResult } from "./tool-result.js";
 import { createHash, randomUUID } from "node:crypto";
-import { ContinuityBridgeError } from "../continuity-bridge.js";
+import { ContinuityBridgeError, type LocalizedBridgeMessage } from "../continuity-bridge.js";
 
 export interface OpenAiTurnInput {
   baseUrl: string;
@@ -37,6 +37,8 @@ export interface OpenAiTurnInput {
   chatCompletion?: (body: Record<string, unknown>, signal: AbortSignal) => Promise<unknown>;
   /** Per-request timeout. */
   timeoutMs?: number;
+  /** Defaults to the machine locale for localized BizOS refusals. */
+  locale?: string;
 }
 
 type Message = Record<string, unknown>;
@@ -48,13 +50,18 @@ const MAX_ARG_CHARS = 32_000;
 const MAX_TOOL_OUTPUT = 10_000;
 const MAX_ANSWER_CHARS = 60_000;
 
-function bizosBridgeErrorMessage(code: string): string {
+function bizosBridgeErrorMessage(code: string, localized: LocalizedBridgeMessage | undefined, locale: string): string {
+  const en = !locale.toLowerCase().startsWith("fr");
   switch (code) {
     case "insufficient_credits":
     case "insufficient_work_credits":
       return "Crédits BizOS insuffisants. Rechargez vos Work Credits pour continuer.";
     case "rate_limited":
       return "BizOS reçoit trop de demandes. Réessayez dans un instant.";
+    case "usage_limit_reached":
+      return (en ? localized?.en : localized?.fr)
+        ?? (en ? "Usage limit reached. Wait for the limit to reset, then try again."
+          : "Limite d'utilisation atteinte. Attendez sa réinitialisation, puis réessayez.");
     case "inference_disabled":
     case "feature_disabled":
       return "L'inférence BizOS est temporairement indisponible.";
@@ -353,7 +360,7 @@ export function startOpenAiTurn(input: OpenAiTurnInput): CodexTurnHandle {
       const raw = error instanceof Error ? error.message : String(error);
       const message = input.chatCompletion
         ? error instanceof ContinuityBridgeError
-          ? bizosBridgeErrorMessage(error.code)
+          ? bizosBridgeErrorMessage(error.code, error.localizedMessage, input.locale ?? Intl.DateTimeFormat().resolvedOptions().locale)
           : raw === `${label} returned a malformed chat response.` ? raw : "L'inférence BizOS a échoué. Réessayez."
         : input.apiKey ? raw.split(input.apiKey).join("[key]") : raw;
       emit({ type: "runtime.error", message });

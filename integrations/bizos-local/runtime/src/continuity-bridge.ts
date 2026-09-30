@@ -13,8 +13,13 @@ export interface ContinuityIdentity {
   workspaceId: string;
   machineName?: string;
 }
+export interface LocalizedBridgeMessage {
+  fr: string;
+  en: string;
+}
 export class ContinuityBridgeError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly requestRejected = false) {
+  constructor(readonly status: number, readonly code: string, message: string, readonly requestRejected = false,
+    readonly localizedMessage?: LocalizedBridgeMessage) {
     super(message);
   }
 }
@@ -62,12 +67,19 @@ export function desktopContinuityTransport(
       error?: string;
       code?: string;
       requestRejected?: boolean;
+      message?: unknown;
     };
+    const localized = result.code === "usage_limit_reached" && result.message !== null && typeof result.message === "object"
+      && !Array.isArray(result.message) ? result.message as Record<string, unknown> : null;
+    const localizedMessage = localized && typeof localized.fr === "string" && localized.fr.length > 0 && localized.fr.length <= 200
+      && typeof localized.en === "string" && localized.en.length > 0 && localized.en.length <= 200
+      ? { fr: localized.fr, en: localized.en } : undefined;
     if (!response.ok || result.ok !== true)
       throw new ContinuityBridgeError(
         response.status, result.code ?? 'unavailable',
         result.error?.slice(0, 400) ?? `Continuity bridge refused request (${response.status}).`,
         result.requestRejected === true,
+        localizedMessage,
       );
     return result.result as T;
   };
