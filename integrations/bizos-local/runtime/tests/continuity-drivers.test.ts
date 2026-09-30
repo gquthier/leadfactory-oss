@@ -1,9 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { seatbeltAvailable } from "../src/harness/secret-shield.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   buildClaudeArgs,
+  claudeMcpInitFailure,
   startClaudeTurn,
 } from "../src/harness/claude-driver.js";
 import {
@@ -34,11 +36,132 @@ it("bounded Claude cannot inherit bypass, native tools, plugins or hooks", () =>
     mcpConfigPath: "/fixture/mcp.json",
   });
   expect(args).toContain("--restricted");
-  expect(args).toContain("--safe-mode");
+  // `--safe-mode` also disables the --mcp-config servers: the linked CEO
+  // then had no recruit_agent at all (.51/.52 regression).
+  expect(args).not.toContain("--safe-mode");
   expect(args).toContain("--strict-mcp-config");
+  expect(args[args.indexOf("--mcp-config") + 1]).toBe("/fixture/mcp.json");
+  expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+  expect(args).toContain("--disable-slash-commands");
   expect(args[args.indexOf("--tools") + 1]).toBe("");
   expect(args).not.toContain("--dangerously-skip-permissions");
+  expect(args[args.indexOf("--permission-mode") + 1]).toBe("manual");
 });
+
+it("names the missing or unconnected team server in a Claude init frame", () => {
+  const tools = ["mcp__local_team_actions__recruit_agent"];
+  expect(claudeMcpInitFailure({ tools, mcp_servers: [{ name: "local_team_actions", status: "connected" }] }, ["local_team_actions"])).toBeNull();
+  // Exactly what `--safe-mode` produced with claude 2.1.280–2.1.285.
+  expect(claudeMcpInitFailure({ tools: [], mcp_servers: [] }, ["local_team_actions"])).toBe("local_team_actions: missing");
+  expect(claudeMcpInitFailure({ tools: [], mcp_servers: [{ name: "local_team_actions", status: "failed" }] }, ["local_team_actions"])).toBe("local_team_actions: failed");
+  expect(claudeMcpInitFailure({ tools: [], mcp_servers: [{ name: "local_team_actions", status: "connected" }] }, ["local_team_actions"])).toBe("local_team_actions: no tools");
+});
+
+/** A fake `claude` that answers init with the given MCP surface, after
+ * checking that its --mcp-config is readable, then reports whether the
+ * harness deleted that file once init was seen. */
+function boundedCli(initFrame: string) {
+  const f = script("");
+  const observed = join(f.root, "observed.json");
+  writeFileSync(f.cli, `#!${process.execPath}\nimport fs from 'node:fs';import readline from 'node:readline';
+const args=process.argv.slice(2);const config=args[args.indexOf('--mcp-config')+1];
+const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+const servers=Object.keys(JSON.parse(fs.readFileSync(config,'utf8')).mcpServers);
+readline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);
+if(r.type==='control_request')send({type:'control_response',response:{subtype:'success',request_id:r.request_id}});
+if(r.type==='user'){send(${initFrame});setTimeout(()=>{fs.writeFileSync(${JSON.stringify(observed)},JSON.stringify({args,servers,configAfterInit:fs.existsSync(config)}));
+send({type:'assistant',message:{id:'m1',role:'assistant',content:[{type:'text',text:'Nina recrutée.'}],stop_reason:'end_turn'}});
+send({type:'result',subtype:'success',result:'Nina recrutée.'});},150);}});`, { mode: 0o700 });
+  return { ...f, observed };
+}
+
+async function runBounded(cli: string, root: string): Promise<RuntimeEvent[]> {
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("driver timeout")), 5000);
+    startClaudeTurn({
+      cli, cwd: root, text: "Recrute TEST53 Nina", system: "CEO", sandbox: "read-only", boundedTools: true,
+      mcpServers: { local_team_actions: { command: process.execPath, args: ["team.mjs"], env: {}, forwarded: { LBZ_LOCAL_TEAM_TICKET: "one-shot" }, preApproved: true } },
+      mcpConfigDir: join(root, "mcp"),
+      environment: { PATH: process.env.PATH, HOME: root },
+      onEvent: (event) => { events.push(event); if (event.type === "turn.completed") { clearTimeout(timer); resolve(); } },
+    });
+  });
+  return events;
+}
+
+it("a linked (bounded) Claude turn verifies its team tools, then deletes the MCP config before acting", async () => {
+  const f = boundedCli(`{type:'system',subtype:'init',session_id:'s',tools:['mcp__local_team_actions__recruit_agent','mcp__local_team_actions__schedule_routine'],mcp_servers:[{name:'local_team_actions',status:'connected',source:'dynamic'}]}`);
+  const events = await runBounded(f.cli, f.root);
+  const observed = JSON.parse(readFileSync(f.observed, "utf8")) as { args: string[]; servers: string[]; configAfterInit: boolean };
+  expect(observed.servers).toEqual(["local_team_actions"]);
+  expect(observed.args).not.toContain("--safe-mode");
+  expect(observed.args[observed.args.indexOf("--allowedTools") + 1]).toBe("mcp__local_team_actions");
+  expect(observed.configAfterInit).toBe(false);
+  expect(events).toContainEqual({ type: "capabilities.verified", supervised: true, tools: ["mcp__local_team_actions__recruit_agent", "mcp__local_team_actions__schedule_routine"] });
+  expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+});
+
+it("a linked Claude turn whose init shows no team server fails visibly instead of answering without tools", async () => {
+  const f = boundedCli(`{type:'system',subtype:'init',session_id:'s',tools:[],mcp_servers:[]}`);
+  const events = await runBounded(f.cli, f.root);
+  expect(events.some((event) => event.type === "capabilities.verified")).toBe(false);
+  expect(events).toContainEqual(expect.objectContaining({ type: "runtime.error", message: expect.stringContaining("local_team_actions: missing") }));
+  expect(events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "mcp_tools_unavailable" });
+  expect(existsSync(f.observed)).toBe(false);
+  expect(readdirSync(join(f.root, "mcp"))).toEqual([]);
+});
+
+// Contract with the REAL CLI (opt-in: LBZ_REAL_CLAUDE_CLI=/path/to/claude).
+// An empty CLAUDE_CONFIG_DIR: no account, no user MCP server, and the turn
+// stops at init, so no prompt reaches a model.
+function realTeamServer(root: string): string {
+  const server = join(root, "team-server.mjs");
+  writeFileSync(server, `import fs from 'node:fs';import readline from 'node:readline';const send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
+readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);
+if(m.method==='initialize'){fs.writeFileSync(${JSON.stringify(join(root, "server-started"))},'1');send({jsonrpc:'2.0',id:m.id,result:{protocolVersion:m.params.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'t',version:'1'}}});}
+else if(m.method==='tools/list')send({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'recruit_agent',description:'Recruit',inputSchema:{type:'object',properties:{}}}]}});
+else if(m.id!==undefined)send({jsonrpc:'2.0',id:m.id,result:{}});});`);
+  return server;
+}
+
+async function runReal(root: string, options: { boundedTools?: boolean; skipPermissions?: boolean; protectedPaths?: string[] }): Promise<RuntimeEvent[]> {
+  const configDir = join(root, "claude-config");
+  mkdirSync(configDir, { recursive: true });
+  const events: RuntimeEvent[] = [];
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("real CLI timeout")), 60_000);
+    const handle = startClaudeTurn({
+      cli: process.env.LBZ_REAL_CLAUDE_CLI!, cwd: root, text: "Reply OK.", sandbox: "read-only", model: "haiku", configDir, ...options,
+      mcpServers: { local_team_actions: { command: process.execPath, args: [realTeamServer(root)], env: {}, forwarded: {}, preApproved: true } },
+      mcpConfigDir: join(root, "mcp"),
+      environment: { PATH: process.env.PATH, HOME: root },
+      onEvent: (event) => {
+        events.push(event);
+        if (event.type === "session.started" || event.type === "capabilities.verified" || event.type === "runtime.error") handle.stop();
+        if (event.type === "turn.completed") { clearTimeout(timer); resolve(); }
+      },
+    });
+  });
+  return events;
+}
+
+it.skipIf(!process.env.LBZ_REAL_CLAUDE_CLI)("the real claude CLI loads the team MCP server with the bounded argv", async () => {
+  const f = script("");
+  const events = await runReal(f.root, { boundedTools: true });
+  expect(events).toContainEqual({ type: "capabilities.verified", supervised: true, tools: ["mcp__local_team_actions__recruit_agent"] });
+  expect(readdirSync(join(f.root, "mcp"))).toEqual([]);
+}, 70_000);
+
+it.skipIf(!process.env.LBZ_REAL_CLAUDE_CLI || !seatbeltAvailable())("the real claude CLI still reads its MCP config under the « never ask » seatbelt", async () => {
+  const f = script("");
+  mkdirSync(join(f.root, "mcp"), { recursive: true });
+  const events = await runReal(f.root, { skipPermissions: true, protectedPaths: [join(f.root, "mcp")] });
+  expect(events.filter((event) => event.type === "runtime.error")).toEqual([]);
+  expect(events.some((event) => event.type === "session.started")).toBe(true);
+  expect(existsSync(join(f.root, "server-started"))).toBe(true);
+  expect(readdirSync(join(f.root, "mcp"))).toEqual([]);
+}, 70_000);
 it("Claude sends a private 0600 prompt file, never argv persona or resume, and removes it after a turn", async () => {
   const f = script("");
   const observedPath = join(f.root, "observed.json");

@@ -74,7 +74,8 @@ function localToolRefusal(error: unknown): string | undefined {
   if (typeof status !== "number" || status < 400 || status >= 500) return undefined;
   const code = (error as { code?: unknown }).code;
   const message = error instanceof Error ? error.message : String(error);
-  return `${typeof code === "string" && code ? `${code}: ` : ""}${message}`.slice(0, 500);
+  const prefix = typeof code === "string" && code && !message.startsWith(code) ? `${code}: ` : "";
+  return `${prefix}${message}`.slice(0, 500);
 }
 const RECONCILABLE_EFFECT_TOOLS = new Set([
   "bizos_image_generate", "bizos_site_create", "bizos_site_publish", "bizos_site_unpublish",

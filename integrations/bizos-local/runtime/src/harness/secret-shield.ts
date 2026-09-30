@@ -170,12 +170,15 @@ function sbplString(value: string): string {
 /** A seatbelt profile that allows everything except reading the listed
  * paths (files and whole folders, symlinked spellings included since the
  * kernel resolves them). Later rules win in SBPL, so the denies follow the
- * `(allow default)`. */
-export function seatbeltDenyReadProfile(paths: readonly string[]): string {
+ * `(allow default)`. `allowFiles` re-allows exact files inside a denied
+ * folder (a literal, never a subpath), after the denies so they win: the
+ * CLI's own per-turn MCP config in the protected `mcp` folder. */
+export function seatbeltDenyReadProfile(paths: readonly string[], allowFiles: readonly string[] = []): string {
   const rules = [...new Set(paths.map(canonicalProtectedPath))]
-    .map((path) => `(deny file-read* (literal ${sbplString(path)}) (subpath ${sbplString(path)}))`)
-    .join("\n");
-  return `(version 1)\n(allow default)\n${rules}\n`;
+    .map((path) => `(deny file-read* (literal ${sbplString(path)}) (subpath ${sbplString(path)}))`);
+  const allows = [...new Set(allowFiles.map(canonicalProtectedPath))]
+    .map((path) => `(allow file-read* (literal ${sbplString(path)}))`);
+  return `(version 1)\n(allow default)\n${[...rules, ...allows].join("\n")}\n`;
 }
 
 export function seatbeltAvailable(platform: NodeJS.Platform = process.platform): boolean {

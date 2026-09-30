@@ -3551,6 +3551,16 @@ export class LocalBizosHarness {
       this.events.publish({ type: "thread.message.created", threadId: scope.threadId, message });
       return message;
     },
+    /** A grey line from a host tool (a refused BizOS tool), in its run's
+     * conversation: what the person sees even if the agent says nothing. */
+    appendNotice: (scope: { threadId: string }, text: string): ThreadMessage => {
+      const message = this.threadStore.append(scope.threadId, {
+        role: "system",
+        blocks: [{ kind: "meta", text: text.slice(0, 400) }],
+      });
+      this.events.publish({ type: "thread.message.created", threadId: scope.threadId, message });
+      return message;
+    },
     hasUnlinkedHistory: (target: ThreadTarget): boolean => this.threadStore.hasUnlinkedHistory(target),
     get: async (target: ThreadTarget): Promise<ThreadSnapshot> =>
       this.threadStore.snapshot(target, this.dispatcher.activeRunIds(threadIdForTarget(target))),

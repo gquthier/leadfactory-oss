@@ -180,4 +180,37 @@ describe("the seatbelt profile", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("re-allows only the exact per-turn file inside a denied folder, after the denies", () => {
+    const profile = seatbeltDenyReadProfile(["/state/mcp"], ["/state/mcp/claude-mcp-1.json"]);
+    const deny = profile.indexOf('(deny file-read* (literal "/state/mcp") (subpath "/state/mcp"))');
+    const allow = profile.indexOf('(allow file-read* (literal "/state/mcp/claude-mcp-1.json"))');
+    expect(deny).toBeGreaterThan(0);
+    expect(allow).toBeGreaterThan(deny);
+    expect(profile).not.toContain('(allow file-read* (subpath');
+  });
+
+  // .51/.52: in « never ask » mode the outer seatbelt denied `runtime/mcp`,
+  // so `claude` could not read its own --mcp-config and exited with
+  // « Invalid MCP configuration: EPERM ».
+  it.skipIf(!seatbeltAvailable())("lets the CLI read its own MCP config while the rest of the folder stays denied", () => {
+    const root = fixture();
+    try {
+      const mcp = join(root, "state", "runtime", "mcp");
+      mkdirSync(mcp, { recursive: true });
+      writeFileSync(join(mcp, "claude-mcp-own.json"), '{"mcpServers":{}}\n');
+      writeFileSync(join(mcp, "claude-mcp-other.json"), '{"secret":"OTHER-TURN"}\n');
+      const paths = runtimeProtectedPaths({ storageRoot: join(root, "state", "runtime"), home: root });
+      const profile = seatbeltDenyReadProfile(paths, [join(mcp, "claude-mcp-own.json")]);
+      const run = (...args: string[]) => spawnSync("/usr/bin/sandbox-exec", ["-p", profile, ...args], { encoding: "utf8" });
+      expect(run("/bin/cat", join(mcp, "claude-mcp-own.json")).stdout).toBe('{"mcpServers":{}}\n');
+      const other = run("/bin/cat", join(mcp, "claude-mcp-other.json"));
+      expect(other.status).not.toBe(0);
+      expect(other.stdout).not.toContain("OTHER-TURN");
+      expect(run("/bin/ls", mcp).status).not.toBe(0);
+      expect(run("/bin/cat", join(root, "state", "runtime", "providers.json")).stdout).not.toContain("sk-SECRET");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

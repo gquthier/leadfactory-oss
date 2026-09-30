@@ -25,6 +25,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { downloadGeneratedImage, MAX_IMAGE_BYTES } from "./generated-image.js";
 import { ImageOperationPendingError, pollSignedImageOperation } from "./signed-image-operation.js";
+import { bizosToolRefusal } from "./bizos-tool-refusal.js";
 import { spawn, spawnSync } from "node:child_process";
 import { LocalBizosHarness } from "./harness/harness.js";
 import { waitForCliShutdown } from "./harness/procs.js";
@@ -671,6 +672,19 @@ export class AttachmentRegistry {
     }
   }
 }
+
+/** `/api/internal/local-team/<operation>` → the tool name the model called. */
+export const MCP_OPERATION_TOOLS: Readonly<Record<string, string>> = {
+  recruit: "recruit_agent",
+  manage: "manage_agent",
+  routine: "schedule_routine",
+  "list-routines": "list_routines",
+  "cancel-routine": "cancel_routine",
+  checkpoint: "checkpoint_task",
+  send: "send_to_chat",
+  "quick-replies": "offer_quick_replies",
+  "propose-name": "propose_company_name",
+};
 
 interface TeamCapability {
   botId: string;
@@ -3111,6 +3125,20 @@ async function serve(): Promise<void> {
       throw error;
     }
   };
+  // A BizOS tool refused because the usage window is full: the agent gets the
+  // code and both sentences as its tool result, the person one grey line in
+  // the conversation (once per run and tool), instead of a silent 402.
+  const refusalNotices = new Set<string>();
+  const refuseBizosTool = (capability: TeamCapability, tool: string, error: unknown): never => {
+    const refusal = bizosToolRefusal(tool, error);
+    if (!refusal) throw error;
+    const key = `${capability.runId}\0${tool}`;
+    if (!refusalNotices.has(key)) {
+      refusalNotices.add(key);
+      try { harness.threads.appendNotice(capability, refusal.notice); } catch { /* the tool result still carries it */ }
+    }
+    throw new HttpError(refusal.status, refusal.code, refusal.agentText);
+  };
   const packOf = (botId: string): PackService | null =>
     packs?.agency.isPackBot(botId) ? packs.agency : packs?.ecommerce.isPackBot(botId) ? packs.ecommerce : null;
   async function deliverGeneratedImage(capability: TeamCapability, result: unknown): Promise<void> {
@@ -3168,7 +3196,10 @@ async function serve(): Promise<void> {
         if (continuityTool) return sendJson(response, 200, await harness.continuity.invokePortableTool(
           capability.threadId, capability.runId, continuityTool, input, () => { teamBroker.authorize(bearer); },
         ));
-        const toolName = typeof parsed.tool === "string" ? parsed.tool : operation;
+        // The effect journal and the broker name a team tool as the model
+        // called it (`recruit_agent`), whether it came through Codex's dynamic
+        // tools or Claude's MCP twin, so both share one reconciliation path.
+        const toolName = typeof parsed.tool === "string" ? parsed.tool : MCP_OPERATION_TOOLS[operation] ?? operation;
         const result = await harness.continuity.execute(capability.threadId,capability.runId,toolName,input,async () => {
           // Recheck immediately before dispatch after the network admission.
           teamBroker.authorize(bearer, {allowDuringVoice: operation === "cloud"});
@@ -3179,7 +3210,8 @@ async function serve(): Promise<void> {
           if (operation === "cancel-routine") return facade!.cancelAgentRoutine(capability,input);
           if (operation === "bizos") {
             if (!BIZOS_TOOL_SPECS.some(tool => tool.name === parsed.tool)) throw new HttpError(404, "unknown_tool", "Unknown BizOS server tool.");
-            const result = await invokeBizosTool(String(parsed.tool), parsed.arguments, () => { teamBroker.authorize(bearer); });
+            const result = await invokeBizosTool(String(parsed.tool), parsed.arguments, () => { teamBroker.authorize(bearer); })
+              .catch((error: unknown) => refuseBizosTool(capability, String(parsed.tool), error));
             if (parsed.tool === "bizos_image_generate") await deliverGeneratedImage(capability, result);
             return result;
           }
@@ -3805,7 +3837,8 @@ async function serve(): Promise<void> {
           name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
           call: async (argumentsValue: unknown) => {
             const capability = teamBroker.authorize(session);
-            const result = await invokeBizosTool(tool.name, argumentsValue, () => { teamBroker.authorize(session); });
+            const result = await invokeBizosTool(tool.name, argumentsValue, () => { teamBroker.authorize(session); })
+              .catch((error: unknown) => refuseBizosTool(capability, tool.name, error));
             if (tool.name === "bizos_image_generate") await deliverGeneratedImage(capability, result);
             return result;
           },

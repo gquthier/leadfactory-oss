@@ -112,6 +112,24 @@ export function writeClaudeSystemPrompt(system: string): { dir: string; path: st
   }
 }
 
+/**
+ * What is missing from a Claude `system/init` frame for the harness's own MCP
+ * servers, or `null` when each one is `connected` and lists at least one
+ * tool. `--safe-mode` produced `mcp_servers: []` and `tools: []` here.
+ */
+export function claudeMcpInitFailure(init: Record<string, unknown>, serverNames: readonly string[]): string | null {
+  const tools = Array.isArray(init.tools) ? init.tools.filter((tool): tool is string => typeof tool === "string") : [];
+  const statuses = Array.isArray(init.mcp_servers) ? init.mcp_servers : null;
+  const problems: string[] = [];
+  for (const name of serverNames) {
+    const row = statuses?.find((entry) => entry && typeof entry === "object" && (entry as Record<string, unknown>).name === name) as Record<string, unknown> | undefined;
+    const status = statuses === null ? "connected" : typeof row?.status === "string" ? row.status : "missing";
+    if (status !== "connected") problems.push(`${name}: ${status}`);
+    else if (!tools.some((tool) => tool.startsWith(`mcp__${name}__`))) problems.push(`${name}: no tools`);
+  }
+  return problems.length ? problems.join(", ") : null;
+}
+
 /** Only servers explicitly marked "run without asking" are preapproved;
  * other requests reach the host permission channel. */
 export function claudeAllowedTools(servers: Record<string, McpServerSpec>): string[] {
@@ -174,7 +192,14 @@ export function buildClaudeArgs(input: {
     ...(bypass ? ["--dangerously-skip-permissions"] : []),
     ...[...new Set([input.cwd, ...(input.additionalDirectories ?? [])])].flatMap((directory) => ["--add-dir", directory]),
   ];
-  if (input.boundedTools) args.push("--restricted", "--safe-mode", "--tools", "", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--settings", JSON.stringify({disableAllHooks:true}));
+  // Never `--safe-mode` here: it disables EVERY MCP server, including the
+  // `--mcp-config` ones (init reports `tools: []`, `mcp_servers: []`; checked
+  // with claude 2.1.280–2.1.285), so a linked CEO lost recruit_agent and the
+  // other team tools (.51/.52). The isolation it added is kept by the flags
+  // below: no built-in tools, no user/project/local settings (hence no
+  // CLAUDE.md), no hooks, no skills, only the harness's MCP servers — and the
+  // init frame is verified against that surface before the prompt is sent.
+  if (input.boundedTools) args.push("--restricted", "--tools", "", "--no-chrome", "--disable-slash-commands", "--strict-mcp-config", "--setting-sources", "", "--settings", JSON.stringify({disableAllHooks:true}));
   else if (input.protectedPaths?.length) args.push("--settings", JSON.stringify(claudeDenySettings(input.protectedPaths)));
   if (input.model) args.push("--model", input.model);
   if (input.systemPromptPath) args.push("--append-system-prompt-file", input.systemPromptPath);
@@ -343,8 +368,13 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
     setupStage = "CLI spawn";
     // Bypass mode applies no sandbox of its own: the whole process tree gets
     // one outer seatbelt denying the protected paths (macOS only).
+    // The MCP config lives in the protected `mcp` folder: the CLI itself must
+    // still read its own file (EPERM there made `claude` exit with « Invalid
+    // MCP configuration »), so exactly that file is re-allowed. It is deleted
+    // as soon as the init frame proves the servers were loaded, before the
+    // model can run a single command.
     const shielded = input.skipPermissions && !input.boundedTools && input.protectedPaths?.length && secretShieldEnabled()
-      ? seatbeltLaunch(input.cli, args, seatbeltDenyReadProfile(input.protectedPaths))
+      ? seatbeltLaunch(input.cli, args, seatbeltDenyReadProfile(input.protectedPaths, state.mcpConfigPath ? [state.mcpConfigPath] : []))
       : { command: input.cli, args, sandboxed: false };
     child = spawnCli(shielded.command, shielded.args, {
       cwd: input.cwd,
@@ -439,15 +469,29 @@ export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
           detailText: `Workspace: ${input.cwd}\n${visible}` });
         continue;
       }
-      if (input.boundedTools && message.type === "system" && message.subtype === "init") {
-        const tools = message.tools;
-        const allowedPrefixes = Object.keys(input.mcpServers ?? {}).map(name => `mcp__${name}__`);
-        if (!Array.isArray(tools) || tools.some(tool => typeof tool !== "string" || !allowedPrefixes.some(prefix => tool.startsWith(prefix)))) {
-          emit({type:"runtime.error", message:"Claude exposed an unverified tool surface; linked execution stopped."});
-          finish(false, "unverified_tool_surface");
-          return;
+      if (message.type === "system" && message.subtype === "init") {
+        if (input.boundedTools) {
+          const tools = message.tools;
+          const allowedPrefixes = Object.keys(input.mcpServers ?? {}).map(name => `mcp__${name}__`);
+          if (!Array.isArray(tools) || tools.some(tool => typeof tool !== "string" || !allowedPrefixes.some(prefix => tool.startsWith(prefix)))) {
+            emit({type:"runtime.error", message:"Claude exposed an unverified tool surface; linked execution stopped."});
+            finish(false, "unverified_tool_surface");
+            return;
+          }
+          // An empty surface is not a verified one: the team tools the
+          // persona names must really be there, or the model would say they
+          // are « not available in this session » while the manifest lists them.
+          const missing = state.mcpConfigPath ? claudeMcpInitFailure(message, Object.keys(input.mcpServers ?? {})) : null;
+          if (missing) {
+            emit({type:"runtime.error", message:`Claude did not load this conversation's BizOS tools (${missing}); linked execution stopped before any action.`});
+            finish(false, "mcp_tools_unavailable");
+            return;
+          }
+          emit({type:"capabilities.verified", supervised:true, tools:tools as string[]});
         }
-        emit({type:"capabilities.verified", supervised:true, tools:tools as string[]});
+        // The CLI has read its MCP config and started the servers: the file
+        // (with its one-shot ticket and app secrets) is not needed any more.
+        dropMcpConfig();
       }
       handleClaudeLine(message, state, emit);
       if (message.type === "result") {
