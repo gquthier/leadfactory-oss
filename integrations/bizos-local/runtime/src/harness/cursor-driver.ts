@@ -97,7 +97,11 @@ export function buildCursorArgs(input: {
   if (input.sandbox === "read-only") args.push("--mode", "plan");
   if (input.model) args.push("--model", input.model);
   if (input.resumeCursor) args.push("--resume", input.resumeCursor);
-  // Last, and after every flag: the prompt is positional.
+  // Last, and after every flag: the prompt is positional. It is therefore
+  // visible to `ps -ww` for the user's own processes. cursor-agent
+  // 2026.09.18 documents no stdin or prompt-file option for `-p` (`--help`:
+  // `[prompt...]` only); moving it off argv needs a verified CLI contract,
+  // not a guess, so it stays here (audit .52, QW5).
   args.push(input.system ? `${input.system}\n\n${input.text}` : input.text);
   return args;
 }

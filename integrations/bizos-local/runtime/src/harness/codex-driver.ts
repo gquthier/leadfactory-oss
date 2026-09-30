@@ -183,8 +183,13 @@ export interface CodexTurnInput {
   cli: string;
   cwd: string;
   text: string;
-  /** Persona; codex has no system slot, so it is prefixed to `text`. */
+  /** Per-turn context (and, without `developerInstructions`, the persona);
+   * prefixed to `text` in the user's turn input. */
   system?: string;
+  /** The BizOS brief. Sent once as `thread/start.developerInstructions`
+   * (developer role, app-server v2 schema of codex-cli 0.155.1), so the user
+   * turn text never carries it (audit .52, QW6). */
+  developerInstructions?: string;
   /** Legacy input ignored: a BizOS turn never resumes a native thread. */
   resumedSystem?: string;
   model?: string;
@@ -982,6 +987,7 @@ export function startCodexTurn(input: CodexTurnInput): CodexTurnHandle {
           sandbox: input.skipPermissions ? "danger-full-access" : input.sandbox,
           approvalPolicy: input.skipPermissions ? "never" : "on-request",
           ...(shieldConfig ? { config: shieldConfig } : {}),
+          ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
           ephemeral: true,
           ...(input.dynamicTools?.length ? {
             dynamicTools: input.dynamicTools.map(({ name, description, inputSchema }) => ({

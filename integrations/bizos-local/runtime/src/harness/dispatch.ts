@@ -148,6 +148,15 @@ export const MAX_CHAIN_TURNS = 12;
 /** Turns that may sit waiting on one thread at once. */
 export const MAX_QUEUED_TURNS = 12;
 export const CURSORS_FILE = "cursors.json";
+/** `LOCALBIZOS_DEBUG_TEE=1` (support only, never set by the app) turns the
+ * Cursor protocol tee on. Read per turn from the sidecar's own environment. */
+export const DEBUG_TEE_ENV = "LOCALBIZOS_DEBUG_TEE";
+export function cursorDebugTeeEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return env[DEBUG_TEE_ENV]?.trim() === "1";
+}
+/** Pre-.52 key suffix of a verbatim Claude brief in `cursors.json`; now an
+ * in-memory key only, and scrubbed from the file on load. */
+const BRIEF_SNAPSHOT_SUFFIX = "|brief";
 export const APPROVALS_FILE = "approvals.json";
 export const QUEUE_FULL_NOTE =
   "Too many turns were already waiting on this thread, so the chain stops here.";
@@ -272,7 +281,7 @@ export interface DispatchDependencies {
   /** Absolute paths no agent command may read for a turn of this provider
    * (runtime state, desktop secrets, the OTHER CLI's credentials). See
    * `secret-shield.ts`. Absent ⇒ no shield. */
-  protectedPaths?(input: { provider: string; codexHome?: string; claudeConfigDir?: string }): string[];
+  protectedPaths?(input: { provider: string; codexHome?: string; claudeConfigDir?: string; botId?: string }): string[];
   /** What this bot may reach on the Mac, from Settings → Access. Absent in
    * a harness that has no access store; then a bot sees its workspace and
    * nothing else, which is what the app did before Access existed. */
@@ -591,6 +600,11 @@ export class Dispatcher {
    * exactly its descendants without stopping a newer, unrelated DM turn. */
   private readonly runChains = new Map<string, string>();
   private readonly cursors: Record<string, string>;
+  /** The exact brief a Claude session holds, by cursor key, so a primed
+   * session keeps a byte-identical (cache-friendly) system prompt. MEMORY
+   * ONLY: `cursors.json` keeps its hash and date, never the text, so no
+   * prompt sits verbatim in the profile. A restart costs one cache miss. */
+  private readonly briefSnapshots = new Map<string, string>();
   private readonly approvals: Record<string, true>;
   private readonly expiredAsks = new Map<string, ExpiredAsk>();
   private readonly oneShotApprovals = new Map<string, number>();
@@ -598,6 +612,17 @@ export class Dispatcher {
 
   constructor(private readonly deps: DispatchDependencies) {
     this.cursors = this.deps.storage.readJson<Record<string, string>>(CURSORS_FILE, {});
+    // Before .52 the Claude brief was persisted verbatim under `<key>|brief`.
+    // Adopt it in memory (same session, no cache miss) and rewrite the file
+    // without it.
+    let legacyBriefs = false;
+    for (const [key, value] of Object.entries(this.cursors)) {
+      if (!key.endsWith(BRIEF_SNAPSHOT_SUFFIX)) continue;
+      if (typeof value === "string" && value) this.briefSnapshots.set(key, value);
+      delete this.cursors[key];
+      legacyBriefs = true;
+    }
+    if (legacyBriefs) this.deps.storage.writeJson(CURSORS_FILE, this.cursors);
     this.approvals = this.deps.storage.readJson<Record<string, true>>(APPROVALS_FILE, {});
   }
 
@@ -936,6 +961,9 @@ export class Dispatcher {
     if (running) running.discarded = true;
     for (const key of Object.keys(this.cursors)) {
       if (key.startsWith(`${threadId}|`)) delete this.cursors[key];
+    }
+    for (const key of [...this.briefSnapshots.keys()]) {
+      if (key.startsWith(`${threadId}|`)) this.briefSnapshots.delete(key);
     }
     this.deps.storage.writeJson(CURSORS_FILE, this.cursors);
   }
@@ -2066,7 +2094,7 @@ export class Dispatcher {
       resumeCursor,
       ...(Object.keys(environment).length ? { environment } : {}),
       ...(this.deps.protectedPaths
-        ? { protectedPaths: this.deps.protectedPaths({ provider, ...(plan?.codexHome ? { codexHome: plan.codexHome } : {}), ...(plan?.configDir ? { claudeConfigDir: plan.configDir } : {}) }) }
+        ? { protectedPaths: this.deps.protectedPaths({ provider, botId: bot.id, ...(plan?.codexHome ? { codexHome: plan.codexHome } : {}), ...(plan?.configDir ? { claudeConfigDir: plan.configDir } : {}) }) }
         : {}),
       ...(this.deps.retryScale ? { retryScale: this.deps.retryScale } : {}),
       onEvent: (event: RuntimeEvent) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
@@ -2112,10 +2140,12 @@ export class Dispatcher {
         mcpServers: mountedServers,
         ...(Object.keys(environment).length ? { environment } : {}),
         onEvent: (event: RuntimeEvent) => this.dispatchRuntimeEvent(turn, bot, cursorKey, state, event),
-        tee: (entry) => {
+        // The protocol tee copies every frame, prompt included, to
+        // `native/<thread>.ndjson`: a support tool, off unless asked for.
+        ...(cursorDebugTeeEnabled() ? { tee: (entry: { dir: "in" | "out"; msg: unknown }) => {
           if (turn.discarded || (threadId.startsWith("chat:") && !this.deps.chatExecutor?.(bot.id))) return;
           this.deps.storage.appendNdjson(this.deps.storage.nativePath(threadId), entry);
-        },
+        } } : {}),
       });
     } else if (provider === "claude") {
       const start = this.deps.startClaudeTurn ?? defaultStartClaudeTurn;
@@ -2142,6 +2172,7 @@ export class Dispatcher {
       const { local_team_actions: _mcpTwin, ...codexServers } = mountedServers;
       handle = start({
         ...common,
+        ...(local?.developerInstructions ? { developerInstructions: local.developerInstructions } : {}),
         ...(attached.input.length ? { extraInput: attached.input } : {}),
         ...(writableRoots.length ? { writableRoots } : {}),
         ...(external?.kind === "codex" ? { modelProvider: external } : {}),
@@ -2209,6 +2240,7 @@ export class Dispatcher {
     // Drop the resume cursor: a different auth home cannot continue the thread.
     delete this.cursors[cursorKey];
     for (const key of Object.keys(this.cursors)) if (key.startsWith(`${cursorKey}|`)) delete this.cursors[key];
+    this.briefSnapshots.delete(`${cursorKey}${BRIEF_SNAPSHOT_SUFFIX}`);
     this.deps.storage.writeJson(CURSORS_FILE, this.cursors);
 
     const label = PROVIDER_LABEL[next.provider];
@@ -2296,7 +2328,7 @@ export class Dispatcher {
     cursorKey: string;
     writableRoots: string[];
     skipPermissions: boolean;
-  }): { system: string; resumedSystem?: string; turnPrefix: string; sessionContext: SessionContext } | null {
+  }): { system: string; resumedSystem?: string; developerInstructions?: string; turnPrefix: string; sessionContext: SessionContext } | null {
     const { threadId } = queued;
     const architecture = this.deps.localArchitecture?.({
       bot,
@@ -2368,22 +2400,26 @@ export class Dispatcher {
     const briefAt = Date.parse(this.cursors[`${key}|briefAt`] ?? "");
     const refresh = primed && this.cursors[`${key}|briefHash`] !== briefHash &&
       (!Number.isFinite(briefAt) || this.deps.clock.now().getTime() - briefAt > BRIEF_REFRESH_MS);
-    const withBrief = (text: string): string => [brief, text].filter(Boolean).join("\n\n");
     const resumedFrom = runtime.resumeCursor;
 
     if (runtime.provider === "codex") {
-      // The driver picks: `system` on thread/start (or a failed resume),
-      // `resumedSystem` when the thread really resumed.
-      const full = withBrief(context(true));
+      // Every Codex turn is a fresh ephemeral thread. The brief rides
+      // `thread/start.developerInstructions` (developer role, codex-cli
+      // 0.155.1 app-server v2 schema), never the user's turn text; the
+      // turn text carries only this turn's context and message.
       return {
-        system: full,
-        resumedSystem: !primed ? full : refresh ? withBrief(`(Your brief was updated; it replaces the earlier one.)\n\n${context(false)}`) : context(false),
+        system: context(true),
+        developerInstructions: brief,
         turnPrefix: "",
         sessionContext: { mode: "codex", provider: "codex", brief, resumedFrom, sendsBrief: !primed || refresh },
       };
     }
     if (runtime.provider === "claude") {
-      const snapshot = primed && !refresh ? this.cursors[`${key}|brief`] : undefined;
+      // The in-memory snapshot is used only while it is the brief the disk
+      // hash names; after a restart there is none and the current brief goes.
+      const held = this.briefSnapshots.get(`${key}${BRIEF_SNAPSHOT_SUFFIX}`);
+      const snapshot = primed && !refresh && held !== undefined &&
+        createHash("sha256").update(held).digest("hex") === this.cursors[`${key}|briefHash`] ? held : undefined;
       return {
         system: snapshot ?? brief,
         turnPrefix: context(!primed),
@@ -2406,13 +2442,15 @@ export class Dispatcher {
       // Sent only the delta, but the provider started a new session: it has
       // neither brief nor chat. The next turn starts over with both.
       for (const suffix of ["ctx", "brief", "briefHash", "briefAt"]) delete this.cursors[`${cursorKey}|${suffix}`];
+      this.briefSnapshots.delete(`${cursorKey}${BRIEF_SNAPSHOT_SUFFIX}`);
       return;
     }
     this.cursors[`${cursorKey}|ctx`] = sessionId;
     const sentBrief = context.mode === "codex" ? resumed !== true || context.sendsBrief : context.sendsBrief;
     if (sentBrief) {
-      // Only Claude re-sends the brief itself; the others need its hash.
-      if (context.provider === "claude") this.cursors[`${cursorKey}|brief`] = context.brief;
+      // Only Claude re-sends the brief itself; the others need its hash. The
+      // text stays in memory: the disk holds its hash and date only.
+      if (context.provider === "claude") this.briefSnapshots.set(`${cursorKey}${BRIEF_SNAPSHOT_SUFFIX}`, context.brief);
       this.cursors[`${cursorKey}|briefHash`] = createHash("sha256").update(context.brief).digest("hex");
       this.cursors[`${cursorKey}|briefAt`] = this.deps.clock.nowIso();
     }

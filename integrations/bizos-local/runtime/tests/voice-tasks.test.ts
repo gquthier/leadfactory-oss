@@ -220,7 +220,7 @@ describe("voice task lifecycle", () => {
     expect(f.turns[0]!.environment?.CODEX_HOME).toBe(join(f.root, "codex-a"));
     // Mounted exactly like a typed turn, refused at call time.
     expect(f.turns[0]!.dynamicTools?.map((tool) => tool.name)).toEqual(["recruit_agent"]);
-    expect(f.turns[0]!.system).toContain("recruitment: unavailable");
+    expect(f.turns[0]!.developerInstructions).toContain("recruitment: unavailable");
     expect(f.toolMounts).toEqual([true]);
     await expect(f.turns[0]!.dynamicTools![0]!.call({ name: "Helper", title: "Research" })).rejects.toMatchObject({
       status: 403,

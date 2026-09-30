@@ -9,7 +9,7 @@ import type { ClaudeTurnInput } from "../src/harness/claude-driver.js";
 import { startCodexTurn, type CodexTurnHandle, type CodexTurnInput, type RuntimeEvent } from "../src/harness/codex-driver.js";
 import { LocalBizosHarness } from "../src/harness/harness.js";
 import { AGENT_MEMORY_CAP, loadMemory, memoryGauge, renderMemory } from "../src/harness/memory.js";
-import { buildLocalBrief, buildPersonaPrompt, COMPUTER_DOCTRINE, ephemeralConversationReplay, MAX_EPHEMERAL_REPLAY_CHARS, ROUTINES_SENTENCE, type LocalArchitectureManifest } from "../src/harness/prompt.js";
+import { buildLocalBrief, buildPersonaPrompt, COMPUTER_DOCTRINE, ephemeralConversationReplay, MAX_EPHEMERAL_REPLAY_CHARS, PROMPT_CONFIDENTIALITY, ROUTINES_SENTENCE, type LocalArchitectureManifest } from "../src/harness/prompt.js";
 import { MAX_TASK_CONTINUATIONS } from "../src/harness/task.js";
 import type { Bot, ThreadMessage } from "../src/harness/types.js";
 
@@ -31,7 +31,9 @@ describe("slim local brief", () => {
     const brief = buildLocalBrief({ bot: BOT, orgName: "Acme", manifest: MANIFEST, hasComputer: true, teamTools: true });
     const before = buildPersonaPrompt({ bot: BOT, orgName: "Acme", since: [], roster: [BOT], sharedFolders: [MANIFEST.workspaceDir], hasComputer: true, localArchitecture: MANIFEST });
     expect(brief.length).toBeLessThan(3900);
-    expect(before.length).toBeGreaterThan(brief.length * 3);
+    // The .52 confidentiality line is in both; it does not count for slimness.
+    const shared = PROMPT_CONFIDENTIALITY.length;
+    expect(before.length - shared).toBeGreaterThan((brief.length - shared) * 3);
     // Identity, mission, freedom.
     expect(brief).toContain("You are Vega, CTO, a teammate at Acme.");
     expect(brief).toMatch(/Your mission: move Acme forward/);
@@ -307,7 +309,9 @@ describe("ephemeral CLI context (Codex)", () => {
     const bot = await harness.bots.create({ name: "Vega", title: "CTO" });
     await harness.threads.send({ botId: bot.id }, { text: "First: what is our deploy status?" });
     expect(turns[0]!.resumeCursor).toBeNull();
-    expect(turns[0]!.system).toContain("full latitude");
+    // The brief rides thread/start developerInstructions (.52), not the text.
+    expect(turns[0]!.developerInstructions).toContain("full latitude");
+    expect(turns[0]!.system).not.toContain("full latitude");
     expect(turns[0]!.resumedSystem).toBeUndefined();
     // The triggering message is the turn text, never also in the context.
     expect(turns[0]!.system).not.toContain("First: what is our deploy status?");
@@ -321,14 +325,14 @@ describe("ephemeral CLI context (Codex)", () => {
     expect(second.resumeCursor).toBeNull();
     expect("tee" in second).toBe(false);
     // The native provider starts empty, so BizOS replays its own transcript.
-    expect(second.system).toContain("full latitude");
+    expect(second.developerInstructions).toContain("full latitude");
     expect(second.system).toContain("First: what is our deploy status?");
     expect(second.system).toContain("Deploy is green.");
     // Memory files exist and are in the brief.
     const workspace = (await harness.bots.list()).find((row) => row.id === bot.id)!.workspacePath!;
     expect(existsSync(join(workspace, "MEMORY.md"))).toBe(true);
-    expect(second.system).toMatch(/MEMORY\.md \[\d+% — \d+\/2,200 chars\]/);
-    expect(second.system).toMatch(/USER\.md \[\d+% — \d+\/1,375 chars\]/);
+    expect(second.developerInstructions).toMatch(/MEMORY\.md \[\d+% — \d+\/2,200 chars\]/);
+    expect(second.developerInstructions).toMatch(/USER\.md \[\d+% — \d+\/1,375 chars\]/);
   });
 
   it("the driver ignores native resume and always sends the full portable context", async () => {

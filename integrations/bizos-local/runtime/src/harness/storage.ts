@@ -3,7 +3,7 @@
 //
 //   settings.json  bots.json  groups.json  routines.json  runs.json
 //   threads/<name>.ndjson          one JSON message per line, append-only
-//   native/<name>.ndjson           Cursor protocol tee only, debug only
+//   native/<name>.ndjson           Cursor protocol tee, only with LOCALBIZOS_DEBUG_TEE=1
 //   workspaces/<name>/             each bot's codex cwd
 //
 // `<name>` is `safeFileName(id)`, NOT the id: a thread id is `bot:abc` and

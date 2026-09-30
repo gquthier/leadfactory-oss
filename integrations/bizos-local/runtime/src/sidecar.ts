@@ -3717,11 +3717,12 @@ async function serve(): Promise<void> {
     // What an agent's commands may never read, whatever the mode: the runtime
     // state (owner bearer, provider keys, plans, MCP configs, transcripts),
     // the desktop's own secrets, and the OTHER CLI's credentials.
-    protectedPaths: ({ provider, codexHome, claudeConfigDir }) => [
+    protectedPaths: ({ provider, codexHome, claudeConfigDir, botId }) => [
       ...runtimeProtectedPaths({
         storageRoot: harnessRoot,
         stateRoot,
         descriptorPath,
+        importedContextReaders: botId ? harness.importedContextReaderVaults(botId) : [],
         ...(nativeDescriptorPath ? { nativeDescriptorPath } : {}),
         ...(process.env.BOAT_API_KEY_FILE?.trim() ? { boatKeyFile: process.env.BOAT_API_KEY_FILE.trim() } : {}),
         extra: desktopProtectedPaths(),

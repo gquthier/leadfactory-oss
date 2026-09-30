@@ -33,7 +33,7 @@
 // `LOCALBIZOS_SECRET_SHIELD=0` turns everything here off (support escape
 // hatch); it is never set by the app.
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -71,7 +71,37 @@ export interface RuntimeSecretLocations {
   boatKeyFile?: string;
   /** Extra absolute paths named by the desktop (`LOCALBIZOS_PROTECTED_PATHS`). */
   extra?: readonly string[];
+  /** Vault folders whose `Knowledge/Imported Context` THIS agent may still
+   * read: the vaults whose company CEO it is (the import brief asks the CEO
+   * to read it). Every other vault's import is denied. */
+  importedContextReaders?: readonly string[];
   home?: string;
+}
+
+/** Relative to a vault: the private creation snapshot (web organization
+ * import or picked folder), written once by the runtime. */
+export const IMPORTED_CONTEXT_DIR = join("Knowledge", "Imported Context");
+
+/** `vaults/<id>/Knowledge/Imported Context` for every managed vault, except
+ * the vaults named in `readers`. The folder need not exist yet; the vault is
+ * resolved to its real path so the kernel sees the same spelling. */
+export function importedContextPaths(storageRoot: string, readers: readonly string[] = []): string[] {
+  const allowed = new Set(readers.map(canonicalProtectedPath));
+  const vaults = join(storageRoot, "vaults");
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(vaults, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const paths: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const vault = canonicalProtectedPath(join(vaults, entry.name));
+    if (allowed.has(vault)) continue;
+    paths.push(join(vault, IMPORTED_CONTEXT_DIR));
+  }
+  return paths;
 }
 
 /** Files and folders of the RUNTIME and the desktop that no agent command
@@ -99,6 +129,13 @@ export function runtimeProtectedPaths(input: RuntimeSecretLocations): string[] {
     join(root, "mcp"),
     join(root, "native"),
     join(root, "threads"),
+    // Session cursors and run records (hashes, ids, tasks): no agent reads
+    // them. Before .52 `cursors.json` also held the Claude brief verbatim.
+    join(root, "cursors.json"),
+    join(root, "runs.json"),
+    // The organization context imported into each company: readable by that
+    // company's CEO only, so an injected specialist cannot exfiltrate it.
+    ...importedContextPaths(root, input.importedContextReaders ?? []),
     join(home, "Library", "Application Support", "BizOS-Simple", "Cookies"),
     join(home, "Library", "Application Support", "BizOS-Simple", "Partitions"),
     join(home, "Library", "Application Support", "BizOS-Simple", "Local Storage"),

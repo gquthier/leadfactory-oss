@@ -3671,6 +3671,21 @@ export class LocalBizosHarness {
       ? installation.contextReference : null;
   }
 
+  /** Managed vaults (absolute) whose imported organization context this bot
+   * may read with its own tools: the vaults whose company CEO it is. The
+   * secret shield denies every other vault's `Knowledge/Imported Context`
+   * (audit .52). A registry read failure grants nothing. */
+  importedContextReaderVaults(botId: string): string[] {
+    try {
+      const registry = readTemplateRegistry(this.storage);
+      return Object.values(registry.installations)
+        .filter((installation) => installation?.bots.ceo === botId && !isAbsolute(installation.vaultPath) && installation.vaultPath.startsWith("vaults/"))
+        .map((installation) => join(this.storage.layout.root, installation!.vaultPath));
+    } catch {
+      return [];
+    }
+  }
+
   contextToolsAvailableFor(botId: string): boolean {
     try { return this.contextReferenceForBot(botId) !== null; } catch { return false; }
   }
