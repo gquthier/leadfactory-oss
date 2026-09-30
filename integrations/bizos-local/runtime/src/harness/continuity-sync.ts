@@ -62,6 +62,20 @@ const RUNS = "continuity-runs.json";
 const STOPS = "continuity-stops.json";
 const MAX_REQUEST_BYTES = 256 * 1024;
 class DocumentValidationError extends Error {}
+
+/**
+ * The local tool answered with a client error (HTTP 4xx from the sidecar's
+ * team broker, e.g. `invalid_role`, `invalid_payload`, `recruitment_limit`):
+ * the operation did not happen. Returns the reason to show, else undefined.
+ */
+function localToolRefusal(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const status = (error as { status?: unknown }).status;
+  if (typeof status !== "number" || status < 400 || status >= 500) return undefined;
+  const code = (error as { code?: unknown }).code;
+  const message = error instanceof Error ? error.message : String(error);
+  return `${typeof code === "string" && code ? `${code}: ` : ""}${message}`.slice(0, 500);
+}
 const RECONCILABLE_EFFECT_TOOLS = new Set([
   "bizos_image_generate", "bizos_site_create", "bizos_site_publish", "bizos_site_unpublish",
   "bizos_email_send", "schedule_routine", "recruit_agent",
@@ -1422,9 +1436,17 @@ export class ConversationContinuity {
     try {
       result = await perform();
     } catch (error) {
+      // A local refusal (validation, scope, one recruit per turn…) is a
+      // definite outcome: nothing happened, and the model must see why so it
+      // can correct its call. Only an error without such an answer may have
+      // left an external effect behind and needs reconciliation.
+      const refusal = localToolRefusal(error);
       const status =
-        error instanceof DocumentValidationError ? "failed" : "unknown";
-      this.guard.update(threadId, operationId, status);
+        error instanceof DocumentValidationError || refusal ? "failed" : "unknown";
+      const failedReceipt = refusal
+        ? `The tool refused the call: ${refusal}`
+        : "Document was not written; validation failed.";
+      this.guard.update(threadId, operationId, status, status === "failed" ? failedReceipt : undefined);
       let receiptMissing = false;
       try {
         await this.call("runs/receipt", {
@@ -1433,7 +1455,7 @@ export class ConversationContinuity {
           status,
           receipt:
             status === "failed"
-              ? "Document was not written; validation failed."
+              ? failedReceipt
               : "Result unavailable; external effect may have happened.",
         });
       } catch (receiptError) {

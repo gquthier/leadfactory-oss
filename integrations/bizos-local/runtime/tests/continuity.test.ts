@@ -1236,3 +1236,29 @@ it("unblocks a conversation already blocked by a .50 inherited unknown native ef
   expect(operations).toContain("runs/start");
   continuity.close();
 });
+it("reports a local tool refusal as a definite failure with its reason, without replay", async () => {
+  const { storage } = fixture();
+  storage.writeJson("continuity-runs.json", { local: { requestId: "one", threadId: "bot:a", localRunId: "local",
+    runtime: "claude", runId: "server-1", epoch: 1, turnId: "turn-1", leaseToken: "lease" } });
+  const { ConversationContinuity } = await import("../src/harness/continuity-sync.js");
+  const calls: string[] = [];
+  const continuity = new ConversationContinuity(storage, async operation => {
+    calls.push(operation);
+    return (operation === "runs/admit" ? { admitted: true } : {}) as never;
+  });
+  continuity.store.link("bot:a", binding);
+  continuity.guard.install("bot:a", { runId: "server-1", generation: 1, leaseToken: "lease",
+    expiresAt: Date.now() + 60_000, grants: ["*"], budgetRemaining: 5 }, () => undefined);
+  const refusal = Object.assign(new Error("Role content-lead is missing, linked or corrupt; nothing was recruited."),
+    { status: 422, code: "invalid_role" });
+  const perform = vi.fn(async () => { throw refusal; });
+  await expect(continuity.execute("bot:a", "local", "recruit_agent", { name: "Nina", role: "content-lead" }, perform))
+    .rejects.toThrow("nothing was recruited");
+  expect(perform).toHaveBeenCalledTimes(1);
+  expect(calls).not.toContain("runs/effect");
+  const [effect] = continuity.store.effects("bot:a");
+  expect(effect).toMatchObject({ tool: "recruit_agent", state: "failed" });
+  expect(JSON.stringify(effect)).toContain("invalid_role");
+  expect(JSON.stringify(effect)).not.toContain("could not be verified after consulting the broker");
+  continuity.close();
+});
