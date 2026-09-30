@@ -1205,6 +1205,12 @@ export class CollaborationFacade {
     continuity.store.restoreQuarantinedWorkspace(localId, identity);
     continuity.store.quarantineMismatchedWorkspace(localId, identity.workspaceId);
     if (continuity.store.status(localId)) return true;
+    // Never link a thread under a run: the run was admitted unlinked, so its
+    // reply would reach the journal without execution authority and the run
+    // would stop (« linked agent message has no execution authority »). A
+    // just-recruited teammate's first task crossing the 30 s tick hit this
+    // (R53). The next tick links the thread once its runs have settled.
+    if (this.harness.threads.activeRunIds(target).length) return false;
     const bots = await this.invoke<Bot[]>("lbz:bots:list");
     const groups = await this.invoke<Group[]>("lbz:groups:list");
     const title = "botId" in target ? bots.find(bot => bot.id === target.botId)?.name

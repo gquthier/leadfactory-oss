@@ -3562,6 +3562,8 @@ export class LocalBizosHarness {
       return message;
     },
     hasUnlinkedHistory: (target: ThreadTarget): boolean => this.threadStore.hasUnlinkedHistory(target),
+    /** Runs working, queued or waiting on this thread (no transcript read). */
+    activeRunIds: (target: ThreadTarget): string[] => this.dispatcher.activeRunIds(threadIdForTarget(target)),
     get: async (target: ThreadTarget): Promise<ThreadSnapshot> =>
       this.threadStore.snapshot(target, this.dispatcher.activeRunIds(threadIdForTarget(target))),
     messages: async (
