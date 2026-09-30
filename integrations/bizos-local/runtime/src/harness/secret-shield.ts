@@ -128,6 +128,9 @@ export function runtimeProtectedPaths(input: RuntimeSecretLocations): string[] {
       ? [join(input.stateRoot, "instance.json"), join(input.stateRoot, "sidecar.log"), join(input.stateRoot, "collaboration-index.json")]
       : []),
     join(root, "providers.json"),
+    // "Smart choice": the owner's TypeSafe key, and the decisions log.
+    join(root, "smart-routing-key.json"),
+    join(root, "smart-routing.json"),
     join(root, "apps.json"),
     join(root, "settings.json"),
     join(root, "cloud-computer.json"),

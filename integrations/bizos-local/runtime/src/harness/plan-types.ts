@@ -51,6 +51,10 @@ export interface PlanRoutingState {
 export interface PlansFile {
   plans: ConnectedPlan[];
   routing: PlanRoutingState;
+  /** Families whose machine account (`~/.codex`, `~/.claude`, `~/.cursor`)
+   * the owner disconnected in Settings: detection leaves them alone until the
+   * owner connects that family again. Absent in files written before .54. */
+  dismissedMachine?: PlanProvider[];
 }
 
 /** Renderer-safe shape: never carries auth home paths. */

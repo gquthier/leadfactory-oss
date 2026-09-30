@@ -799,6 +799,17 @@ export function buildHandlers(
     "lbz:inference:remove": (args) => harness.inference.remove(asProviderId(at(args, 0))),
     "lbz:inference:test": (args) => harness.inference.test(asProviderId(at(args, 0))),
     "lbz:runtime:selectModel": (args) => harness.runtime.selectModel(asModelSelection(at(args, 0))),
+    // "Smart choice": on/off, the level, the preferred engine and the owner's
+    // own TypeSafe key (write-only: the state says whether one is stored).
+    "lbz:smart:state": async () => harness.smartRouting.state(),
+    "lbz:smart:configure": (args) =>
+      harness.smartRouting.configure(
+        asStrictRecord(at(args, 0), "input", ["enabled", "preference", "apiKey", "preferredFamily"] as const),
+      ),
+    "lbz:smart:decisions": async (args) => {
+      const limit = at(args, 0);
+      return harness.smartRouting.decisions(typeof limit === "number" && Number.isInteger(limit) ? limit : 50);
+    },
     "lbz:runtime:setInference": (args) => harness.runtime.setInference(asInferenceChoice(at(args, 0))),
     "lbz:runtime:setPermissions": (args) =>
       harness.runtime.setPermissions({

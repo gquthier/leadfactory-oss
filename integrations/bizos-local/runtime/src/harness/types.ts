@@ -52,6 +52,10 @@ export interface LocalRuntimeSettings {
   /** Proactive heartbeat (sidecar only). Absent ⇒ ON every 30 minutes,
    * 08:00–21:00 local. See `harness/heartbeat.ts`. */
   heartbeat?: { enabled: boolean; everyMinutes: number };
+  /** "Smart choice" (2026-09-30): before each turn with no explicit model,
+   * pick among the owner's LOCAL plans by estimated difficulty. Absent ⇒ off.
+   * See `harness/smart-routing.ts`. */
+  smart?: { enabled: boolean; preference: "economy" | "balanced" | "best" };
 }
 
 export interface RuntimeSettings {

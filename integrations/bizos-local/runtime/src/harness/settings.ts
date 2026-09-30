@@ -41,6 +41,19 @@ export const INFERENCE_PROVIDER_ID = /^prv_[a-z0-9]{6,40}$/;
 export const HEARTBEAT_MIN_MINUTES = 10;
 export const HEARTBEAT_MAX_MINUTES = 240;
 
+const SMART_PREFERENCE_VALUES = ["economy", "balanced", "best"] as const;
+
+/** `{enabled, preference}`, or undefined for anything else (lenient read). */
+export function smartSetting(value: unknown): { enabled: boolean; preference: (typeof SMART_PREFERENCE_VALUES)[number] } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.enabled !== "boolean") return undefined;
+  const preference = SMART_PREFERENCE_VALUES.includes(record.preference as (typeof SMART_PREFERENCE_VALUES)[number])
+    ? (record.preference as (typeof SMART_PREFERENCE_VALUES)[number])
+    : "balanced";
+  return { enabled: record.enabled, preference };
+}
+
 function heartbeatSetting(value: unknown): { enabled: boolean; everyMinutes: number } | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -127,6 +140,7 @@ export function normalizeSettings(raw: unknown): RuntimeSettings {
       ...(inferenceProviderId !== undefined ? { inferenceProviderId } : {}),
       ...(local.inferenceModel === null ? { inferenceModel: null } : typeof local.inferenceModel === "string" && MODEL_ID.test(local.inferenceModel) ? { inferenceModel: local.inferenceModel } : {}),
       ...(heartbeatSetting(local.heartbeat) ? { heartbeat: heartbeatSetting(local.heartbeat)! } : {}),
+      ...(smartSetting(local.smart) ? { smart: smartSetting(local.smart)! } : {}),
     },
     appearance: {
       // A `settings.json` written before F-THEME has no `appearance` at all, and
@@ -307,6 +321,13 @@ export function validateLocalPatch(local: Record<string, unknown>, policy: Setti
       /* clear */
     } else if (typeof local.inferenceProviderId !== "string" || !INFERENCE_PROVIDER_ID.test(local.inferenceProviderId.trim())) {
       throw new SettingsError("inferenceProviderId must be a prv_… id or null");
+    }
+  }
+  if ("smart" in local && local.smart !== undefined) {
+    const smart = local.smart as Record<string, unknown> | null;
+    if (!smart || typeof smart !== "object" || typeof smart.enabled !== "boolean"
+      || (smart.preference !== undefined && !SMART_PREFERENCE_VALUES.includes(smart.preference as (typeof SMART_PREFERENCE_VALUES)[number]))) {
+      throw new SettingsError('smart must be {enabled: boolean, preference: "economy" | "balanced" | "best"}');
     }
   }
   if ("heartbeat" in local && local.heartbeat !== undefined && !heartbeatSetting(local.heartbeat)) {

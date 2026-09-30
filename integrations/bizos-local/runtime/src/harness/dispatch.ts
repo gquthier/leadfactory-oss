@@ -73,6 +73,7 @@ import { BIZOS_INFERENCE_PROVIDER, type ExternalExecutionProvider, type OllamaEx
 import { startOllamaTurn as defaultStartOllamaTurn, type OllamaTurnInput } from "./ollama-driver.js";
 import { startOpenAiTurn as defaultStartOpenAiTurn, type OpenAiTurnInput } from "./openai-driver.js";
 import type { ConnectedPlan, PlanProvider } from "./plan-types.js";
+import type { SmartDecision } from "./smart-routing.js";
 import {
   GROUP_LEAD_TURN_NOTE,
   buildLocalBrief,
@@ -257,6 +258,14 @@ export interface DispatchDependencies {
     failedPlanId: string;
     preferredProvider?: PlanProvider;
   }): ConnectedPlan | null;
+  /** "Smart choice": the owner's LOCAL plan and model for a turn that has no
+   * explicit model (no per-conversation /model, no agent pin, no provider).
+   * Resolves `null` when the mode is off or no local plan can answer. It
+   * never rejects in practice; a rejection is treated as `null`. */
+  smartRoute?(input: { threadId: string; runId: string; text: string; attachments: number; origin: "owner" | "system" }): Promise<SmartDecision | null>;
+  /** Called once the chosen plan really starts the turn, for the record and
+   * the grey line under the reply. */
+  recordSmartRoute?(input: { runId: string; threadId: string; decision: SmartDecision }): void;
   /** Pin a thread×bot to a plan after a successful start. */
   pinPlan?(cursorKey: string, planId: string): void;
   /** Touch lastUsedAt after a turn uses a plan. */
@@ -386,6 +395,8 @@ interface QueuedTurn {
 }
 
 interface ActiveTurn extends QueuedTurn {
+  /** The "Smart choice" this turn runs under, kept for its continuations. */
+  smart?: SmartDecision;
   /** Codex and Claude turns are fresh native sessions with portable replay. */
   ephemeralCli?: boolean;
   onboardingNameProposed?: boolean;
@@ -1836,9 +1847,43 @@ export class Dispatcher {
     this.pump(threadId);
   }
 
-  private launch(queued: QueuedTurn, bot: Bot, options: { failoverUsed?: boolean; linkedReady?: boolean } = {}): void {
+  /** Whether "Smart choice" may pick this turn's model. Anything explicit wins:
+   * a voice binding, the BizOS plan, an Ollama binding, the agent's or the
+   * conversation's own /model, or a provider chosen for the whole workspace. */
+  private smartEligible(queued: QueuedTurn, bot: Bot, settings: RuntimeSettings): boolean {
+    if (!this.deps.smartRoute || settings.local.smart?.enabled !== true) return false;
+    if (queued.executionPolicy?.source === "voice" || queued.ollamaBinding) return false;
+    if (this.deps.bizosSelected?.(queued.threadId) === true) return false;
+    if (bot.planId || bot.providerId || bot.model?.trim()) return false;
+    if (settings.local.inferenceProviderId || settings.local.activePlanId) return false;
+    return true;
+  }
+
+  private launch(queued: QueuedTurn, bot: Bot, options: { failoverUsed?: boolean; linkedReady?: boolean; smart?: SmartDecision | null } = {}): void {
     const { threadId } = queued;
     const settings = this.deps.settings();
+    // Decide the model BEFORE anything else reads the plan. The classifier is
+    // bounded (1.5 s) and falls back locally; while it runs the turn sits in
+    // `preparing`, where STOP and Clear already reach it.
+    if (options.smart === undefined && this.smartEligible(queued, bot, settings)) {
+      this.preparing.set(threadId, queued);
+      // Only a turn the owner typed may reach the remote classifier. A
+      // heartbeat, a routine, another agent's hand-off or a continuation is
+      // text BizOS or an agent wrote: the local heuristic judges it.
+      const owner = Boolean(queued.triggerMessageId) && !queued.fromBotId && !queued.heartbeat && !queued.routineId && !queued.continuationCount;
+      const route = this.deps.smartRoute!({
+        threadId, runId: queued.runId, text: queued.text, attachments: queued.attachments?.length ?? 0,
+        origin: owner ? "owner" : "system",
+      });
+      void route.catch(() => null).then((decision) => {
+        if (this.preparing.get(threadId) !== queued) return;
+        this.preparing.delete(threadId);
+        try { this.launch(queued, bot, { ...options, smart: decision ?? null }); }
+        catch (error) { this.abandon(queued, bot.id, error instanceof Error ? error.message : String(error)); }
+      });
+      return;
+    }
+    const smart = options.smart ?? null;
     // ONE switch, read once, for whichever CLI answers: Settings → Plans &
     // usage → Permissions. `skip-all` is global on purpose — see
     // `PermissionPolicy`.
@@ -1850,13 +1895,14 @@ export class Dispatcher {
     if (bizos && !this.deps.bizosChat) { this.abandon(queued, bot.id, "BizOS inference requires the enrolled Desktop bridge."); return; }
     const ownPlanProvider = strictBinding || bizos ? null : bot.planId ? (this.deps.planProviderOf?.(bot.planId) ?? null) : null;
     if (!strictBinding && !bizos && bot.planId && !ownPlanProvider) { this.abandon(queued, bot.id, "The selected personal plan was removed; choose another source."); return; }
-    const preferredProvider = strictBinding?.provider ?? ownPlanProvider ?? settings.local.provider;
+    const preferredProvider = strictBinding?.provider ?? ownPlanProvider ?? smart?.family ?? settings.local.provider;
     // An external endpoint answers through codex and needs no plan at all;
     // otherwise the router picks among the connected plans.
     let ownExternal: ExternalExecutionProvider | null = null;
     let globalExternal: ExternalExecutionProvider | null = null;
     const globalProviderId = settings.local.inferenceProviderId;
-    const exactPlanId = strictBinding?.planId ?? (bot.providerId ? undefined : bot.planId || (!globalProviderId ? settings.local.activePlanId : undefined)) ?? undefined;
+    let exactPlanId = strictBinding?.planId ?? (bot.providerId ? undefined : bot.planId || (!globalProviderId ? settings.local.activePlanId : undefined)) ?? undefined;
+    if (smart && !strictBinding && !bizos && !exactPlanId) exactPlanId = smart.planId;
     try {
       ownExternal = strictBinding || bizos || queued.ollamaBinding ? null : bot.providerId ? (this.deps.inferenceProviderById?.(bot.providerId) ?? null) : null;
       globalExternal = strictBinding || bizos || queued.ollamaBinding || bot.providerId || (bot.planId && ownPlanProvider) ? null : this.deps.inferenceProvider?.() ?? null;
@@ -1868,7 +1914,7 @@ export class Dispatcher {
     if (!strictBinding && !bizos && !bot.providerId && !(bot.planId && ownPlanProvider) && globalProviderId && !external) {
       this.abandon(queued, bot.id, "The selected inference provider was removed; choose a provider in Settings."); return;
     }
-    const plan = external || bizos
+    let plan = external || bizos
       ? null
       : this.deps.resolvePlan?.({
           cursorKey,
@@ -1876,6 +1922,13 @@ export class Dispatcher {
           ...(bot.planId && ownPlanProvider ? { botPlanId: bot.planId } : {}),
           ...(exactPlanId ? { exactPlanId } : {}),
         });
+    // The smart pick went stale between the decision and now (a cooldown, a
+    // disconnect): the turn runs as if the mode were off rather than failing.
+    if (smart && exactPlanId === smart.planId && (!plan || plan.id !== smart.planId)) {
+      this.launch(queued, bot, { ...options, smart: null });
+      return;
+    }
+    const smartApplied = Boolean(smart && plan && plan.id === smart.planId);
     if (!bizos && exactPlanId && !external && (!plan || plan.id !== exactPlanId)) { this.abandon(queued, bot.id, "The selected personal plan is unavailable; reconnect it or choose another source."); return; }
     if (strictBinding && (!plan || plan.id !== strictBinding.planId || plan.provider !== strictBinding.provider)) {
       this.abandon(queued, bot.id, "The voice task's selected personal plan is no longer available.");
@@ -1888,7 +1941,7 @@ export class Dispatcher {
     const family = plan?.provider ?? preferredProvider;
     const model = bizos ? BIZOS_INFERENCE_PROVIDER.model : external
       ? (queued.ollamaBinding?.model || bot.model?.trim() || (!bot.providerId && settings.local.inferenceModel?.trim()) || external.model || undefined)
-      : (bot.model?.trim() || (bot.planId ? undefined : exactPlanId ? settings.local.model?.trim() : modelForFamily(family, settings.local.model)) || undefined);
+      : (bot.model?.trim() || (smartApplied ? smart!.model : undefined) || (bot.planId ? undefined : exactPlanId ? settings.local.model?.trim() : modelForFamily(family, settings.local.model)) || undefined);
     if (provider === "ollama" && !model) { this.abandon(queued, bot.id, "Select an installed Ollama model in Settings."); return; }
     if (provider === "api" && !model) { this.abandon(queued, bot.id, "Choose a model for this API provider in Settings → Plans & usage."); return; }
 
@@ -2074,11 +2127,15 @@ export class Dispatcher {
       cancelled: false,
       discarded: false,
       ...(plan ? { planId: plan.id, planProvider: plan.provider } : {}),
+      ...(smartApplied ? { smart: smart! } : {}),
       failoverUsed: options.failoverUsed === true,
       ...(local ? { sessionContext: local.sessionContext } : {}),
       taskStartedAtMs: queued.taskStartedAtMs ?? this.deps.clock.now().getTime(),
     };
     this.active.set(threadId, turn);
+    if (smartApplied) {
+      try { this.deps.recordSmartRoute?.({ runId: queued.runId, threadId, decision: smart! }); } catch { /* the record never stops a turn */ }
+    }
 
     const state = { text: "", steps: [] as StepItem[], failure: null as string | null };
     const environment: Record<string, string | undefined> = {
@@ -2093,8 +2150,8 @@ export class Dispatcher {
       text: turnText,
       ...(persona ? { system: persona } : {}),
       ...(model ? { model } : {}),
-      ...(bot.thinking ?? settings.local.reasoningEffort
-        ? { effort: bot.thinking ?? settings.local.reasoningEffort }
+      ...((smartApplied ? smart!.effort : undefined) ?? bot.thinking ?? settings.local.reasoningEffort
+        ? { effort: (smartApplied ? smart!.effort : undefined) ?? bot.thinking ?? settings.local.reasoningEffort }
         : {}),
       sandbox: settings.local.sandbox,
       skipPermissions: effectiveSkipPermissions,
@@ -2914,7 +2971,7 @@ export class Dispatcher {
           this.launch({ ...queuedOf(turn), continuationCount: count + 1, previousCheckpoint: fingerprint,
             triggerMessageId: undefined,
             text: `Continue the authorized task from the checkpoint below. Inspect existing results before repeating actions. Complete and verify the remaining work, then update checkpoint_task.\nCheckpoint (reported data): ${fingerprint}`,
-          }, bot, { failoverUsed: turn.failoverUsed });
+          }, bot, { failoverUsed: turn.failoverUsed, ...(turn.smart ? { smart: turn.smart } : {}) });
           return;
         }
         ok = false;
