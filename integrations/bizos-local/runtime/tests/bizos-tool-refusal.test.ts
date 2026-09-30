@@ -78,3 +78,24 @@ it("names every MCP team route after the tool the model called, as Codex's dynam
   expect(routes.length).toBeGreaterThan(5);
   for (const route of routes) expect(MCP_OPERATION_TOOLS[route], route).toBeDefined();
 });
+
+it("shows the refusal as one grey line in the agent's conversation", async () => {
+  const { mkdtempSync: temp, rmSync: remove } = await import("node:fs");
+  const { LocalBizosHarness } = await import("../src/harness/harness.js");
+  const root = temp(join(tmpdir(), "bizos-tool-notice-"));
+  try {
+    const harness = new LocalBizosHarness({
+      rootDir: join(root, "state"), homeDir: root, baseUrl: "", readSessionCookie: async () => "", orgName: () => "Acme",
+      execPath: "/fake/node", packaged: false, runAsNodeAvailable: false, mcpScriptPath: join(root, "none.mjs"),
+      environment: { PATH: "/nowhere" }, devices: false,
+    });
+    const ceo = await harness.bots.create({ name: "CEO" });
+    const refusal = bizosToolRefusal("bizos_image_generate", await bridgeRefusal(), "fr-FR")!;
+    harness.threads.appendNotice({ threadId: `bot:${ceo.id}` }, refusal.notice);
+    const last = (await harness.threads.get({ botId: ceo.id })).messages.at(-1);
+    expect(last).toMatchObject({ role: "system", blocks: [{ kind: "meta", text: `Image non générée : ${WEEKLY.fr}.` }] });
+    harness.stop();
+  } finally {
+    remove(root, { recursive: true, force: true });
+  }
+});
