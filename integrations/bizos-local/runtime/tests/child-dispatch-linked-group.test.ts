@@ -1,7 +1,9 @@
 // R53: once the CEO's team group was auto-linked, every later recruitment
 // failed to start the recruit's first task — the recruiter's handoff was
 // appended to the linked group as an agent message with no execution
-// authority (« linked agent message has no execution authority »).
+// authority (« linked agent message has no execution authority »), and the
+// broker admits no linked run in a conversation without a human message
+// (runs/start → dependency_missing). The task now goes to the recruit's chat.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +43,7 @@ async function parentRun(harness: LocalBizosHarness, ceoId: string): Promise<str
   return runId;
 }
 
-it("starts the recruit's first task in a linked team group, the handoff standing as a system line", async () => {
+it("sends the recruit's first task to its own chat when the team group is linked", async () => {
   const { harness } = setup();
   const ceo = await harness.bots.create({ name: "CEO" });
   const nina = await harness.bots.create({ name: "TEST53 Nina" });
@@ -56,8 +58,16 @@ it("starts the recruit's first task in a linked team group, the handoff standing
     { text: "@TEST53 Nina Présente-toi puis propose trois idées de clips.", messageId: "msg_r53_handoff", allowPreviouslyVisited: true },
   );
   expect(launched.runId).toBeTruthy();
-  const handoff = await harness.threads.message({ groupId: group.id }, "msg_r53_handoff");
-  expect(handoff).toMatchObject({ role: "system", blocks: [{ kind: "text", text: expect.stringContaining("Présente-toi") }] });
+  expect((await harness.runs.get(launched.runId))?.threadId).toBe(`bot:${nina.id}`);
+  expect(await harness.threads.message({ groupId: group.id }, "msg_r53_handoff")).toBeUndefined();
+  expect(await harness.threads.message({ botId: nina.id }, "msg_r53_handoff"))
+    .toMatchObject({ role: "system", blocks: [{ kind: "text", text: expect.stringContaining("Présente-toi") }] });
+  // A retried dispatch of the same task never lands twice.
+  await expect(harness.threads.dispatchChild(
+    { botId: ceo.id, threadId: `bot:${ceo.id}`, runId },
+    { botId: nina.id, groupId: group.id },
+    { text: "@TEST53 Nina Présente-toi.", messageId: "msg_r53_handoff" },
+  )).rejects.toThrow(/already exists/);
 });
 
 it("keeps the recruiter's own bubble in an unlinked team group", async () => {

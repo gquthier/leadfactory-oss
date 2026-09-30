@@ -771,20 +771,20 @@ export class Dispatcher {
     // in the group as its own message, and the answer lands beside them — a
     // conversation between agents the person can read. Without a group, the
     // task stays a system line in the recruit's own chat, as before.
-    const threadId = target.groupId
-      ? threadIdForTarget({ groupId: target.groupId })
-      : threadIdForTarget({ botId: target.botId });
-    if (this.deps.threads.get(threadId, input.messageId)) {
+    // A LINKED team group cannot carry it (R53): the recruiter's words have no
+    // execution authority in that conversation (« linked agent message has no
+    // execution authority »), and the broker admits a linked run only after a
+    // human message there (runs/start → dependency_missing). Every recruitment
+    // after the group's auto-link failed to start its first task. The task
+    // then goes to the recruit's own new chat, as without a group.
+    const groupThreadId = target.groupId ? threadIdForTarget({ groupId: target.groupId }) : null;
+    const directThreadId = threadIdForTarget({ botId: target.botId });
+    if (this.deps.threads.get(directThreadId, input.messageId) || (groupThreadId && this.deps.threads.get(groupThreadId, input.messageId))) {
       throw new Error("the initial task message already exists and will not be dispatched twice");
     }
-    // A linked group journals an agent message only under a linked run of
-    // THAT conversation. The recruiter's run belongs to its own chat, so its
-    // words would have no execution authority there, the append would throw
-    // and the recruit's first task would never start — every recruitment
-    // after the team group got auto-linked (R53). There the handoff stands as
-    // a system line; the recruit's answer is journaled by its own run.
-    const asAgent = Boolean(target.groupId) && this.deps.continuity?.linked(threadId) !== true;
-    const message = this.deps.threads.append(threadId, asAgent
+    const inGroup = groupThreadId !== null && this.deps.continuity?.linked(groupThreadId) !== true;
+    const threadId = inGroup ? groupThreadId! : directThreadId;
+    const message = this.deps.threads.append(threadId, inGroup
       ? { id: input.messageId, role: "bot", botId: scope.botId, deliveryState: "complete", blocks: [{ kind: "text", text: input.text }] }
       : { id: input.messageId, role: "system", blocks: [{ kind: "text", text: input.text }] });
     this.deps.events.publish({ type: "thread.message.created", threadId, message });

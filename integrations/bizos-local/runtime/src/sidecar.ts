@@ -2877,7 +2877,8 @@ export class CollaborationFacade {
           ...(launched.error ? { error: launched.error } : {}),
         };
       } catch (error) {
-        const existingMessage = await this.harness.threads.message({ groupId: group.id }, planned.messageId);
+        const existingMessage = await this.harness.threads.message({ groupId: group.id }, planned.messageId)
+          ?? await this.harness.threads.message({ botId: bot.id }, planned.messageId);
         dispatch = {
           status: "failed",
           parentRunId: this.runId(capability.runId),
