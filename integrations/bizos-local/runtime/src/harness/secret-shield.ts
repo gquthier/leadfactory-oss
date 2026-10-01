@@ -41,6 +41,13 @@ export const SECRET_SHIELD_ENV = "LOCALBIZOS_SECRET_SHIELD";
 export const CODEX_SHIELD_PROFILE = "bizos_shield";
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
+/** Windows has no verified OS-level file-read shield for a CLI process tree.
+ * A model can call a shell even when its built-in file tools have deny rules.
+ * Until a restricted token/AppContainer is proven, no agent CLI turn may run. */
+export function windowsCliExecutionBlocked(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "win32";
+}
+
 export function secretShieldEnabled(env: Record<string, string | undefined> = process.env): boolean {
   const value = env[SECRET_SHIELD_ENV]?.trim().toLowerCase();
   return !(value === "0" || value === "off" || value === "false");
@@ -110,6 +117,9 @@ export function importedContextPaths(storageRoot: string, readers: readonly stri
 export function runtimeProtectedPaths(input: RuntimeSecretLocations): string[] {
   const home = input.home ?? homedir();
   const root = input.storageRoot;
+  const desktopProfile = process.platform === "win32"
+    ? join(process.env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "BizOS-Simple")
+    : join(home, "Library", "Application Support", "BizOS-Simple");
   const paths = [
     input.descriptorPath,
     input.nativeDescriptorPath,
@@ -136,10 +146,10 @@ export function runtimeProtectedPaths(input: RuntimeSecretLocations): string[] {
     // The organization context imported into each company: readable by that
     // company's CEO only, so an injected specialist cannot exfiltrate it.
     ...importedContextPaths(root, input.importedContextReaders ?? []),
-    join(home, "Library", "Application Support", "BizOS-Simple", "Cookies"),
-    join(home, "Library", "Application Support", "BizOS-Simple", "Partitions"),
-    join(home, "Library", "Application Support", "BizOS-Simple", "Local Storage"),
-    join(home, "Library", "Application Support", "BizOS-Simple", "Session Storage"),
+    join(desktopProfile, "Cookies"),
+    join(desktopProfile, "Partitions"),
+    join(desktopProfile, "Local Storage"),
+    join(desktopProfile, "Session Storage"),
     ...(input.extra ?? []),
   ].filter((path): path is string => typeof path === "string" && path.trim().length > 0);
   return [...new Set(paths.map(canonicalProtectedPath))];
@@ -185,14 +195,17 @@ export function seatbeltAvailable(platform: NodeJS.Platform = process.platform):
   return platform === "darwin" && existsSync(SANDBOX_EXEC);
 }
 
-/** Wrap a CLI launch in `sandbox-exec` when the platform supports it; the
- * command is otherwise launched as-is (Linux/Windows have no seatbelt). */
+/** Wrap a CLI launch in `sandbox-exec` when the platform supports it.
+ * Windows must fail closed even if a future caller bypasses the driver guard. */
 export function seatbeltLaunch(
   command: string,
   args: readonly string[],
   profile: string,
   platform: NodeJS.Platform = process.platform,
 ): { command: string; args: string[]; sandboxed: boolean } {
+  if (windowsCliExecutionBlocked(platform)) {
+    throw new Error("Windows agent CLI requires an OS-enforced secret shield.");
+  }
   if (!seatbeltAvailable(platform)) return { command, args: [...args], sandboxed: false };
   return { command: SANDBOX_EXEC, args: ["-p", profile, command, ...args], sandboxed: true };
 }

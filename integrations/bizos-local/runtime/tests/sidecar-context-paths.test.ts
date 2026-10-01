@@ -69,7 +69,10 @@ async function api(
   return { status: response.status, body: await response.json() };
 }
 
-describe.skipIf(!built)(
+// This fixture expects a mock Claude CLI run. Windows rejects every CLI run
+// until its native secret shield exists; windows-secret-shield.test.ts covers
+// that fail-closed contract instead.
+describe.skipIf(!built || process.platform === "win32")(
   "Live path context through real sidecar and MCP",
   () => {
     beforeAll(async () => {

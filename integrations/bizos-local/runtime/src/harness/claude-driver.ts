@@ -25,7 +25,7 @@ import {
 } from "./codex-driver.js";
 import { augmentedPath } from "./env-path.js";
 import { describeSpawnFailure, killCliTree, spawnCli, type PipedChild } from "./procs.js";
-import { claudeDenySettings, seatbeltDenyReadProfile, seatbeltLaunch, secretShieldEnabled } from "./secret-shield.js";
+import { claudeDenySettings, seatbeltDenyReadProfile, seatbeltLaunch, secretShieldEnabled, windowsCliExecutionBlocked } from "./secret-shield.js";
 import { redactSecrets, redactSecretsInText } from "./redact.js";
 import { classifyError } from "./retry.js";
 import type { ReasoningEffort, SandboxMode } from "./types.js";
@@ -228,6 +228,13 @@ export function claudeChildEnvironment(
 }
 
 export function startClaudeTurn(input: ClaudeTurnInput): CodexTurnHandle {
+  if (windowsCliExecutionBlocked()) {
+    queueMicrotask(() => {
+      input.onEvent({ type: "runtime.error", message: "Claude on Windows requires an OS-enforced secret shield before CLI execution is available.", setup: true });
+      input.onEvent({ type: "turn.completed", ok: false, stopReason: "secret_shield_unavailable" });
+    });
+    return { stop: () => {}, respond: () => "unavailable", sessionId: () => null, settled: () => true };
+  }
   const state = {
     settled: false,
     stopRequested: false,

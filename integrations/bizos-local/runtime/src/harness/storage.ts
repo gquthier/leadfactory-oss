@@ -247,6 +247,9 @@ export function writeFileAtomic(path: string, contents: string): void {
     closeSync(descriptor);
   }
   renameSync(temporary, path);
+  // Windows cannot fsync a directory handle (EPERM). The file bytes have
+  // already been flushed, and the same-directory rename remains atomic.
+  if (process.platform === "win32") return;
   const directory = openSync(dirname(path), "r");
   try { fsyncSync(directory); } finally { closeSync(directory); }
 }

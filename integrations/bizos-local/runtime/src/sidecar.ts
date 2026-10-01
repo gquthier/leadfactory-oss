@@ -3,7 +3,7 @@ import { BizosInferenceSelection } from "./harness/bizos-inference.js";
 import { localComputerEnabled } from "./computer/release.js";
 import { ContinuityBridgeError, desktopContinuityTransport } from "./continuity-bridge.js";
 import { CONTINUITY_MCP_OPERATIONS } from "./continuity-tools.js";
-import { cliCredentialPaths, runtimeProtectedPaths } from "./harness/secret-shield.js";
+import { cliCredentialPaths, runtimeProtectedPaths, windowsCliExecutionBlocked } from "./harness/secret-shield.js";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
@@ -21,7 +21,7 @@ import {
 import { createReadStream, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { downloadGeneratedImage, MAX_IMAGE_BYTES } from "./generated-image.js";
 import { ImageOperationPendingError, pollSignedImageOperation } from "./signed-image-operation.js";
@@ -101,11 +101,14 @@ import { CloudLink, CloudLinkError, DEFAULT_WEB_ORIGIN, webOrigin } from "./clou
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_ROOT_VARIABLE = "LOCALBIZOS_SIDECAR_STATE";
-const defaultStateRoot = resolve(join(homedir(), "Library", "Application Support", "BizOS-local-harness"));
+const defaultAppDataRoot = process.platform === "win32"
+  ? resolve(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"))
+  : resolve(join(homedir(), "Library", "Application Support"));
+const defaultStateRoot = join(defaultAppDataRoot, "BizOS-local-harness");
 const stateRoot = resolve(process.env[STATE_ROOT_VARIABLE] ?? defaultStateRoot);
 const descriptorPath = resolve(
   process.env.LOCALBIZOS_SIDECAR_DESCRIPTOR
-    ?? join(homedir(), "Library", "Application Support", "BizOS-desktop", "local-harness.json"),
+    ?? join(defaultAppDataRoot, "BizOS-desktop", "local-harness.json"),
 );
 const harnessRoot = join(stateRoot, "runtime");
 /** Absolute paths the desktop asks the shield to cover (JSON array, e.g. its
@@ -113,7 +116,7 @@ const harnessRoot = join(stateRoot, "runtime");
 function desktopProtectedPaths(): string[] {
   try {
     const parsed: unknown = JSON.parse(process.env.LOCALBIZOS_PROTECTED_PATHS ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string" && value.startsWith("/")) : [];
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string" && isAbsolute(value)) : [];
   } catch {
     return [];
   }
@@ -269,6 +272,7 @@ function safeHarnessEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {};
   for (const key of [
     "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM", "COLORTERM", "PATH",
+    "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "SystemRoot", "ComSpec",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS",
     "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
     // The local plan tier override (entitlement.ts) is read by the harness.
@@ -1180,10 +1184,10 @@ export class CollaborationFacade {
       session: { userId: this.userId, workspaceId: this.workspaceId, access: "owner" as const },
       capabilities: { ...LOCAL_BACKEND_CAPABILITIES, computer: this.harness.computerToolsAvailable() },
       providers: {
-        supported: LOCAL_PROVIDERS,
+        supported: windowsCliExecutionBlocked() ? ["ollama"] : LOCAL_PROVIDERS,
         configured: [...new Set([...plans.filter((plan) => plan.status !== "disconnected").map((plan) => plan.provider), ...(inference.providers.some(provider => provider.kind === "ollama") ? ["ollama"] : [])])],
         selected: selectedExternal?.kind === "ollama" ? "ollama" : settings.local.provider ?? null,
-        recruitment: { codex: true, claude: true, cursor: true, ollama: true },
+        recruitment: { codex: !windowsCliExecutionBlocked(), claude: !windowsCliExecutionBlocked(), cursor: !windowsCliExecutionBlocked(), ollama: true },
       },
       humans: [{ userId: this.userId, displayName: "Local owner", email: null, isSelf: true }],
       agents: visibleBots.map((bot) => this.agent(bot, true)),
@@ -1834,10 +1838,10 @@ export class CollaborationFacade {
     return {
       mode: "local-harness", backendMode: "local", settings, plans, models, tools,
       providers: {
-        supported: LOCAL_PROVIDERS,
-        recruitment: { codex: true, claude: true, cursor: true, ollama: true },
+        supported: windowsCliExecutionBlocked() ? ["ollama"] : LOCAL_PROVIDERS,
+        recruitment: { codex: !windowsCliExecutionBlocked(), claude: !windowsCliExecutionBlocked(), cursor: !windowsCliExecutionBlocked(), ollama: true },
         toolSurface: {
-          computer: { codex: true, claude: true, api: true, ollama: true, cursor: true },
+          computer: { codex: !windowsCliExecutionBlocked(), claude: !windowsCliExecutionBlocked(), api: true, ollama: true, cursor: !windowsCliExecutionBlocked() },
         },
       },
       inference: {
@@ -3888,7 +3892,7 @@ async function serve(): Promise<void> {
         workspaceDir,
         ...(sharedBrainPath ? { sharedBrainPath } : {}),
         sandbox,
-        supportedProviders: ["codex", "claude", "cursor", "ollama"],
+        supportedProviders: windowsCliExecutionBlocked() ? ["ollama"] : ["codex", "claude", "cursor", "ollama"],
         peers: peers.map((peer) => ({ agentId: `local:${id}:agent:${peer.id}`, name: peer.name, ...(peer.title ? { title: peer.title } : {}) })),
         mcpToolNames: [
           ...LOCAL_TEAM_TOOL_SPECS.filter(tool => !isCloudToolName(tool.name) || (!serverComputer && localComputerEnabled())).map(tool => tool.name),
