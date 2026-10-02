@@ -1,0 +1,2 @@
+import {localTransaction} from '@/lib/starter-local-store';import {AgentsWorkspace} from './workspace';
+export default async function Agents(){if(process.env.LEADFACTORY_DATA_MODE==='supabase')return <p className="p-8">Ce panneau de configuration est réservé au starter local.</p>;const clients=await localTransaction(db=>db.tables.profiles.filter(p=>p.role==='client').map(p=>({id:p.id,company:p.company||p.full_name})),{},false);return <AgentsWorkspace clients={clients}/>;}

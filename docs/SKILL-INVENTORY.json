@@ -1,0 +1,2026 @@
+{
+  "readDate": "2026-10-01",
+  "status": "Anonymized metadata inventory, not execution certification",
+  "pathSightings": 11333,
+  "distinctContents": 475,
+  "distinctNames": 403,
+  "scope": "Local skill directories and development repositories; duplicate worktrees and symlinks included. Some inaccessible links omitted. Not a full-disk audit.",
+  "skills": [
+    {
+      "name": "local-source-0001",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0002",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0003",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0004",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0005",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0006",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0007",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0008",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0009",
+      "contentVariants": 1,
+      "pathSightings": 46
+    },
+    {
+      "name": "local-source-0010",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0011",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0012",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0013",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0014",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0015",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0016",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0017",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0018",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0019",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0020",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0021",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0022",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0023",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0024",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0025",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0026",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0027",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0028",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0029",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0030",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0031",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0032",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0033",
+      "contentVariants": 2,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0034",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0035",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0036",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0037",
+      "contentVariants": 2,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0038",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0039",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0040",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0041",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0042",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0043",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0044",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0045",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0046",
+      "contentVariants": 1,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0047",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0048",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0049",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0050",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0051",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0052",
+      "contentVariants": 3,
+      "pathSightings": 82
+    },
+    {
+      "name": "local-source-0053",
+      "contentVariants": 2,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0054",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0055",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0056",
+      "contentVariants": 2,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0057",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0058",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0059",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0060",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0061",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0062",
+      "contentVariants": 2,
+      "pathSightings": 73
+    },
+    {
+      "name": "local-source-0063",
+      "contentVariants": 1,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0064",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0065",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0066",
+      "contentVariants": 2,
+      "pathSightings": 81
+    },
+    {
+      "name": "local-source-0067",
+      "contentVariants": 3,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0068",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0069",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0070",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0071",
+      "contentVariants": 2,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0072",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0073",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0074",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0075",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0076",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0077",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0078",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0079",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0080",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0081",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0082",
+      "contentVariants": 4,
+      "pathSightings": 27
+    },
+    {
+      "name": "local-source-0083",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0084",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0085",
+      "contentVariants": 2,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0086",
+      "contentVariants": 3,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0087",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0088",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0089",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0090",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0091",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0092",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0093",
+      "contentVariants": 3,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0094",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0095",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0096",
+      "contentVariants": 2,
+      "pathSightings": 10
+    },
+    {
+      "name": "local-source-0097",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0098",
+      "contentVariants": 2,
+      "pathSightings": 120
+    },
+    {
+      "name": "local-source-0099",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0100",
+      "contentVariants": 3,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0101",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0102",
+      "contentVariants": 2,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0103",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0104",
+      "contentVariants": 2,
+      "pathSightings": 120
+    },
+    {
+      "name": "local-source-0105",
+      "contentVariants": 2,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0106",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0107",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0108",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0109",
+      "contentVariants": 4,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0110",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0111",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0112",
+      "contentVariants": 3,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0113",
+      "contentVariants": 3,
+      "pathSightings": 100
+    },
+    {
+      "name": "local-source-0114",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0115",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0116",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0117",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0118",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0119",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0120",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0121",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0122",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0123",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0124",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0125",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0126",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0127",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0128",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0129",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0130",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0131",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0132",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0133",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0134",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0135",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0136",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0137",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0138",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0139",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0140",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0141",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0142",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0143",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0144",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0145",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0146",
+      "contentVariants": 2,
+      "pathSightings": 120
+    },
+    {
+      "name": "local-source-0147",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0148",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0149",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0150",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0151",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0152",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0153",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0154",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0155",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0156",
+      "contentVariants": 1,
+      "pathSightings": 81
+    },
+    {
+      "name": "local-source-0157",
+      "contentVariants": 1,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0158",
+      "contentVariants": 1,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0159",
+      "contentVariants": 2,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0160",
+      "contentVariants": 2,
+      "pathSightings": 19
+    },
+    {
+      "name": "local-source-0161",
+      "contentVariants": 1,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0162",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0163",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0164",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0165",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0166",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0167",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0168",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0169",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0170",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0171",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0172",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0173",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0174",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0175",
+      "contentVariants": 2,
+      "pathSightings": 10
+    },
+    {
+      "name": "local-source-0176",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0177",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0178",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0179",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0180",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0181",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0182",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0183",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0184",
+      "contentVariants": 2,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0185",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0186",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0187",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0188",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0189",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0190",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0191",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0192",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0193",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0194",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0195",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0196",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0197",
+      "contentVariants": 2,
+      "pathSightings": 13
+    },
+    {
+      "name": "local-source-0198",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0199",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0200",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0201",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0202",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0203",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0204",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0205",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0206",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0207",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0208",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0209",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0210",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0211",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0212",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0213",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0214",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0215",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0216",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0217",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0218",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0219",
+      "contentVariants": 5,
+      "pathSightings": 171
+    },
+    {
+      "name": "local-source-0220",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0221",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0222",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0223",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0224",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0225",
+      "contentVariants": 2,
+      "pathSightings": 81
+    },
+    {
+      "name": "local-source-0226",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0227",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0228",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0229",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0230",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0231",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0232",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0233",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0234",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0235",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0236",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0237",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0238",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0239",
+      "contentVariants": 2,
+      "pathSightings": 120
+    },
+    {
+      "name": "local-source-0240",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0241",
+      "contentVariants": 3,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0242",
+      "contentVariants": 2,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0243",
+      "contentVariants": 5,
+      "pathSightings": 277
+    },
+    {
+      "name": "local-source-0244",
+      "contentVariants": 2,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0245",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0246",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0247",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0248",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0249",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0250",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0251",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0252",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0253",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0254",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0255",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0256",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0257",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0258",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0259",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0260",
+      "contentVariants": 2,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0261",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0262",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0263",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0264",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0265",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0266",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0267",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0268",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0269",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0270",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0271",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0272",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0273",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0274",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0275",
+      "contentVariants": 3,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0276",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0277",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0278",
+      "contentVariants": 1,
+      "pathSightings": 46
+    },
+    {
+      "name": "local-source-0279",
+      "contentVariants": 1,
+      "pathSightings": 46
+    },
+    {
+      "name": "local-source-0280",
+      "contentVariants": 2,
+      "pathSightings": 107
+    },
+    {
+      "name": "local-source-0281",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0282",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0283",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0284",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0285",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0286",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0287",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0288",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0289",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0290",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0291",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0292",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0293",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0294",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0295",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0296",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0297",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0298",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0299",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0300",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0301",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0302",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0303",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0304",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0305",
+      "contentVariants": 1,
+      "pathSightings": 4
+    },
+    {
+      "name": "local-source-0306",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0307",
+      "contentVariants": 2,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0308",
+      "contentVariants": 2,
+      "pathSightings": 13
+    },
+    {
+      "name": "local-source-0309",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0310",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0311",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0312",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0313",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0314",
+      "contentVariants": 2,
+      "pathSightings": 81
+    },
+    {
+      "name": "local-source-0315",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0316",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0317",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0318",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0319",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0320",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0321",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0322",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0323",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0324",
+      "contentVariants": 3,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0325",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0326",
+      "contentVariants": 4,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0327",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0328",
+      "contentVariants": 1,
+      "pathSightings": 106
+    },
+    {
+      "name": "local-source-0329",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0330",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0331",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0332",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0333",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0334",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0335",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0336",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0337",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0338",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0339",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0340",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0341",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0342",
+      "contentVariants": 3,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0343",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0344",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0345",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0346",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0347",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0348",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0349",
+      "contentVariants": 2,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0350",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0351",
+      "contentVariants": 1,
+      "pathSightings": 102
+    },
+    {
+      "name": "local-source-0352",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0353",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0354",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0355",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0356",
+      "contentVariants": 2,
+      "pathSightings": 2
+    },
+    {
+      "name": "local-source-0357",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0358",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0359",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0360",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0361",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0362",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0363",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0364",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0365",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0366",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0367",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0368",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0369",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0370",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0371",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0372",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0373",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0374",
+      "contentVariants": 1,
+      "pathSightings": 18
+    },
+    {
+      "name": "local-source-0375",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0376",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0377",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0378",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0379",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0380",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0381",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0382",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0383",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0384",
+      "contentVariants": 1,
+      "pathSightings": 3
+    },
+    {
+      "name": "local-source-0385",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0386",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0387",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0388",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0389",
+      "contentVariants": 2,
+      "pathSightings": 187
+    },
+    {
+      "name": "local-source-0390",
+      "contentVariants": 2,
+      "pathSightings": 107
+    },
+    {
+      "name": "local-source-0391",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0392",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0393",
+      "contentVariants": 2,
+      "pathSightings": 19
+    },
+    {
+      "name": "local-source-0394",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0395",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0396",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0397",
+      "contentVariants": 1,
+      "pathSightings": 72
+    },
+    {
+      "name": "local-source-0398",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0399",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0400",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0401",
+      "contentVariants": 1,
+      "pathSightings": 9
+    },
+    {
+      "name": "local-source-0402",
+      "contentVariants": 1,
+      "pathSightings": 1
+    },
+    {
+      "name": "local-source-0403",
+      "contentVariants": 1,
+      "pathSightings": 9
+    }
+  ],
+  "namesRedacted": true
+}

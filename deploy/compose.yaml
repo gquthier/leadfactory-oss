@@ -1,0 +1,28 @@
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      PORTAL_ORIGIN: https://${PORTAL_DOMAIN:?Set your owned portal domain}
+    volumes:
+      - agency-data:/app/data
+    ports:
+      - "127.0.0.1:4310:4310"
+    restart: unless-stopped
+  https:
+    image: caddy:2-alpine
+    environment:
+      PORTAL_DOMAIN: ${PORTAL_DOMAIN:?Set your owned portal domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls-data:/data
+    depends_on:
+      - app
+    restart: unless-stopped
+volumes:
+  agency-data:
+  tls-data:

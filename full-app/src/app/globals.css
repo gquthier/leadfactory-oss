@@ -1,0 +1,141 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: #000000;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #FFFDF5;
+    font-family: 'Space Grotesk', 'Inter Tight', system-ui, sans-serif;
+    color: #000000;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  /* ─── Brutalist Cards ─── */
+  .card-brutal {
+    @apply bg-white border-3 border-black shadow-brutal;
+  }
+  .card-brutal-sm {
+    @apply bg-white border-3 border-black shadow-brutal-sm;
+  }
+  .card-blue {
+    @apply bg-lf-blue border-3 border-black shadow-brutal;
+  }
+  .card-pink {
+    @apply bg-lf-pink border-3 border-black shadow-brutal;
+  }
+  .card-yellow {
+    @apply bg-lf-yellow border-3 border-black shadow-brutal;
+  }
+  .card-green {
+    @apply bg-lf-green border-3 border-black shadow-brutal;
+  }
+
+  /* ─── Brutalist Buttons ─── */
+  .btn-primary {
+    @apply bg-black text-white border-3 border-black px-8 py-4 font-bold uppercase tracking-wider shadow-brutal-sm hover:shadow-brutal-xs hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-100 cursor-pointer;
+  }
+  .btn-secondary {
+    @apply bg-white text-black border-3 border-black px-8 py-4 font-bold uppercase tracking-wider shadow-brutal-sm hover:shadow-brutal-xs hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-100 cursor-pointer;
+  }
+  .btn-blue {
+    @apply bg-lf-blue text-white border-3 border-black px-8 py-4 font-bold uppercase tracking-wider shadow-brutal-sm hover:shadow-brutal-xs hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-100 cursor-pointer;
+  }
+  .btn-pink {
+    @apply bg-lf-pink text-black border-3 border-black px-8 py-4 font-bold uppercase tracking-wider shadow-brutal-sm hover:shadow-brutal-xs hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-100 cursor-pointer;
+  }
+  .btn-disabled {
+    @apply bg-gray-200 text-gray-400 border-3 border-gray-300 px-8 py-4 font-bold uppercase tracking-wider cursor-not-allowed;
+  }
+
+  /* ─── Brutalist Inputs ─── */
+  .input-brutal {
+    @apply w-full bg-white border-3 border-black px-4 py-3 font-medium text-black placeholder:text-gray-400 focus:outline-none focus:shadow-brutal-sm focus:translate-x-[-2px] focus:translate-y-[-2px] transition-all duration-100;
+  }
+  .textarea-brutal {
+    @apply w-full bg-white border-3 border-black px-4 py-3 font-medium text-black placeholder:text-gray-400 focus:outline-none focus:shadow-brutal-sm focus:translate-x-[-2px] focus:translate-y-[-2px] transition-all duration-100 resize-none;
+  }
+  .label-brutal {
+    @apply block text-sm font-black uppercase tracking-wider mb-2 text-black;
+  }
+  .hint-brutal {
+    @apply text-xs text-lf-gray mt-1 font-medium;
+  }
+
+  /* ─── Sticker Badge ─── */
+  .sticker {
+    @apply inline-block bg-lf-pink border-3 border-black px-5 py-2 font-black uppercase text-sm tracking-wider shadow-brutal-sm;
+  }
+  .sticker-yellow {
+    @apply inline-block bg-lf-yellow border-3 border-black px-5 py-2 font-black uppercase text-sm tracking-wider shadow-brutal-sm;
+  }
+  .sticker-blue {
+    @apply inline-block bg-lf-blue text-white border-3 border-black px-5 py-2 font-black uppercase text-sm tracking-wider shadow-brutal-sm;
+  }
+
+  /* ─── Section Header ─── */
+  .section-letter {
+    @apply text-5xl font-black text-lf-blue leading-none;
+  }
+  .section-title {
+    @apply text-2xl font-black uppercase tracking-tight text-black;
+  }
+  .section-desc {
+    @apply text-sm font-medium text-lf-gray;
+  }
+
+  /* ─── Custom Checkbox ─── */
+  .checkbox-brutal {
+    @apply w-5 h-5 border-3 border-black bg-white appearance-none cursor-pointer flex-shrink-0 relative;
+  }
+  .checkbox-brutal:checked {
+    @apply bg-lf-blue;
+  }
+  .checkbox-brutal:checked::after {
+    content: '✓';
+    @apply absolute inset-0 flex items-center justify-center text-white text-xs font-black;
+  }
+
+  /* ─── Custom Radio ─── */
+  .radio-brutal {
+    @apply w-5 h-5 border-3 border-black bg-white appearance-none cursor-pointer flex-shrink-0 rounded-full relative;
+  }
+  .radio-brutal:checked {
+    @apply bg-lf-blue border-lf-blue;
+  }
+
+  /* ─── Divider ─── */
+  .divider {
+    @apply border-t-3 border-black;
+  }
+
+  /* ─── Pill tag ─── */
+  .pill {
+    @apply bg-white border-3 border-black px-4 py-2 text-sm font-bold shadow-brutal-xs;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Grid brutalist background */
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(0, 0, 0, 0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 0, 0, 0.04) 1px, transparent 1px);
+    background-size: 80px 80px;
+  }
+}

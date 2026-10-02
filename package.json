@@ -1,0 +1,29 @@
+{
+  "name": "leadfactory-oss",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Templates métier locaux Agency et E-commerce : dashboards, skills et intégration BizOS",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node scripts/test.mjs",
+    "templates:build": "node scripts/build-agency-agents.mjs && node scripts/build-agency-template.mjs && node ecommerce/scripts/build-template.mjs && node scripts/build-onboarding-form.mjs",
+    "templates:check": "node scripts/build-agency-template.mjs --check",
+    "templates:export": "node scripts/export-templates.mjs",
+    "agents:build": "node scripts/build-agency-agents.mjs",
+    "agents:check": "node scripts/build-agency-agents.mjs --check",
+    "test:outbound": "python3 -B test-python/test_outbound.py",
+    "demo": "node scripts/start-demo.mjs",
+    "test:voice": "python3 -B test-python/test_voice.py",
+    "full": "npm --prefix full-app run dev",
+    "full:build": "npm --prefix full-app run build"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gquthier/leadfactory-oss.git"
+  }
+}

@@ -1,0 +1,281 @@
+// The desktop contract, against a REAL sidecar process: `node dist/sidecar.js
+// serve` on a temporary state root, with a temporary HOME so no profile of
+// this Mac is read, and no CLI on PATH. Skipped when `dist/` is not built
+// (`npm run build` first).
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const sidecarScript = join(runtimeRoot, "dist", "sidecar.js");
+const built = existsSync(sidecarScript) && existsSync(join(runtimeRoot, "dist", "agency-kit", "lib", "app.mjs"));
+const PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n8sAAAAASUVORK5CYII=";
+
+interface Descriptor { origin: string; token: string; instanceId: string; pid: number }
+
+let temp: string;
+let child: ChildProcess | null = null;
+let descriptor: Descriptor;
+let logs = "";
+
+async function waitFor<T>(probe: () => T | null | undefined, timeoutMs: number, what: string): Promise<T> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const value = probe();
+    if (value) return value;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+  throw new Error(`timed out waiting for ${what}\n${logs}`);
+}
+
+async function api(method: string, path: string, body?: unknown, token = descriptor.token): Promise<{ status: number; body: any }> {
+  const response = await fetch(new URL(path, descriptor.origin), {
+    method,
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return { status: response.status, body: await response.json() };
+}
+
+describe.skipIf(!built)("the agency routes of a running sidecar", () => {
+  beforeAll(async () => {
+    temp = mkdtempSync(join(tmpdir(), "lbz-sidecar-agency-"));
+    const home = join(temp, "home");
+    mkdirSync(home, { recursive: true });
+    const descriptorPath = join(temp, "desktop", "local-harness.json");
+    child = spawn(process.execPath, [sidecarScript, "serve"], {
+      cwd: runtimeRoot,
+      env: {
+        HOME: home,
+        PATH: "/usr/bin:/bin",
+        TMPDIR: temp,
+        LOCALBIZOS_SIDECAR_STATE: join(temp, "state"),
+        LOCALBIZOS_SIDECAR_DESCRIPTOR: descriptorPath,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    child.stdout?.on("data", (chunk: Buffer) => { logs += chunk.toString(); });
+    child.stderr?.on("data", (chunk: Buffer) => { logs += chunk.toString(); });
+    descriptor = await waitFor(() => {
+      try {
+        return JSON.parse(readFileSync(descriptorPath, "utf8")) as Descriptor;
+      } catch {
+        return null;
+      }
+    }, 30_000, "the sidecar descriptor");
+    // The facade is prepared before the health route answers 200.
+    const until = Date.now() + 30_000;
+    while (Date.now() < until) {
+      const health = await api("GET", "/api/local/health").catch(() => ({ status: 0, body: null }));
+      if (health.status === 200) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    }
+  }, 60_000);
+
+  afterAll(async () => {
+    if (child && child.exitCode === null) {
+      child.kill("SIGTERM");
+      await new Promise((resolveExit) => child!.once("exit", resolveExit));
+    }
+    await rm(temp, { recursive: true, force: true });
+  }, 60_000);
+
+  it("serves status, install, open behind the desktop bearer, and closes everything with the sidecar", async () => {
+    // Auth guard untouched: no bearer, no answer.
+    expect((await api("GET", "/api/local/agency", undefined, "")).status).toBe(401);
+    expect((await api("GET", "/api/local/dashboard-summary", undefined, "")).status).toBe(401);
+    const unboundSummary = await api("GET", "/api/local/dashboard-summary");
+    expect(unboundSummary.status).toBe(200);
+    expect(unboundSummary.body).toMatchObject({ version: 1, templateId: null, business: { state: "unavailable" }, finance: { state: "unavailable" } });
+    expect(unboundSummary.body).toMatchObject({ agents: { waiting: expect.any(Number) },
+      activity: { state: expect.stringMatching(/^(ready|empty)$/), monthComplete: expect.any(Boolean) },
+      plan: { state: expect.stringMatching(/^(ready|empty)$/) }, mode: { permissions: expect.any(String) },
+      setup: { steps: expect.arrayContaining([{ key: "company", done: false }]) } });
+
+    const before = await api("GET", "/api/local/agency");
+    expect(before.status).toBe(200);
+    expect(before.body).toEqual({
+      installed: false,
+      status: "not-installed",
+      template: { id: "lead-gen-agency", name: "Lead Gen Agency", version: 2 },
+      dashboardUrl: null,
+      bots: [],
+      teamThreadId: null,
+      skillsCount: 26,
+      rootId: null,
+      vaultPath: null,
+      boundTemplateId: null,
+    });
+    expect((await api("POST", "/api/local/agency/open", {})).status).toBe(409);
+    expect((await api("POST", "/api/local/agency/install", { force: true })).status).toBe(400);
+
+    const installed = await api("POST", "/api/local/agency/install", {});
+    expect(installed.status).toBe(200);
+    const vault = join(temp, "state", "runtime", "vaults", "lead-gen-agency");
+    expect(installed.body).toMatchObject({
+      installed: true,
+      status: "ready",
+      skillsCount: 26,
+      rootId: "vault:lead-gen-agency",
+      vaultPath: vault,
+      boundTemplateId: null,
+    });
+    // The vault the desktop shows is real, and the pack's store is inside it.
+    expect(existsSync(join(vault, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(vault, "skills"))).toBe(true);
+    expect(installed.body.dashboardUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(installed.body.bots).toHaveLength(1);
+    expect(installed.body.bots[0]).toMatchObject({ name: "CEO", slug: "ceo" });
+    expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true }, "")).status).toBe(401);
+    expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true, extra: true })).status).toBe(400);
+    const claimedAvatar = await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true });
+    expect(claimedAvatar.body.job).toMatchObject({ state: "submitting", botId: expect.any(String), prompt: expect.stringContaining("fictional adult human") });
+    expect(await api("POST", `/api/local/bots/${claimedAvatar.body.job.botId}/avatar/generate`, {
+      avatarPrompt: "A different avatar while submission is active.",
+    })).toMatchObject({ status: 409, body: { error: { code: "avatar_generation_in_flight" } } });
+    expect((await api("POST", "/api/local/avatar-worker/report", {
+      jobId: claimedAvatar.body.job.id, leaseToken: claimedAvatar.body.job.leaseToken, event: "ready",
+    })).status).toBe(400);
+    expect((await api("POST", "/api/local/avatar-worker/report", {
+      jobId: claimedAvatar.body.job.id, leaseToken: claimedAvatar.body.job.leaseToken,
+      event: "submitted", taskId: "kie-sidecar-task",
+    })).body).toMatchObject({ ok: true, applied: true, status: "submitted" });
+    expect(await api("POST", `/api/local/bots/${claimedAvatar.body.job.botId}/avatar/generate`, {
+      avatarPrompt: "A different avatar while provider polling is active.",
+    })).toMatchObject({ status: 409, body: { error: { code: "avatar_generation_in_flight" } } });
+    const pollingAvatar = await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true });
+    expect(pollingAvatar.body.job).toMatchObject({ state: "submitted", taskId: "kie-sidecar-task" });
+    expect((await api("POST", "/api/local/avatar-worker/report", {
+      jobId: pollingAvatar.body.job.id, leaseToken: pollingAvatar.body.job.leaseToken, event: "ready", dataUrl: PNG,
+    })).body).toMatchObject({ ok: true, applied: true, status: "ready" });
+    expect((await api("GET", "/api/local/bots")).body.bots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: claimedAvatar.body.job.botId, avatarKind: "generated", avatarGeneration: { status: "ready" } }),
+    ]));
+    const regenerated = await api("POST", `/api/local/bots/${claimedAvatar.body.job.botId}/avatar/generate`, {
+      avatarPrompt: "Fictional adult founder, solid green studio background.",
+    });
+    expect(regenerated.body.bot).toMatchObject({
+      id: claimedAvatar.body.job.botId,
+      avatarKind: "generated",
+      avatarGeneration: { status: "pending" },
+    });
+    const uploadedId = claimedAvatar.body.job.botId;
+    expect((await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: "data:image/png;base64,AAAA" })).status).toBe(400);
+    expect((await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG, extra: true })).status).toBe(400);
+    expect((await api("POST", "/api/local/bots/missing-bot/avatar", { dataUrl: PNG })).status).toBe(404);
+    const uploaded = await api("POST", `/api/local/bots/${uploadedId}/avatar`, { dataUrl: PNG });
+    expect(uploaded.status).toBe(200);
+    expect(uploaded.body.bot).toMatchObject({ id: uploadedId, avatarKind: "upload" });
+    expect(uploaded.body.bot.avatarGeneration?.status).not.toBe("pending");
+    expect((await api("POST", "/api/local/avatar-worker/claim", { workerId: "desktop-main", configured: true })).body.job ?? null)
+      .not.toMatchObject({ botId: uploadedId });
+    expect(existsSync(join(vault, "Roles", "strategist", "system.md"))).toBe(true);
+    const prefix = `local:${descriptor.instanceId}:`;
+    for (const bot of installed.body.bots as Array<{ id: string; name: string; slug: string; threadId: string }>) {
+      expect(bot.id.startsWith(`${prefix}agent:`)).toBe(true);
+      expect(bot.threadId).toBe(`${prefix}thread:bot:${bot.id.slice(`${prefix}agent:`.length)}`);
+      expect(bot.name).toBeTruthy();
+      expect(bot.slug).toBeTruthy();
+    }
+    expect(installed.body.teamThreadId).toBeNull();
+    const summary = await api("GET", "/api/local/dashboard-summary");
+    expect(summary.status).toBe(200);
+    expect(summary.body).toMatchObject({ version: 1, templateId: "lead-gen-agency", agents: { total: 1 }, finance: { state: "unavailable" } });
+    // The bound vault is the one path the desktop is told; nothing else of
+    // this Mac (its state root, its home) leaks into the contract.
+    expect(JSON.stringify({ ...installed.body, vaultPath: null })).not.toContain(temp);
+
+    // Idempotent, and the same after a GET.
+    const again = await api("POST", "/api/local/agency/install", {});
+    expect(again.body.bots).toEqual(installed.body.bots);
+    const status = await api("GET", "/api/local/agency");
+    expect(status.body).toEqual(installed.body);
+    // `open` is the one route that mints a ticket: a fragment on the base URL,
+    // one use, never on the plain status.
+    const opened = await api("POST", "/api/local/agency/open", {});
+    const openUrl = new RegExp(`^${installed.body.dashboardUrl.replace(/[.]/g, "\\.")}/#connect=([0-9a-f]{64})$`);
+    expect(opened.body.dashboardUrl).toMatch(openUrl);
+    const ticket = openUrl.exec(opened.body.dashboardUrl)![1]!;
+    expect((await api("POST", "/api/local/agency/open", {})).body.dashboardUrl).not.toContain(ticket);
+    expect((await api("GET", "/api/local/agency")).body.dashboardUrl).toBe(installed.body.dashboardUrl);
+
+    // The dashboard is the kit's own cockpit, on loopback, on the pack's store —
+    // and hosted: bare HTTP is refused, the ticket buys a session cookie.
+    expect((await fetch(`${installed.body.dashboardUrl}/api/state`)).status).toBe(401);
+    const exchange = await fetch(`${installed.body.dashboardUrl}/api/session`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket }),
+    });
+    expect(exchange.status).toBe(200);
+    const cookie = (exchange.headers.get("set-cookie") ?? "").split(";")[0]!;
+    expect(exchange.headers.get("set-cookie")).toContain("HttpOnly");
+    const cockpit = await fetch(`${installed.body.dashboardUrl}/api/state`, { headers: { cookie } });
+    expect(cockpit.status).toBe(200);
+    expect(await cockpit.json()).toMatchObject({ version: 1, clients: [] });
+    const meta = await fetch(`${installed.body.dashboardUrl}/api/meta`, { headers: { cookie } });
+    expect(await meta.json()).toMatchObject({ hostedBy: "bizos-local" });
+    const replay = await fetch(`${installed.body.dashboardUrl}/api/session`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket }),
+    });
+    expect(replay.status).toBe(401);
+    const page = await fetch(`${installed.body.dashboardUrl}/`);
+    expect(page.headers.get("content-type")).toContain("text/html");
+
+    // The agents and their threads are real collaboration objects the desktop already reads.
+    const bootstrap = await api("GET", "/api/collaboration/bootstrap");
+    const agentIds = (bootstrap.body.agents as Array<{ agentId: string }>).map((agent) => agent.agentId);
+    const threadIds = (bootstrap.body.threads as Array<{ id: string }>).map((thread) => thread.id);
+    for (const bot of installed.body.bots as Array<{ id: string; threadId: string }>) {
+      expect(agentIds).toContain(bot.id);
+      expect(threadIds).toContain(bot.threadId);
+    }
+    expect(agentIds).toHaveLength(1);
+    expect(threadIds).toHaveLength(1);
+    const director = (bootstrap.body.threads as Array<{ id: string; lastMessage: { content: string } | null }>)
+      .find((thread) => thread.id === (installed.body.bots as Array<{ threadId: string }>)[0]!.threadId)!;
+    // The current onboarding welcome asks for the company brief before work.
+    expect(director.lastMessage?.content).toContain("Agence de prospection");
+    expect(director.lastMessage?.content).toContain("Dis-moi en une phrase ce que tu vends et à qui");
+
+    // Internal tool door: no capability, no answer.
+    const noCapability = await fetch(new URL("/api/internal/local-team/agency", descriptor.origin), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tool: "agency_clients", arguments: { action: "list" } }),
+    });
+    expect(noCapability.status).toBe(401);
+
+    // One template per workspace: the other pack names the binding and
+    // installs nothing behind it.
+    const other = await api("GET", "/api/local/ecommerce");
+    expect(other.body).toMatchObject({
+      installed: false,
+      status: "not-installed",
+      template: { id: "ecommerce", name: "E-commerce", version: 1 },
+      boundTemplateId: "lead-gen-agency",
+      vaultPath: null,
+      dashboardUrl: null,
+      bots: [],
+    });
+    expect((await api("POST", "/api/local/ecommerce/install", {})).status).toBe(409);
+    expect((await api("POST", "/api/local/ecommerce/open", {})).status).toBe(409);
+    expect((await api("GET", "/api/local/workspace-template")).body.binding).toMatchObject({
+      templateId: "lead-gen-agency", rootId: "vault:lead-gen-agency", path: vault,
+    });
+    expect(existsSync(join(temp, "state", "runtime", "vaults", "ecommerce"))).toBe(false);
+
+    // Stop: the cockpit port closes, the lock and the descriptor go.
+    const dataDir = join(vault, "Apps", "LeadFactory", "data");
+    expect(existsSync(join(dataDir, "db.lock"))).toBe(true);
+    child!.kill("SIGTERM");
+    await new Promise((resolveExit) => child!.once("exit", resolveExit));
+    await expect(fetch(`${installed.body.dashboardUrl}/api/state`)).rejects.toThrow();
+    expect(existsSync(join(dataDir, "db.lock"))).toBe(false);
+    expect(existsSync(join(dataDir, "db.json"))).toBe(false);
+    expect(existsSync(join(temp, "desktop", "local-harness.json"))).toBe(false);
+  }, 60_000);
+});

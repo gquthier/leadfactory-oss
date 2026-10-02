@@ -1,0 +1,75 @@
+{
+  "status": "reusable brief, not a rendered video",
+  "format": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30
+  },
+  "brand": {
+    "website": null,
+    "logoLocalPath": null,
+    "colors": [],
+    "fonts": [],
+    "voiceTone": null,
+    "sources": []
+  },
+  "modelPreference": "Claude Opus 5.5",
+  "voice": {
+    "provider": "ElevenLabs",
+    "voiceId": null,
+    "modelId": null,
+    "audioPath": null,
+    "alignmentPath": null
+  },
+  "safeAreaConvention": {
+    "left": 90,
+    "right": 120,
+    "top": 260,
+    "bottom": 360,
+    "note": "Review actual Meta placement overlays; adjust to composition."
+  },
+  "beats": [
+    {
+      "purpose": "hook",
+      "durationHint": "0–3 s",
+      "treatment": "Kinetic headline + product reveal",
+      "claimSource": null
+    },
+    {
+      "purpose": "problem",
+      "durationHint": "3–7 s",
+      "treatment": "Concrete contrast or visual demo",
+      "claimSource": null
+    },
+    {
+      "purpose": "mechanism",
+      "durationHint": "7–15 s",
+      "treatment": "Two or three tangible product steps, camera/keyframe movement",
+      "claimSource": null
+    },
+    {
+      "purpose": "proof",
+      "durationHint": "15–21 s",
+      "treatment": "Verified proof or honest demonstration",
+      "claimSource": null
+    },
+    {
+      "purpose": "cta",
+      "durationHint": "21–27 s",
+      "treatment": "Readable product/brand lockup, single action",
+      "claimSource": null
+    }
+  ],
+  "timingRule": "Replace hints with actual voice timestamps before animation.",
+  "outputs": [
+    "main.mp4",
+    "hook-variant.mp4",
+    "project",
+    "brand.json",
+    "beats.json",
+    "voice.mp3",
+    "alignment.json",
+    "qa.md",
+    "media-ledger.json"
+  ]
+}

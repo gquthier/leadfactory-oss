@@ -1,0 +1,27 @@
+{
+  "$schema_version": "1.0.0",
+  "meta": {
+    "prospect_full_name": null, "prospect_first_name": null,
+    "company_legal_name": null, "company_display_name": null, "siret": null,
+    "industry": null,
+    "industry_vocab": { "deal_word": "client", "deal_word_plural": "clients", "customer_word": "client", "meeting_word": "rendez-vous" },
+    "decision_deadline_iso": null, "call_date_iso": null, "client_slug": null
+  },
+  "contact": { "email": null, "phone": null, "whatsapp": null, "address_line": null, "postal_code": null, "city": null },
+  "business": { "founded_year": null, "years_in_business": null, "team_size_label": null, "social_proof": [], "geo_radius_km": null, "geo_cities_covered": [] },
+  "icp": { "description": null, "age_range": null, "budget_range_label": null },
+  "economics": { "avg_deal_size_eur": null, "current_monthly_volume_label": null, "primary_acquisition_channels": [] },
+  "dream_state": { "headline_hook": null, "verbatim_wins": [] },
+  "objections": { "headline_subtitle_bullets": [], "verbatim_pains": [] },
+  "prior_provider_pain": null,
+  "roi_calc_defaults": { "avg_basket_eur": null, "use_industry_vocab_in_calc": true },
+  "pricing": { "service_fee_eur": null, "recommended_ad_budget_eur": null, "engagement": null },
+  "sales_process_current": { "team_structure_label": null, "current_pain_in_process": null },
+  "follow_up": { "next_call_iso": null, "channel": null },
+  "sources": { "transcript": true, "website": false },
+  "needs_human_review": [],
+  "quality_gates_passed": {
+    "contact_and_business_filled": false, "headline_hook_format_ok": false, "three_fini_les_bullets_ok": false,
+    "industry_vocab_populated": false, "min_verbatims_ok": false, "prior_provider_cleanly_handled": false, "basket_in_industry_range": false
+  }
+}

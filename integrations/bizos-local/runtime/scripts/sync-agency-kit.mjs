@@ -1,0 +1,244 @@
+#!/usr/bin/env node
+// Copies the PUBLIC part of the LeadFactory OSS kit into `src/agency-kit/`:
+// the agency cockpit at the kit root, and the e-commerce cockpit under
+// `ecommerce/` when that subtree exists.
+//
+// The kit is a build-time input: this script is the only door through which
+// its files enter the runtime, and it takes a whitelist, not a folder. Nothing
+// private (data/, .git, .env*, reports, tests, scripts) is copied, symlinks
+// are refused, and every staged file is hashed into `kit-manifest.json` so the
+// packaged artifact can be compared with what was reviewed.
+//
+// Usage:
+//   node scripts/sync-agency-kit.mjs --source <leadfactory-oss checkout> [--dry-run]
+//
+// The source path is a build argument only: it is never written into the
+// staged files, and the runtime never reads it.
+import { createHash } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const RUNTIME_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+export const KIT_TARGET = join(RUNTIME_ROOT, "src", "agency-kit");
+/** Where the checkout sits beside this runtime's parent, by default. */
+export const DEFAULT_SOURCE = resolve(RUNTIME_ROOT, "..", "..", "leadfactory-oss");
+
+const PUBLIC_EXTENSIONS = [".html", ".js", ".mjs", ".css", ".svg", ".ico", ".json", ".png", ".webp"];
+
+/** Files copied verbatim, relative to the kit root. */
+const FILES = [
+  "LICENSE",
+  "THIRD_PARTY_NOTICES.md",
+  "UPSTREAM-LICENSE.txt",
+  "templates/lead-gen-agency.company-template.json",
+];
+
+/** Folders copied recursively, restricted to the listed extensions. */
+const TREES = [
+  { dir: "lib", extensions: [".mjs"] },
+  { dir: "public", extensions: PUBLIC_EXTENSIONS },
+  { dir: "vault", extensions: [".md"] },
+  { dir: "skills", extensions: [".md", ".json", ".txt"] },
+];
+
+/** The e-commerce subtree: optional (a checkout made before it existed still
+ * syncs), whole when present, with the same whitelist per folder. */
+export const ECOMMERCE_DIR = "ecommerce";
+const ECOMMERCE_FILES = ["template.json"];
+const ECOMMERCE_TREES = [
+  { dir: "lib", extensions: [".mjs"] },
+  { dir: "public", extensions: PUBLIC_EXTENSIONS },
+  { dir: "vault", extensions: [".md"] },
+  { dir: "skills", extensions: [".md", ".json", ".txt"] },
+];
+const ECOMMERCE_OPTIONAL_FILES = ["LICENSE", "README.md", "THIRD_PARTY_NOTICES.md"];
+
+/** Names refused wherever they appear, even inside a whitelisted tree. */
+const FORBIDDEN = /(^\.env($|\.)|^\.git$|^node_modules$|^data$|\.key$|\.pem$|\.log$|^\.DS_Store$|\.local\.json$|^test$|^tests$|^test-.*$)/i;
+
+export function parseArgs(argv) {
+  const args = { source: undefined, dryRun: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    if (flag === "--dry-run") {
+      args.dryRun = true;
+      continue;
+    }
+    if (flag === "--source") {
+      args.source = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown argument ${flag}`);
+  }
+  if (!args.source) args.source = DEFAULT_SOURCE;
+  return args;
+}
+
+function sha256(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function insideRoot(root, path) {
+  const rel = relative(root, path);
+  return rel !== "" && !rel.startsWith("..") && !rel.startsWith(sep);
+}
+
+/** Lists the whitelisted files of one kit checkout, relative `/`-separated. */
+export function collectKitFiles(source) {
+  const root = resolve(source);
+  const files = [];
+  const accept = (relativePath) => {
+    const absolute = join(root, relativePath);
+    if (!insideRoot(root, absolute)) throw new Error(`${relativePath} escapes the kit`);
+    const stats = lstatSync(absolute);
+    if (stats.isSymbolicLink()) throw new Error(`refusing symlink ${relativePath}`);
+    if (!stats.isFile()) throw new Error(`${relativePath} is not a file`);
+    for (const segment of relativePath.split("/")) {
+      if (FORBIDDEN.test(segment)) throw new Error(`refusing ${relativePath}`);
+    }
+    files.push(relativePath);
+  };
+  const walk = (relativeDir, extensions) => {
+    const absolute = join(root, relativeDir);
+    if (lstatSync(absolute).isSymbolicLink()) throw new Error(`refusing symlink ${relativeDir}`);
+    for (const entry of readdirSync(absolute, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (FORBIDDEN.test(entry.name) || entry.name.startsWith(".")) continue;
+      const child = `${relativeDir}/${entry.name}`;
+      if (entry.isSymbolicLink()) throw new Error(`refusing symlink ${child}`);
+      if (entry.isDirectory()) {
+        walk(child, extensions);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (!extensions.some((extension) => entry.name.toLowerCase().endsWith(extension))) continue;
+      accept(child);
+    }
+  };
+  for (const file of FILES) {
+    if (!existsSync(join(root, file))) throw new Error(`kit file missing: ${file}`);
+    accept(file);
+  }
+  for (const tree of TREES) {
+    if (!existsSync(join(root, tree.dir))) throw new Error(`kit folder missing: ${tree.dir}`);
+    walk(tree.dir, tree.extensions);
+  }
+  const ecommerce = join(root, ECOMMERCE_DIR);
+  let ecommercePresent = false;
+  if (existsSync(ecommerce)) {
+    if (lstatSync(ecommerce).isSymbolicLink()) throw new Error(`refusing symlink ${ECOMMERCE_DIR}`);
+    ecommercePresent = true;
+    for (const file of ECOMMERCE_FILES) {
+      if (!existsSync(join(ecommerce, file))) throw new Error(`e-commerce kit file missing: ${ECOMMERCE_DIR}/${file}`);
+      accept(`${ECOMMERCE_DIR}/${file}`);
+    }
+    for (const file of ECOMMERCE_OPTIONAL_FILES) {
+      if (existsSync(join(ecommerce, file))) accept(`${ECOMMERCE_DIR}/${file}`);
+    }
+    for (const tree of ECOMMERCE_TREES) {
+      if (!existsSync(join(ecommerce, tree.dir))) throw new Error(`e-commerce kit folder missing: ${ECOMMERCE_DIR}/${tree.dir}`);
+      walk(`${ECOMMERCE_DIR}/${tree.dir}`, tree.extensions);
+    }
+  }
+  return { files: files.sort(), ecommercePresent };
+}
+
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** A branch-like ref that stays inside the Git directory. */
+function safeRef(ref) {
+  return ref.startsWith("refs/") && !ref.includes("\\") && ref.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+}
+
+/** The HEAD directory and the shared refs directory: the same for a clone,
+ * split by `.git` file + `commondir` for a linked worktree. */
+function gitDirs(source) {
+  const dotGit = join(source, ".git");
+  if (lstatSync(dotGit).isDirectory()) return { gitDir: dotGit, commonDir: dotGit };
+  const pointer = readFileSync(dotGit, "utf8").trim();
+  if (!pointer.startsWith("gitdir: ")) return null;
+  const gitDir = resolve(source, pointer.slice("gitdir: ".length).trim());
+  const commondir = join(gitDir, "commondir");
+  const commonDir = existsSync(commondir) ? resolve(gitDir, readFileSync(commondir, "utf8").trim()) : gitDir;
+  return { gitDir, commonDir };
+}
+
+/** The kit's own commit, read from Git metadata files without running git (no
+ * hooks): clone or linked worktree, detached HEAD, loose or packed ref. */
+function sourceCommit(source) {
+  try {
+    const dirs = gitDirs(source);
+    if (!dirs) return null;
+    const head = readFileSync(join(dirs.gitDir, "HEAD"), "utf8").trim();
+    if (!head.startsWith("ref: ")) return OBJECT_ID.test(head) ? head : null;
+    const ref = head.slice("ref: ".length).trim();
+    if (!safeRef(ref)) return null;
+    const loose = join(dirs.commonDir, ref);
+    if (existsSync(loose)) {
+      const id = readFileSync(loose, "utf8").trim();
+      return OBJECT_ID.test(id) ? id : null;
+    }
+    const packed = readFileSync(join(dirs.commonDir, "packed-refs"), "utf8");
+    const row = packed.split("\n").map((line) => line.trim().split(" ")).find((parts) => parts.length === 2 && parts[1] === ref);
+    return row && OBJECT_ID.test(row[0]) ? row[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+function templateSummary(path) {
+  const template = JSON.parse(readFileSync(path, "utf8"));
+  return { id: template.id, version: template.version, name: template.name };
+}
+
+export function sync({ source, dryRun = false, target = KIT_TARGET }) {
+  const root = resolve(source);
+  const { files, ecommercePresent } = collectKitFiles(root);
+  // Guard: no file may carry this machine's absolute paths into the runtime.
+  for (const file of files) {
+    if (/\.(png|webp|ico)$/i.test(file)) continue;
+    const text = readFileSync(join(root, file), "utf8");
+    if (/\/Users\/[A-Za-z0-9_-]+\//.test(text)) {
+      throw new Error(`${file} contains a machine-specific absolute path`);
+    }
+  }
+  const manifest = {
+    kit: "leadfactory-oss",
+    template: templateSummary(join(root, "templates/lead-gen-agency.company-template.json")),
+    ecommerce: ecommercePresent ? { template: templateSummary(join(root, ECOMMERCE_DIR, "template.json")) } : null,
+    sourceCommit: sourceCommit(root),
+    syncedAt: new Date(Number(process.env.SOURCE_DATE_EPOCH ?? 0) * 1000).toISOString(),
+    files: {},
+  };
+  if (dryRun) return { files, manifest, target };
+  rmSync(target, { recursive: true, force: true });
+  mkdirSync(target, { recursive: true });
+  for (const file of files) {
+    const destination = join(target, file);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(join(root, file), destination);
+    manifest.files[file] = sha256(destination);
+  }
+  writeFileSync(join(target, "kit-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  return { files, manifest, target };
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const result = sync(parseArgs(process.argv.slice(2)));
+    process.stdout.write(`${JSON.stringify({ target: relative(RUNTIME_ROOT, result.target), files: result.files.length, template: result.manifest.template, ecommerce: result.manifest.ecommerce, sourceCommit: result.manifest.sourceCommit }, null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`sync-agency-kit: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+}

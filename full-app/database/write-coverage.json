@@ -1,0 +1,6 @@
+{
+  "reviewedAt": "2026-10-01",
+  "checkedWriteProperties": 499,
+  "missingWriteProperties": [],
+  "coverage": "TypeScript AST: literal object properties passed directly to .from(...).insert/update/upsert. Variable/spread payloads and runtime SQL excluded."
+}

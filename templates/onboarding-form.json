@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "title": "Onboarding client",
+  "instructions": "Aucun secret. Les réponses sont des déclarations client. La soumission crée un brief et la mission autorisée par le lien.",
+  "steps": [
+    {
+      "key": "company",
+      "label": "Entreprise",
+      "fields": [
+        {
+          "name": "website",
+          "label": "Site web",
+          "type": "url",
+          "hint": "Adresse complète, https://…",
+          "required": false
+        },
+        {
+          "name": "contactName",
+          "label": "Interlocuteur principal",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "contactRole",
+          "label": "Rôle de l’interlocuteur",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "contactEmail",
+          "label": "Email de l’interlocuteur",
+          "type": "email",
+          "required": false
+        },
+        {
+          "name": "contactPhone",
+          "label": "Téléphone",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "key": "offer",
+      "label": "Offre",
+      "fields": [
+        {
+          "name": "service",
+          "label": "Service ou produit vendu",
+          "type": "textarea",
+          "required": true
+        },
+        {
+          "name": "problem",
+          "label": "Problème résolu pour le client final",
+          "type": "textarea",
+          "required": true
+        },
+        {
+          "name": "promise",
+          "label": "Promesse principale",
+          "type": "textarea",
+          "required": true,
+          "hint": "Ce que le prospect obtient, formulé sans chiffre non vérifié."
+        },
+        {
+          "name": "differentiation",
+          "label": "Différenciation / mécanisme unique",
+          "type": "textarea",
+          "required": false
+        },
+        {
+          "name": "proofs",
+          "label": "Preuves disponibles",
+          "type": "textarea",
+          "hint": "Témoignages nommés, chiffres sourcés, références. Seules ces preuves seront utilisées dans les livrables.",
+          "required": false
+        },
+        {
+          "name": "price",
+          "label": "Prix ou fourchette (texte)",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "key": "target",
+      "label": "Cible",
+      "fields": [
+        {
+          "name": "profile",
+          "label": "Profil client idéal",
+          "type": "textarea",
+          "required": true,
+          "hint": "Secteur, taille, rôle du décideur, signal de besoin."
+        },
+        {
+          "name": "zone",
+          "label": "Zone géographique",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "exclusions",
+          "label": "Exclusions / no-go",
+          "type": "textarea",
+          "required": true,
+          "hint": "Secteurs, entreprises ou pratiques à ne jamais cibler."
+        }
+      ]
+    },
+    {
+      "key": "campaign",
+      "label": "Campagne",
+      "fields": [
+        {
+          "name": "channel",
+          "label": "Canal principal",
+          "type": "channel",
+          "required": true
+        },
+        {
+          "name": "objective",
+          "label": "Objectif de la campagne",
+          "type": "textarea",
+          "required": true
+        },
+        {
+          "name": "qualifiedLead",
+          "label": "Définition d’un lead qualifié",
+          "type": "textarea",
+          "required": true
+        },
+        {
+          "name": "kpi",
+          "label": "KPI de suivi",
+          "type": "text",
+          "required": true,
+          "hint": "Ex. coût par lead qualifié, nombre de RDV tenus."
+        },
+        {
+          "name": "budget",
+          "label": "Budget mensuel (€)",
+          "type": "number",
+          "required": true,
+          "hint": "Nombre positif ou zéro pour une campagne sans dépense prévue."
+        },
+        {
+          "name": "timeline",
+          "label": "Échéance ou durée de test",
+          "type": "text",
+          "required": false
+        }
+      ]
+    },
+    {
+      "key": "delivery",
+      "label": "Livraison",
+      "fields": [
+        {
+          "name": "assets",
+          "label": "Assets fournis (logos, visuels, textes)",
+          "type": "textarea",
+          "required": false
+        },
+        {
+          "name": "links",
+          "label": "Liens utiles (pages, drive, CRM)",
+          "type": "textarea",
+          "hint": "Liens seulement : aucun mot de passe ni identifiant ici.",
+          "required": false
+        },
+        {
+          "name": "accessGranted",
+          "label": "Accès aux comptes accordés (via invitation plateforme)",
+          "type": "bool",
+          "required": false
+        },
+        {
+          "name": "accessNotes",
+          "label": "Détail des accès accordés",
+          "type": "textarea",
+          "hint": "Quel compte, quel rôle, qui a invité. Jamais de secret.",
+          "required": false
+        },
+        {
+          "name": "validator",
+          "label": "Responsable de la validation côté client",
+          "type": "text",
+          "required": false
+        },
+        {
+          "name": "constraints",
+          "label": "Contraintes (marque, légal, ton)",
+          "type": "textarea",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "channels": [
+    "cold-email",
+    "meta",
+    "google",
+    "organic"
+  ],
+  "requiredCount": 10
+}

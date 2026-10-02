@@ -1,0 +1,631 @@
+{
+  "reviewedAt": "2026-10-01",
+  "sourceCommit": "e909784",
+  "sourceMigrationCount": 44,
+  "historicalTables": [
+    "profiles",
+    "onboarding_responses",
+    "campaigns",
+    "leads",
+    "meta_tokens",
+    "client_notes",
+    "team_notifications",
+    "client_finance_profiles",
+    "finance_entries",
+    "campaign_team_members",
+    "team_member_client_rates",
+    "ai_deliverables",
+    "activity_logs",
+    "formations",
+    "formation_modules",
+    "client_formation_access",
+    "client_formation_progress",
+    "pipeline_stages",
+    "lead_activities",
+    "crm_leads",
+    "crm_ad_spend_daily",
+    "sequence_conversations",
+    "sequence_emails",
+    "integration_api_keys",
+    "integration_webhook_logs",
+    "app_settings",
+    "scrape_jobs",
+    "linkedin_conversations",
+    "linkedin_posts",
+    "client_surprises",
+    "surprise_assets",
+    "client_external_api_keys",
+    "sales_call_analyses",
+    "client_credits",
+    "credit_usage",
+    "cold_call_scripts",
+    "reels_conversations",
+    "reels_scripts",
+    "client_notifications",
+    "client_calls",
+    "team_resources",
+    "team_resource_assignments",
+    "meta_connections"
+  ],
+  "excludedStatements": [
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "001_initial_schema.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "004_leads.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "004_leads.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "004_leads.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "005_meta_tokens.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "006_client_notes.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "006_client_notes.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "006_client_notes.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "007_team_notifications.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "007_team_notifications.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "008_leads_deal_value.sql",
+      "reason": "legacy migration/backfill replaced by final empty schema"
+    },
+    {
+      "source": "009_leads_revenue_rename.sql",
+      "reason": "legacy migration/backfill replaced by final empty schema"
+    },
+    {
+      "source": "012_finance_module.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "012_finance_module.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "014_campaign_status_pipeline_alignment.sql",
+      "reason": "legacy migration/backfill replaced by final empty schema"
+    },
+    {
+      "source": "015_team_management.sql",
+      "kind": "UPDATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "016_reconcile_leads_revenue.sql",
+      "reason": "legacy migration/backfill replaced by final empty schema"
+    },
+    {
+      "source": "017_ai_deliverables.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "018_ai_deliverables_storage.sql",
+      "kind": "INSERT",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "018_ai_deliverables_storage.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "018_ai_deliverables_storage.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "018_ai_deliverables_storage.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "018_ai_deliverables_storage.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "019_fix_client_managed_by_backfill.sql",
+      "reason": "legacy migration/backfill replaced by final empty schema"
+    },
+    {
+      "source": "021_activity_logs.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "022_formations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "023_crm_pipeline.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "023_crm_pipeline.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "023_crm_pipeline.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "023_crm_pipeline.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "023_crm_pipeline.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "023_crm_pipeline.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "024_backfill_leads_crm_defaults.sql",
+      "reason": "legacy migration/backfill replaced by final empty schema"
+    },
+    {
+      "source": "025_admin_leadfactory_crm.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "025_admin_leadfactory_crm.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "025_admin_leadfactory_crm.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "025_admin_leadfactory_crm.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "026_outbound_sequence.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "026_outbound_sequence.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "026_outbound_sequence.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "026_outbound_sequence.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "026_outbound_sequence.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "026_outbound_sequence.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "027_integrations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "027_integrations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "027_integrations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "027_integrations.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "028_app_settings.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "028_app_settings.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "028_app_settings.sql",
+      "kind": "INSERT",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "029_scrape_jobs.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "029_scrape_jobs.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "030_personal_brand_linkedin.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "030_personal_brand_linkedin.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "030_personal_brand_linkedin.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "030_personal_brand_linkedin.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "030_personal_brand_linkedin.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "030_personal_brand_linkedin.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_client_surprises.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_client_surprises.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_client_surprises.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_client_surprises.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_client_surprises.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_client_surprises.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_sales_call_analyzer.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_sales_call_analyzer.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_sales_call_analyzer.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "031_sales_call_analyzer.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "INSERT",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "032_client_credits.sql",
+      "kind": "INSERT",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "033_cold_call_scripts.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "033_cold_call_scripts.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "034_personal_brand_reels.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "034_personal_brand_reels.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "034_personal_brand_reels.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "034_personal_brand_reels.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "034_personal_brand_reels.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "034_personal_brand_reels.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "036_client_notifications_new_lead.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "036_client_notifications_new_lead.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "036_client_notifications_new_lead.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "037_client_calls.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "037_client_calls.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "037_client_calls.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "039_team_resources.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "039_team_resources.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "039_team_resources.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "039_team_resources.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "040_meta_connections.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "040_meta_connections.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "040_meta_connections.sql",
+      "kind": "DROP",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    },
+    {
+      "source": "040_meta_connections.sql",
+      "kind": "CREATE",
+      "reason": "no data, extension unnecessary, policies replaced separately"
+    }
+  ]
+}

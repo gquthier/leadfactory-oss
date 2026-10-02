@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "status": "private-source-templates",
+  "bootstrap": "CEO only; seven specialists recruited on demand",
+  "agents": [
+    {
+      "slug": "ceo",
+      "name": "CEO",
+      "title": "CEO de l’agence",
+      "description": "Piloter offre, capacité, marge, priorités, qualité et coordination des sept spécialistes.",
+      "coreSkills": [
+        "agency-portfolio-ops",
+        "agency-offer-design",
+        "agency-offer-lab",
+        "agency-client-success"
+      ],
+      "supportingSkills": [
+        "agency-one-to-many-sales",
+        "campaign-proposal",
+        "sales-call-analyzer",
+        "agency-media-buying",
+        "outbound-campaign-ops",
+        "agency-creative-testing"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/ceo.md"
+    },
+    {
+      "slug": "acquisition",
+      "name": "Acquisition",
+      "title": "Acquisition client de l’agence",
+      "description": "Faire progresser les opportunités de l’agence, du segment ciblé au contrat qualifié.",
+      "coreSkills": [
+        "agency-offer-lab",
+        "agency-one-to-many-sales",
+        "deep-search",
+        "agency-prospect-research",
+        "cold-call-expert"
+      ],
+      "supportingSkills": [
+        "agency-offer-design",
+        "sales-call-analyzer",
+        "sales-follow-up-sequence",
+        "campaign-proposal",
+        "devis-vercel-generator",
+        "outbound-sequence-writer",
+        "agency-conversion-optimization",
+        "agency-quiz-funnel"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/acquisition.md"
+    },
+    {
+      "slug": "onboarding",
+      "name": "Onboarding",
+      "title": "Onboarding client",
+      "description": "Transformer les engagements confirmés en brief complet et accès correctement délimités pour Delivery.",
+      "coreSkills": [
+        "client-onboarding-flow",
+        "sales-call-analyzer",
+        "agency-offer-design"
+      ],
+      "supportingSkills": [
+        "deep-search",
+        "agency-brand-direction",
+        "campaign-proposal",
+        "agency-client-success"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/onboarding.md"
+    },
+    {
+      "slug": "delivery",
+      "name": "Delivery",
+      "title": "Delivery et relation client",
+      "description": "Tenir le périmètre, la qualité, les délais, les versions et la communication client jusqu’au renouvellement.",
+      "coreSkills": [
+        "agency-client-success",
+        "agency-portfolio-ops",
+        "client-onboarding-flow",
+        "campaign-proposal"
+      ],
+      "supportingSkills": [
+        "agency-creative-testing",
+        "agency-media-buying",
+        "agency-conversion-optimization",
+        "agency-quiz-funnel",
+        "sales-call-analyzer",
+        "agency-brand-direction"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/delivery.md"
+    },
+    {
+      "slug": "media-buyer",
+      "name": "Media Buyer",
+      "title": "Media buyer",
+      "description": "Préparer et opérer des campagnes client avec compte, budget, événements et statuts vérifiés.",
+      "coreSkills": [
+        "agency-media-buying",
+        "meta-campaign-launcher",
+        "rework-campaign",
+        "campaign-proposal"
+      ],
+      "supportingSkills": [
+        "meta-lead-notifications",
+        "competitor-ads-research",
+        "agency-creative-testing",
+        "agency-conversion-optimization",
+        "meta-ads-copywriter",
+        "agency-quiz-funnel"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/media-buyer.md"
+    },
+    {
+      "slug": "cold-email",
+      "name": "Cold Email",
+      "title": "Cold email",
+      "description": "Préparer la prospection, contrôler l’envoi autorisé, les réponses, les exclusions et le suivi commercial.",
+      "coreSkills": [
+        "agency-prospect-research",
+        "agency-email-deliverability",
+        "outbound-sequence-writer",
+        "outbound-campaign-ops",
+        "outbound-reply-qualification"
+      ],
+      "supportingSkills": [
+        "data-scraping",
+        "cold-call-expert",
+        "sales-follow-up-sequence",
+        "agency-offer-lab",
+        "sales-call-analyzer"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/cold-email.md"
+    },
+    {
+      "slug": "creative-strategist",
+      "name": "Creative Strategist",
+      "title": "Créatif stratégiste",
+      "description": "Relier recherche, angles, offre, marque, production image/vidéo et apprentissage créatif.",
+      "coreSkills": [
+        "deep-search",
+        "competitor-ads-research",
+        "creative-brief",
+        "agency-brand-direction",
+        "agency-creative-testing"
+      ],
+      "supportingSkills": [
+        "agency-offer-lab",
+        "agency-one-to-many-sales",
+        "meta-ads-copywriter",
+        "meta-ads-creative-framework",
+        "creative-statics",
+        "creative-statics-v2",
+        "vsl-copywriter",
+        "vsl-end-to-end-builder",
+        "cold-traffic-landing-page",
+        "agency-conversion-optimization",
+        "agency-quiz-funnel",
+        "agency-shortform-editing",
+        "agency-product-film",
+        "agency-ugc-video",
+        "agency-meta-motion-ad"
+      ],
+      "optionalSkills": [
+        "hyperframes",
+        "general-video",
+        "product-launch-video",
+        "hyperframes-core",
+        "hyperframes-animation",
+        "hyperframes-keyframes",
+        "hyperframes-audio",
+        "hyperframes-creative",
+        "hyperframes-registry",
+        "hyperframes-cli",
+        "hyperframes-studio",
+        "media-use"
+      ],
+      "roleSource": "agents/roles/creative-strategist.md"
+    },
+    {
+      "slug": "client-communication",
+      "name": "Communication client",
+      "title": "Communication client",
+      "description": "Transformer les travaux internes en propositions claires, suivre retours et validations sans inventer un engagement.",
+      "coreSkills": [
+        "campaign-proposal",
+        "agency-client-success",
+        "sales-follow-up-sequence"
+      ],
+      "supportingSkills": [
+        "agency-media-buying",
+        "agency-offer-design",
+        "agency-creative-testing"
+      ],
+      "optionalSkills": [],
+      "roleSource": "agents/roles/client-communication.md"
+    }
+  ]
+}

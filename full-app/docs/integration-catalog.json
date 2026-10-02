@@ -1,0 +1,469 @@
+[
+  {
+    "id": "database",
+    "title": "Base de données personnelle",
+    "purpose": "Stocker les données de sa propre agence après import manuel du schéma.",
+    "envNames": [
+      "LEADFACTORY_DATA_MODE",
+      "LEADFACTORY_CONNECT_DATABASE",
+      "NEXT_PUBLIC_LEADFACTORY_DATA_MODE",
+      "NEXT_PUBLIC_SUPABASE_URL",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY"
+    ],
+    "steps": [
+      "Commencer avec le JSON local vide et son administrateur fictif, sans base distante.",
+      "Télécharger le SQL de 50 tables via /api/starter/schema ou database/schema.sql.",
+      "Créer son propre projet Supabase vide puis importer manuellement le schéma complet selon database/README.md.",
+      "Recetter Auth, politiques RLS strictes et séparation entre deux clients ; adapter les anciennes routes incompatibles.",
+      "Configurer ses clés, les deux modes supabase et LEADFACTORY_CONNECT_DATABASE=1 ensemble ; aucun déploiement public certifié."
+    ],
+    "docs": [
+      {
+        "label": "Tables, SQL et RLS",
+        "url": "https://supabase.com/docs/guides/database/tables"
+      },
+      {
+        "label": "Clés publiques et secrètes",
+        "url": "https://supabase.com/docs/guides/getting-started/api-keys"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "ceo",
+      "onboarding",
+      "delivery",
+      "client-communication"
+    ],
+    "capability": "local_disconnected_by_default"
+  },
+  {
+    "id": "personal-cli",
+    "title": "Codex ou Claude Code local",
+    "purpose": "Utiliser le CLI personnel connecté sur la machine du moteur du pack, sans clé API obligatoire.",
+    "envNames": [],
+    "steps": [
+      "Vérifier codex --version ou claude --version sur la machine du serveur.",
+      "Se connecter personnellement avec codex login ou claude auth login si nécessaire.",
+      "Dans full-app, lancer npm run dev puis ouvrir /admin/start-here.",
+      "Choisir le CLI puis Vérifier et connecter mon IA ; aucune clé API obligatoire.",
+      "Dans Agents, recruter les rôles et attribuer client, sources et mission.",
+      "Cocher explicitement l’automatisation pour enchaîner quatre rôles à la fin du formulaire ; relire le résultat."
+    ],
+    "docs": [
+      {
+        "label": "Codex CLI",
+        "url": "https://learn.chatgpt.com/docs/codex/cli"
+      },
+      {
+        "label": "Claude Code",
+        "url": "https://code.claude.com/docs/en/quickstart"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "ceo",
+      "acquisition",
+      "onboarding",
+      "delivery",
+      "media-buyer",
+      "cold-email",
+      "creative-strategist",
+      "client-communication"
+    ],
+    "capability": "direct_parent_cli_adapter_in_full_app_local_mode"
+  },
+  {
+    "id": "openrouter",
+    "title": "OpenRouter facultatif",
+    "purpose": "Fournisseur API alternatif pour les fonctions historiques et le moteur du pack.",
+    "envNames": [
+      "OPENROUTER_API_KEY"
+    ],
+    "steps": [
+      "Dans Mes connexions personnelles, choisir OpenRouter et enregistrer sa propre clé côté serveur.",
+      "Tester l’accès à la clé sans générer de texte.",
+      "Dans IA personnelle, choisir OpenRouter et renseigner un modèle accessible, puis connecter.",
+      "Lancer une mission explicite sur un brief fictif ; les appels consomment l’usage du compte."
+    ],
+    "docs": [
+      {
+        "label": "Authentification API",
+        "url": "https://openrouter.ai/docs/api_reference/authentication"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "acquisition",
+      "cold-email",
+      "creative-strategist",
+      "client-communication"
+    ],
+    "capability": "optional_ai_provider_in_full_app_local_mode",
+    "storageNote": "Token saisi dans Start Here : fichier serveur .local-data/integrations.json, mode 0600, exclu de Git, jamais renvoyé au navigateur, non chiffré au repos. Les envNames concernent les adaptateurs historiques et ne remplissent pas automatiquement ce fichier."
+  },
+  {
+    "id": "slack",
+    "title": "Slack",
+    "purpose": "Vérifier l’accès au compte Slack avec auth.test, sans publier.",
+    "envNames": [
+      "SLACK_BOT_TOKEN",
+      "SLACK_CHANNEL_ID"
+    ],
+    "steps": [
+      "Créer sa propre app Slack, puis installer le bot dans son workspace.",
+      "Prévoir chat:write uniquement pour un futur envoi ; channels:read facultatif pour une future liste de canaux.",
+      "Dans Start Here, choisir Slack, saisir le token bot personnel et enregistrer.",
+      "Tester l’accès en lecture : auth.test uniquement, aucun message ni écoute continue.",
+      "Pour de futurs envois, recetter séparément les permissions et la destination ; aucune publication incluse dans le test."
+    ],
+    "docs": [
+      {
+        "label": "Créer une app",
+        "url": "https://docs.slack.dev/tools/bolt-js/creating-an-app/"
+      },
+      {
+        "label": "Tokens",
+        "url": "https://docs.slack.dev/authentication/tokens/"
+      },
+      {
+        "label": "Test sans publication",
+        "url": "https://docs.slack.dev/reference/methods/auth.test/"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "ceo",
+      "delivery",
+      "client-communication"
+    ],
+    "capability": "identity_test_only_no_messaging",
+    "storageNote": "Token saisi dans Start Here : fichier serveur .local-data/integrations.json, mode 0600, exclu de Git, jamais renvoyé au navigateur, non chiffré au repos. Les envNames concernent les adaptateurs historiques et ne remplissent pas automatiquement ce fichier."
+  },
+  {
+    "id": "meta",
+    "title": "Meta Ads",
+    "purpose": "Préparer les comptes, statistiques, leads et campagnes de sa propre agence.",
+    "envNames": [
+      "META_ACCESS_TOKEN",
+      "FB_APP_ID",
+      "FB_APP_SECRET",
+      "META_REDIRECT_URI",
+      "META_LOGIN_CONFIG_ID",
+      "META_GRAPH_VERSION"
+    ],
+    "steps": [
+      "Créer sa propre app Meta et attribuer uniquement les actifs de test à son utilisateur système.",
+      "Dans Start Here, choisir Meta, enregistrer son token et une version Graph API vérifiée. Tester l’accès appelle seulement /me?fields=id, sans campagne ni synchronisation.",
+      "Commencer par ads_read ; ads_management est distinct et concerne les opérations de gestion.",
+      "Vérifier les permissions Pages et leads nécessaires au cas utilisé.",
+      "Conserver les secrets côté serveur et configurer le callback exact /api/meta/auth/callback sur son domaine.",
+      "Vérifier la version Graph API actuellement supportée ; relire les scopes historiques avant OAuth.",
+      "Lire les comptes autorisés et préparer seulement une campagne en brouillon ou en pause avant toute autorisation de dépense."
+    ],
+    "docs": [
+      {
+        "label": "Marketing API",
+        "url": "https://developers.facebook.com/docs/marketing-api/get-started/"
+      },
+      {
+        "label": "Utilisateur système",
+        "url": "https://developers.facebook.com/docs/marketing-api/businessmanager/systemuser/"
+      },
+      {
+        "label": "Permissions",
+        "url": "https://developers.facebook.com/docs/permissions/"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "media-buyer",
+      "creative-strategist",
+      "delivery"
+    ],
+    "capability": "legacy_adapter_present_not_connected_or_live_tested",
+    "verificationNote": "Les pages officielles Meta ont renvoyé une restriction ou HTTP 429 lors de la consultation du 1er octobre 2026 ; parcours actuel à confirmer dans sa console.",
+    "storageNote": "Token saisi dans Start Here : fichier serveur .local-data/integrations.json, mode 0600, exclu de Git, jamais renvoyé au navigateur, non chiffré au repos. Les envNames concernent les adaptateurs historiques et ne remplissent pas automatiquement ce fichier."
+  },
+  {
+    "id": "elevenlabs",
+    "title": "ElevenLabs",
+    "purpose": "Préparer une voix autorisée et des timings pour les ads motion design.",
+    "envNames": [
+      "ELEVENLABS_API_KEY"
+    ],
+    "steps": [
+      "Créer une clé personnelle avec les droits nécessaires à la synthèse vocale.",
+      "Dans Start Here, enregistrer sa clé puis tester l’accès au compte seulement ; aucune voix générée par ce test.",
+      "Choisir sa propre voix autorisée ; obtenir le consentement avant clonage.",
+      "Valider script, prononciation et durée avec le client.",
+      "Utiliser d’abord la simulation du helper agency-meta-motion-ad.",
+      "Déclencher explicitement la synthèse payante et conserver audio, timings et reçu ; rendre ensuite la vidéo."
+    ],
+    "docs": [
+      {
+        "label": "Quickstart",
+        "url": "https://elevenlabs.io/docs/eleven-api/quickstart/"
+      },
+      {
+        "label": "Synthèse et timings",
+        "url": "https://elevenlabs.io/docs/api-reference/text-to-speech/convert-with-timestamps"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "creative-strategist",
+      "delivery"
+    ],
+    "capability": "skill_and_legacy_adapter_present_no_voice_bundled",
+    "storageNote": "Token saisi dans Start Here : fichier serveur .local-data/integrations.json, mode 0600, exclu de Git, jamais renvoyé au navigateur, non chiffré au repos. Les envNames concernent les adaptateurs historiques et ne remplissent pas automatiquement ce fichier."
+  },
+  {
+    "id": "email",
+    "title": "Emails transactionnels et préparation outbound",
+    "purpose": "Configurer son fournisseur et ses domaines ; préparer les séquences sans envoi implicite.",
+    "envNames": [
+      "SMTP_HOST",
+      "SMTP_PORT",
+      "SMTP_SECURE",
+      "SMTP_USER",
+      "SMTP_PASS",
+      "SMTP_FROM",
+      "SMTP_FROM_EMAIL",
+      "SMTP_FROM_NAME",
+      "SMTP_DOMAIN",
+      "BREVO_API_KEY",
+      "BREVO_FROM",
+      "RESEND_API_KEY"
+    ],
+    "steps": [
+      "Choisir SMTP, Brevo ou Resend et contrôler le chemin sélectionné dans le code.",
+      "Vérifier son domaine et les enregistrements DNS demandés par le fournisseur.",
+      "Conserver mot de passe ou clé uniquement côté serveur.",
+      "Prévisualiser des brouillons avec des contacts fictifs ; contrôler variables, exclusions et plafonds.",
+      "Autoriser séparément un envoi réel vers une boîte de test choisie avant une campagne."
+    ],
+    "docs": [
+      {
+        "label": "Domaines Resend",
+        "url": "https://resend.com/docs/dashboard/domains/introduction"
+      },
+      {
+        "label": "Brevo API",
+        "url": "https://developers.brevo.com/docs/getting-started"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "cold-email",
+      "onboarding",
+      "client-communication"
+    ],
+    "capability": "legacy_sending_paths_disabled_by_default"
+  },
+  {
+    "id": "google-ads",
+    "title": "Google Ads",
+    "purpose": "Configurer l’adaptateur publicitaire historique avec son propre compte de test.",
+    "envNames": [
+      "GOOGLE_ADS_CLIENT_ID",
+      "GOOGLE_ADS_CLIENT_SECRET",
+      "GOOGLE_ADS_DEVELOPER_TOKEN",
+      "GOOGLE_ADS_MANAGER_CUSTOMER_ID",
+      "GOOGLE_ADS_REFRESH_TOKEN"
+    ],
+    "steps": [
+      "Obtenir son accès développeur et configurer son client OAuth.",
+      "Attribuer uniquement les comptes nécessaires.",
+      "Conserver les tokens côté serveur ; vérifier la lecture sur un compte de test.",
+      "Recetter chaque action avant une création ou modification de campagne."
+    ],
+    "docs": [
+      {
+        "label": "Prise en main API",
+        "url": "https://developers.google.com/google-ads/api/docs/get-started/introduction"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "media-buyer",
+      "delivery"
+    ],
+    "capability": "legacy_adapter_present_configuration_and_testing_required"
+  },
+  {
+    "id": "linkedin",
+    "title": "LinkedIn",
+    "purpose": "Configurer le parcours OAuth historique pour son propre profil autorisé.",
+    "envNames": [
+      "LINKEDIN_CLIENT_ID",
+      "LINKEDIN_CLIENT_SECRET",
+      "LINKEDIN_REDIRECT_URI",
+      "APP_ENCRYPTION_KEY"
+    ],
+    "steps": [
+      "Créer son app et vérifier les produits autorisés.",
+      "Définir exactement le callback /api/linkedin/auth/callback de son propre domaine.",
+      "Générer sa propre clé de chiffrement conformément au code, séparée du secret OAuth.",
+      "Conserver les posts en brouillon et tester les permissions avant toute publication."
+    ],
+    "docs": [
+      {
+        "label": "OAuth autorisation utilisateur",
+        "url": "https://learn.microsoft.com/en-us/linkedin/shared/authentication/authorization-code-flow"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "acquisition",
+      "creative-strategist"
+    ],
+    "capability": "legacy_adapter_present_configuration_and_testing_required"
+  },
+  {
+    "id": "apify",
+    "title": "Apify",
+    "purpose": "Configurer une source de recherche de prospects choisie et bornée.",
+    "envNames": [
+      "APIFY_TOKEN",
+      "APIFY_ACTOR_GMAPS",
+      "SCRAPER_MAX_RESULTS_PER_JOB"
+    ],
+    "steps": [
+      "Créer son compte et sélectionner l’Actor adapté.",
+      "Fixer un nombre de résultats et un budget avant exécution.",
+      "Conserver le token côté serveur.",
+      "Vérifier provenance et qualité avant import ; ne lancer aucun scraping au démarrage."
+    ],
+    "docs": [
+      {
+        "label": "Authentification API",
+        "url": "https://docs.apify.com/api/v2"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "acquisition",
+      "cold-email"
+    ],
+    "capability": "legacy_adapter_present_configuration_and_testing_required"
+  },
+  {
+    "id": "notion",
+    "title": "Notion",
+    "purpose": "Préparer un espace de propositions choisi pour sa propre agence.",
+    "envNames": [
+      "NOTION_API_KEY",
+      "NOTION_CAMPAIGN_DATABASE_ID"
+    ],
+    "steps": [
+      "Créer une intégration dans son propre workspace.",
+      "Partager uniquement la base destinée aux propositions avec cette intégration.",
+      "Conserver son token côté serveur.",
+      "Recetter le mapping de propriétés avec une proposition fictive avant toute écriture réelle."
+    ],
+    "docs": [
+      {
+        "label": "Créer une intégration",
+        "url": "https://developers.notion.com/docs/create-a-notion-integration"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "delivery",
+      "client-communication"
+    ],
+    "capability": "legacy_adapter_present_configuration_and_testing_required"
+  },
+  {
+    "id": "creative-providers",
+    "title": "Gemini et Fal facultatifs",
+    "purpose": "Configurer les fournisseurs des anciennes routes de chat, image et vidéo.",
+    "envNames": [
+      "GEMINI_API_KEY",
+      "FAL_KEY"
+    ],
+    "steps": [
+      "Décider quelles anciennes routes IA ou vidéo seront utilisées.",
+      "Créer uniquement les clés des fournisseurs retenus.",
+      "Fixer budget, modèles et assets autorisés.",
+      "Tester explicitement une génération fictive et contrôler les coûts ; un CLI connecté ne remplace pas automatiquement ces clés."
+    ],
+    "docs": [
+      {
+        "label": "Gemini API",
+        "url": "https://ai.google.dev/gemini-api/docs/quickstart"
+      },
+      {
+        "label": "Fal authentification",
+        "url": "https://docs.fal.ai/model-apis/authentication"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "creative-strategist"
+    ],
+    "capability": "legacy_adapter_present_configuration_and_testing_required"
+  },
+  {
+    "id": "automation",
+    "title": "Webhooks et automatisations facultatives",
+    "purpose": "Préparer des déclencheurs de son propre système sans reprendre les anciens relais.",
+    "envNames": [
+      "LEADFACTORY_AUTOMATION_WEBHOOK_URL",
+      "LEADFACTORY_AUTOMATION_WEBHOOK_TOKEN",
+      "INTERNAL_TRIGGER_SECRET",
+      "CRON_SECRET",
+      "META_VERIFY_TOKEN",
+      "NEXT_PUBLIC_APP_URL"
+    ],
+    "steps": [
+      "Laisser les automatisations et crons désactivés durant la découverte.",
+      "Définir exclusivement ses propres endpoints et secrets.",
+      "Vérifier authentification, signatures, périmètre client et gestion des doublons.",
+      "Tester sur un événement fictif sans envoyer de message ni modifier une campagne.",
+      "Activer chaque déclencheur individuellement après contrôle de ses effets."
+    ],
+    "docs": [
+      {
+        "label": "Guide du starter",
+        "url": "./START-HERE.md"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "ceo",
+      "onboarding",
+      "delivery"
+    ],
+    "capability": "no_scheduled_jobs_or_legacy_relays_activated"
+  },
+  {
+    "id": "fathom",
+    "title": "Fathom facultatif",
+    "purpose": "Préparer l’import des comptes rendus autorisés de sa propre équipe.",
+    "envNames": [
+      "FATHOM_API_KEY",
+      "FATHOM_API_KEYS"
+    ],
+    "steps": [
+      "Choisir les comptes et réunions dont le traitement est autorisé.",
+      "Créer ses propres clés et les conserver côté serveur.",
+      "Contrôler le rattachement au bon client et la conservation des transcriptions.",
+      "Tester manuellement une entrée fictive ; ne pas activer de cron par défaut."
+    ],
+    "docs": [
+      {
+        "label": "Documentation développeur",
+        "url": "https://developers.fathom.ai/"
+      }
+    ],
+    "status": "not_configured",
+    "roles": [
+      "acquisition",
+      "onboarding",
+      "delivery"
+    ],
+    "capability": "legacy_adapter_present_configuration_and_testing_required"
+  }
+]

@@ -1,0 +1,3010 @@
+{
+  "testedAt": "2026-10-01",
+  "engine": "PGlite PostgreSQL in memory",
+  "tableCount": 50,
+  "columnCount": 597,
+  "allTablesRLS": true,
+  "emptyAfterBootstrap": true,
+  "checks": [
+    "DDL applied in order",
+    "all public tables empty before synthetic tests",
+    "client cannot see another client campaign/profile",
+    "client cannot promote itself",
+    "client cannot read credential tables",
+    "client cannot mint credits",
+    "client cannot call definer seed RPC",
+    "anonymous read and public insert denied",
+    "agent tables denied to non-server roles",
+    "single active SQL run enforced",
+    "cross-client source and campaign assignment denied",
+    "plain text deliverable and model receipt persisted",
+    "bundled schema.sql applied independently"
+  ],
+  "columns": [
+    {
+      "table_name": "activity_logs",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "actor_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "actor_email",
+      "data_type": "text"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "actor_role",
+      "data_type": "text"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "action",
+      "data_type": "text"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "target_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "target_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "target_label",
+      "data_type": "text"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "metadata",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "activity_logs",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agency_agents",
+      "column_name": "role_slug",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agency_agents",
+      "column_name": "is_recruited",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "agency_agents",
+      "column_name": "recruited_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agency_agents",
+      "column_name": "recruited_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agency_agents",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agency_agents",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "campaign_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "onboarding_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "roles",
+      "data_type": "ARRAY"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "source_ids",
+      "data_type": "ARRAY"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "task",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "provider",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "requested_model",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "steps",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agent_runs",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "content",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "created_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "agent_sources",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "skill_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "deliverable_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "deliverable_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "relative_path",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "file_size_bytes",
+      "data_type": "bigint"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "file_extension",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "version",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "generated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "storage_path",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "content",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "provider",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "model",
+      "data_type": "text"
+    },
+    {
+      "table_name": "ai_deliverables",
+      "column_name": "requested_model",
+      "data_type": "text"
+    },
+    {
+      "table_name": "app_settings",
+      "column_name": "key",
+      "data_type": "text"
+    },
+    {
+      "table_name": "app_settings",
+      "column_name": "value",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "app_settings",
+      "column_name": "updated_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "app_settings",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "app_settings",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaign_team_members",
+      "column_name": "campaign_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaign_team_members",
+      "column_name": "team_member_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaign_team_members",
+      "column_name": "assigned_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaign_team_members",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "onboarding_response_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "status",
+      "data_type": "USER-DEFINED"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "budget_monthly",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "platform",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ad_account_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "pixel_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "business_manager_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "objective",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ai_creative_prompt",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "facebook_page_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "facebook_page_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "instagram_account_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "instagram_account_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_campaign_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_daily_budget",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_lifetime_budget",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_start_time",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_synced_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "meta_token_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "managed_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "proposal_markdown",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ai_ad_copy_prompt",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ai_video_ad_prompt",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ai_vsl_prompt",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ai_static_prompt",
+      "data_type": "text"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "ai_generated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "campaigns",
+      "column_name": "weekly_report_enabled",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "transcript",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "link",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "order_index",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "fathom_recording_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "meeting_date",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "source",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_calls",
+      "column_name": "external_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "balance",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "total_granted",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "total_consumed",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "last_consumed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_credits",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "provider",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "label",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "key_encrypted",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "key_iv",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "key_tag",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "key_preview",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "last_used_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "last_error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_external_api_keys",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "phase",
+      "data_type": "USER-DEFINED"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "trial_amount",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "trial_start_date",
+      "data_type": "date"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "trial_end_date",
+      "data_type": "date"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "mrr_amount",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "next_payment_date",
+      "data_type": "date"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "last_payment_date",
+      "data_type": "date"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_finance_profiles",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_formation_access",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_access",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_access",
+      "column_name": "formation_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_access",
+      "column_name": "granted_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_access",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "module_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "is_completed",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "completed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "last_viewed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_formation_progress",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_notes",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_notes",
+      "column_name": "campaign_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_notes",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_notes",
+      "column_name": "content",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_notes",
+      "column_name": "is_read",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "client_notes",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "kind",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "lead_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "body",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "link_path",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "is_read",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "read_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "metadata",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "client_notifications",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "progress_pct",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "error_message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "started_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "finished_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "viewed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "notified_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_surprises",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "created_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "description",
+      "data_type": "text"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "is_completed",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "completed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "client_tasks",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "offer_brief",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "script_json",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "model_used",
+      "data_type": "text"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "prompt_tokens",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "completion_tokens",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "error_message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "archived",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "pinned",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "user_notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "cold_call_scripts",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "credit_usage",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "credit_usage",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "credit_usage",
+      "column_name": "feature",
+      "data_type": "text"
+    },
+    {
+      "table_name": "credit_usage",
+      "column_name": "amount",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "credit_usage",
+      "column_name": "metadata",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "credit_usage",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "source",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "spend_date",
+      "data_type": "date"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "account_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "campaign_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "campaign_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "spend",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "impressions",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "clicks",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "meta_reported_leads",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "raw_payload",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "synced_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_ad_spend_daily",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "full_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "email",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "phone",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "company",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "priority",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "source",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "event_type_id",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "event_type_title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "cal_booking_id",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "cal_booking_uid",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "cal_trigger_event",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "call_start_time",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "call_end_time",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "meeting_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "qualification",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "raw_payload",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "last_webhook_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "crm_leads",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "entry_type",
+      "data_type": "USER-DEFINED"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "category",
+      "data_type": "text"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "label",
+      "data_type": "text"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "amount",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "entry_date",
+      "data_type": "date"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "received_by",
+      "data_type": "text"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "finance_entries",
+      "column_name": "team_member_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "formation_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "description",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "module_number",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "video_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "presentation_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "resources",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "is_published",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "display_order",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "duration_minutes",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "formation_modules",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "description",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "slug",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "cover_image_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "is_published",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "display_order",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "formations",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "label",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "key_prefix",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "key_hash",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "provider",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "revoked_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "last_used_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "integration_api_keys",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "api_key_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "provider",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "external_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "payload_hash",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "http_status",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "raw_payload",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "lead_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "ip",
+      "data_type": "inet"
+    },
+    {
+      "table_name": "integration_webhook_logs",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "lead_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "activity_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "description",
+      "data_type": "text"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "metadata",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "created_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "lead_activities",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "campaign_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "meta_lead_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "meta_form_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "meta_form_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "meta_ad_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "meta_campaign_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "full_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "email",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "phone",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "company",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "field_data",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "quality_score",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "meta_created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "cash_collected",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "source",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "pipeline_stage_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "assigned_to",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "last_contacted_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "next_follow_up",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "tags",
+      "data_type": "ARRAY"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "preferred_contact",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "city",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "external_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "integration_api_key_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "leads",
+      "column_name": "revenue",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "linkedin_user_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "full_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "profile_picture",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "access_token_encrypted",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "access_token_iv",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "access_token_tag",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "refresh_token_encrypted",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "refresh_token_iv",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "refresh_token_tag",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "expires_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "refresh_expires_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "scopes",
+      "data_type": "ARRAY"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "connected_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "last_refreshed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "last_error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_connections",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "messages",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "context_override",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_conversations",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "conversation_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "order_index",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "body",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "hook",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "framework",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "format",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "metrics",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "linkedin_posts",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "meta_user_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "page_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "page_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "ad_account_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "instagram_account_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "user_token_encrypted",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "user_token_iv",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "user_token_tag",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "page_token_encrypted",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "page_token_iv",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "page_token_tag",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "expires_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "scopes",
+      "data_type": "ARRAY"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "subscribed_leadgen",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "connected_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "last_refreshed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "last_error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_connections",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "token",
+      "data_type": "text"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "is_active",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "meta_tokens",
+      "column_name": "admin_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "campaign_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "questionnaire_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "responses",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "submitted_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "reviewed_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "reviewed_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "onboarding_responses",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "color",
+      "data_type": "text"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "display_order",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "is_default",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "is_won",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "is_lost",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "pipeline_stages",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "scheduled_post_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "outcome",
+      "data_type": "text"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "http_status",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "linkedin_error",
+      "data_type": "text"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "linkedin_post_urn",
+      "data_type": "text"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "duration_ms",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "post_publish_attempts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "email",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "full_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "company",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "phone",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "role",
+      "data_type": "USER-DEFINED"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "is_active",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "gemini_api_key",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "managed_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "is_super_admin",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "team_role",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "team_status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "first_login_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "last_seen_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "notify_new_lead",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "notify_new_lead_email",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "results_rating",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "results_rating_note",
+      "data_type": "text"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "results_rating_updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "results_rating_updated_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "next_catchup",
+      "data_type": "date"
+    },
+    {
+      "table_name": "profiles",
+      "column_name": "meta_access_token",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "messages",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "context_override",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "reels_conversations",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "conversation_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "order_index",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "body",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "hook",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "framework",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "format",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "platform",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "duration_seconds",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "metrics",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "reels_scripts",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "source_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "fathom_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "fathom_recording_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "transcript_raw",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "meeting_title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "meeting_date",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "duration_minutes",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "analysis_json",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "model_used",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "prompt_tokens",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "completion_tokens",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "error_message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sales_call_analyses",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "source_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "source_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "body_snapshot",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "scheduled_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "scheduled_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "retry_count",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "next_retry_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "linkedin_post_urn",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "error_message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "published_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scheduled_posts",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "source",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "input_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "input_options",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "apify_run_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "apify_dataset_id",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "progress_pct",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "results_count",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "cost_usd",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "csv_storage_path",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "error_message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "started_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "scrape_jobs",
+      "column_name": "finished_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "messages",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "context_override",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sequence_conversations",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "conversation_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "order_index",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "subject",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "body",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "wait_days",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "status",
+      "data_type": "text"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "ab_variants",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "sequence_emails",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "surprise_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "asset_type",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "order_index",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "body",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "hook",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "framework",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "angle",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "payload",
+      "data_type": "jsonb"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "model_used",
+      "data_type": "text"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "generation_cost_usd",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "surprise_assets",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "team_member_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "monthly_rate",
+      "data_type": "numeric"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "notes",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "team_member_client_rates",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "client_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "client_name",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "action",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "message",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "is_read",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "team_notifications",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "team_resource_assignments",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_resource_assignments",
+      "column_name": "resource_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_resource_assignments",
+      "column_name": "team_member_id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_resource_assignments",
+      "column_name": "assigned_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_resource_assignments",
+      "column_name": "assigned_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "id",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "created_by",
+      "data_type": "uuid"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "kind",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "title",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "loom_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "document_url",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "body_html",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "body_text",
+      "data_type": "text"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "is_published",
+      "data_type": "boolean"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "order_index",
+      "data_type": "integer"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "created_at",
+      "data_type": "timestamp with time zone"
+    },
+    {
+      "table_name": "team_resources",
+      "column_name": "updated_at",
+      "data_type": "timestamp with time zone"
+    }
+  ]
+}

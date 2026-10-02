@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Bounded public-page extraction and optional Hunter verification. Never sends mail."""
+import argparse
+import datetime as dt
+import hashlib
+import html
+from html.parser import HTMLParser
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import socket
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import urllib.robotparser
+
+UA = 'LeadFactoryProspectResearch/1.0'
+EMAIL = re.compile(r'[A-Za-z0-9.!#$%&\x27*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}')
+
+def now():
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+def write_json(path, data):
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + '.tmp')
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + '\n')
+    os.chmod(tmp, 0o600)
+    tmp.replace(p)
+
+def public_url(url):
+    p = urllib.parse.urlsplit(url)
+    if p.scheme != 'https' or not p.hostname or p.username or p.password or p.port not in (None, 443):
+        raise ValueError('Only public HTTPS URLs on port 443 are supported')
+    ips = socket.getaddrinfo(p.hostname, 443, type=socket.SOCK_STREAM)
+    if not ips or any(not ipaddress.ip_address(x[4][0]).is_global for x in ips):
+        raise ValueError('Non-public network target')
+    return p
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def fetch(url):
+    public_url(url)
+    req = urllib.request.Request(url, headers={'User-Agent': UA})
+    # Redirects are surfaced for review; never silently fetch a different destination.
+    with urllib.request.build_opener(NoRedirect).open(req, timeout=20) as response:
+        raw = response.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise ValueError('Page too large')
+        return raw.decode(response.headers.get_content_charset() or 'utf-8', 'replace')
+
+def robots_ok(url):
+    p = public_url(url)
+    robot_url = f'{p.scheme}://{p.netloc}/robots.txt'
+    try:
+        content = fetch(robot_url)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return True
+        return False
+    except (OSError, ValueError):
+        return False
+    parser = urllib.robotparser.RobotFileParser()
+    parser.parse(content.splitlines())
+    return parser.can_fetch(UA, url)
+
+class Visible(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hidden = 0
+        self.parts = []
+    def handle_starttag(self, tag, attrs):
+        if tag in ('script', 'style', 'noscript'):
+            self.hidden += 1
+        if tag == 'a' and not self.hidden:
+            href = dict(attrs).get('href', '')
+            if href.lower().startswith('mailto:'):
+                self.parts.append(urllib.parse.unquote(href[7:].split('?')[0]))
+    def handle_endtag(self, tag):
+        if tag in ('script', 'style', 'noscript') and self.hidden:
+            self.hidden -= 1
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+def extract(content):
+    parser = Visible()
+    parser.feed(content)
+    text = html.unescape(' '.join(parser.parts))
+    results = []
+    for email in sorted(set(m.lower().rstrip('.') for m in EMAIL.findall(text))):
+        local, domain = email.rsplit('@', 1)
+        if local in ('noreply', 'no-reply', 'donotreply') or domain in ('example.com', 'example.org', 'example.net'):
+            continue
+        if '..' in email or domain.startswith('.'):
+            continue
+        results.append(email)
+    return results
+
+def classify(data, email):
+    if str(data.get('email', '')).lower() != email.lower():
+        return 'unknown'
+    status = data.get('status', 'unknown')
+    if status == 'valid':
+        positive = all(data.get(k) is True for k in ('regexp', 'mx_records', 'smtp_server', 'smtp_check'))
+        negative = all(data.get(k) is False for k in ('accept_all', 'disposable', 'block'))
+        return 'verified' if positive and negative else 'unknown'
+    return status if status in ('invalid', 'accept_all', 'webmail', 'disposable', 'pending', 'unknown') else 'unknown'
+
+def collect(args):
+    accounts = json.loads(Path(args.input).read_text())
+    if not isinstance(accounts, list):
+        raise ValueError('Input must be an account array')
+    rows, errors, seen = [], [], set()
+    used = 0
+    for account in accounts:
+        for url in account['urls']:
+            if used >= args.max_pages:
+                errors.append({'account_id': account['account_id'], 'reason': 'page_cap'})
+                break
+            used += 1
+            try:
+                if not robots_ok(url):
+                    errors.append({'url': url, 'reason': 'robots_disallowed_or_unavailable'})
+                    continue
+                content = fetch(url)
+                for email in extract(content):
+                    identity = (account['account_id'], email)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    rows.append({'account_id': account['account_id'], 'company': account['company'],
+                        'email': email, 'source_url': url, 'observed_at': now(),
+                        'source_sha256': hashlib.sha256(content.encode()).hexdigest(),
+                        'source_type': 'official_page_extraction', 'verification_status': 'unverified',
+                        'relationship_status': 'unchecked', 'contact_role_status': 'unreviewed'})
+            except (OSError, ValueError) as e:
+                # Do not emit pages, tokens or untrusted error bodies.
+                errors.append({'url': url, 'reason': type(e).__name__, 'http_status': getattr(e, 'code', None)})
+            finally:
+                time.sleep(1)
+    write_json(args.output, {'contacts': rows, 'errors': errors, 'collected_at': now()})
+    print(json.dumps({'contacts': len(rows), 'errors': len(errors), 'verified': 0}))
+
+def verify(args):
+    payload = json.loads(Path(args.input).read_text())
+    rows = payload['contacts']
+    candidates = [r for r in rows if r.get('email') and r.get('verification_status') != 'suppressed']
+    unique = list(dict.fromkeys(r['email'].strip().lower() for r in candidates))[:args.max_requests]
+    if not args.live:
+        print(json.dumps({'mode': 'dry_run', 'unique_addresses': len(unique), 'network_calls': 0}))
+        return
+    key = os.environ.get('HUNTER_API_KEY')
+    if not key or key == 'test-api-key':
+        raise ValueError('A real HUNTER_API_KEY is required; test key cannot verify contacts')
+    results = {}
+    for email in unique:
+        url = 'https://api.hunter.io/v2/email-verifier?' + urllib.parse.urlencode({'email': email})
+        req = urllib.request.Request(url, headers={'Authorization': f'Bearer {key}', 'User-Agent': UA})
+        verified_at = now()
+        try:
+            with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as response:
+                raw = json.load(response)
+                data = raw.get('data', {}) or {}
+                state = 'pending' if response.status == 202 else classify(data, email)
+                results[email] = {'verification_status': state, 'verified_at': verified_at,
+                                  'verification_provider': 'hunter', 'verification_evidence': data}
+        except urllib.error.HTTPError as e:
+            if e.code == 451:
+                results[email] = {'verification_status': 'suppressed', 'verified_at': verified_at,
+                                  'verification_provider': 'hunter', 'verification_evidence': {'http_status': 451}}
+            elif e.code in (401, 402, 403, 429):
+                payload['verification_stop'] = {'http_status': e.code, 'at': now()}
+                break
+            else:
+                results[email] = {'verification_status': 'unknown', 'verified_at': verified_at,
+                                  'verification_provider': 'hunter', 'verification_evidence': {'http_status': e.code}}
+        except (OSError, ValueError):
+            results[email] = {'verification_status': 'unknown', 'verified_at': verified_at,
+                              'verification_provider': 'hunter', 'verification_evidence': {'error': 'request_failed'}}
+        time.sleep(1)
+    for row in rows:
+        email = row.get('email', '').strip().lower()
+        if email in results:
+            row.update(results[email])
+    write_json(args.output, payload)
+    print(json.dumps({'checked': len(results), 'verified': sum(r['verification_status'] == 'verified' for r in results.values()),
+                      'stopped': payload.get('verification_stop')}))
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    sub = p.add_subparsers(dest='command', required=True)
+    for command in ('collect', 'verify'):
+        s = sub.add_parser(command)
+        s.add_argument('--input', required=True)
+        s.add_argument('--output', required=True)
+        if command == 'collect':
+            s.add_argument('--max-pages', type=int, default=20)
+        else:
+            s.add_argument('--max-requests', type=int, default=20)
+            s.add_argument('--live', action='store_true')
+    args = p.parse_args()
+    cap = getattr(args, 'max_pages', getattr(args, 'max_requests', 0))
+    if not 1 <= cap <= 100:
+        p.error('Cap must be between 1 and 100')
+    if Path(args.output).exists():
+        p.error('Output exists; choose a new path')
+    if Path(args.input).resolve() == Path(args.output).resolve():
+        p.error('Output must differ from input to preserve the source')
+    try:
+        (collect if args.command == 'collect' else verify)(args)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        p.exit(2, f'Cannot complete: {type(e).__name__}; check input and configuration.\n')
+
+if __name__ == '__main__':
+    main()

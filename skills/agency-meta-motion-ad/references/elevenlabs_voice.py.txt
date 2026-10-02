@@ -1,0 +1,63 @@
+"""Bounded ElevenLabs speech-with-timing helper. Dry run unless --live."""
+import argparse
+import base64
+import json
+import math
+import os
+from pathlib import Path
+import re
+import urllib.request
+import urllib.error
+
+def decode_response(payload):
+    audio=base64.b64decode(payload['audio_base64'],validate=True)
+    if not audio: raise ValueError('Empty audio')
+    alignment=payload.get('normalized_alignment') or payload.get('alignment')
+    if not isinstance(alignment,dict): raise ValueError('Missing alignment')
+    chars=alignment.get('characters',[])
+    starts=alignment.get('character_start_times_seconds',[])
+    ends=alignment.get('character_end_times_seconds',[])
+    if not chars or len(chars)!=len(starts) or len(chars)!=len(ends): raise ValueError('Invalid alignment lengths')
+    words=[];word='';begin=None;end=None;previous=0
+    for char,start,stop in zip(chars,starts,ends):
+        if not isinstance(char,str) or not isinstance(start,(float,int)) or not isinstance(stop,(float,int)) or not math.isfinite(start) or not math.isfinite(stop) or start<previous or stop<start: raise ValueError('Invalid timing')
+        previous=start
+        if char.isspace():
+            if word: words.append({'text':word,'start':begin,'end':end});word='';begin=None
+        else:
+            if begin is None:begin=start
+            word+=char;end=stop
+    if word:words.append({'text':word,'start':begin,'end':end})
+    return audio,alignment,words
+
+def main():
+    p=argparse.ArgumentParser(description=__doc__)
+    for name in ['text','voice-id','model-id','output']:p.add_argument('--'+name,required=True)
+    p.add_argument('--live',action='store_true');a=p.parse_args()
+    try:
+        text=Path(a.text).read_text().strip()
+        if not 1<=len(text)<=5000:raise ValueError('Text must contain 1–5000 characters')
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',a.voice_id) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}',a.model_id):raise ValueError('Invalid voice/model ID')
+        dest=Path(a.output)
+        if dest.exists():raise ValueError('Output exists; choose a new directory')
+        if not a.live:
+            print(json.dumps({'dry_run':True,'characters':len(text),'voice_id':a.voice_id,'model_id':a.model_id,'requests':0}));return
+        key=os.environ.get('ELEVENLABS_API_KEY')
+        if not key:raise ValueError('ELEVENLABS_API_KEY is required')
+        # Reserve the destination before the one paid request, never overwrite a take.
+        dest.mkdir(parents=True,exist_ok=False)
+        req=urllib.request.Request('https://api.elevenlabs.io/v1/text-to-speech/'+a.voice_id+'/with-timestamps?output_format=mp3_44100_128',data=json.dumps({'text':text,'model_id':a.model_id}).encode(),headers={'xi-api-key':key,'Content-Type':'application/json','Accept':'application/json'},method='POST')
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs):raise ValueError('Redirect refused')
+        with urllib.request.build_opener(NoRedirect).open(req,timeout=90) as response:
+            payload=response.read(32_000_001)
+            if len(payload)>32_000_000:raise ValueError('Response too large')
+            request_id=response.headers.get('request-id')
+        audio,alignment,words=decode_response(json.loads(payload))
+        (dest/'voice.mp3').write_bytes(audio)
+        for name,value in [('alignment.json',alignment),('words.json',words),('receipt.json',{'provider':'ElevenLabs','voiceId':a.voice_id,'modelId':a.model_id,'characters':len(text),'requestId':request_id,'audioBytes':len(audio),'status':'received; listening QA required'})]:
+            (dest/name).write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n')
+        print(json.dumps({'status':'received','audioBytes':len(audio),'words':len(words)}))
+    except urllib.error.HTTPError as e:p.exit(2,'ElevenLabs HTTP '+str(e.code)+'; no retry.\n')
+    except (OSError,ValueError,KeyError,TypeError):p.exit(2,'Cannot generate voice: check input, output, connection or timing response. No automatic retry.\n')
+if __name__=='__main__':main()

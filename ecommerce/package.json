@@ -1,0 +1,15 @@
+{
+  "name": "bizos-ecommerce",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Template e-commerce A→Z : cockpit local, vault d'agents et skills (zéro dépendance)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "license": "MIT"
+}

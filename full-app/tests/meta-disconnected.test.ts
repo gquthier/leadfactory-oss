@@ -1,0 +1,5 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {getAdAccounts} from '../src/lib/meta-api';
+test('an inherited Meta token cannot trigger network in the local starter',async()=>{
+ const names=['LEADFACTORY_DATA_MODE','LEADFACTORY_ENABLE_EXTERNAL','META_ACCESS_TOKEN'];const prior=Object.fromEntries(names.map(k=>[k,process.env[k]]));const fetchBefore=globalThis.fetch;let calls=0;
+ try{process.env.LEADFACTORY_DATA_MODE='local';process.env.LEADFACTORY_ENABLE_EXTERNAL='1';process.env.META_ACCESS_TOKEN='FAKE_TEST_TOKEN';globalThis.fetch=(async()=>{calls++;throw Error('network forbidden');})as typeof fetch;await assert.rejects(getAdAccounts(),/désactivé/);assert.equal(calls,0);process.env.LEADFACTORY_DATA_MODE='supabase';process.env.LEADFACTORY_ENABLE_EXTERNAL='0';await assert.rejects(getAdAccounts(),/désactivé/);assert.equal(calls,0);}finally{globalThis.fetch=fetchBefore;for(const k of names){if(prior[k]===undefined)delete process.env[k];else process.env[k]=prior[k];}}
+});

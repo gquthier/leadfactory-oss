@@ -1,0 +1,71 @@
+{
+  "reviewedAt": "2026-10-01",
+  "source": "src/lib/starter-agents.ts",
+  "sourceFormat": "Local JSON, .local-data/agents.json",
+  "status": "schema_contract_only",
+  "sqlSyncActive": false,
+  "tables": {
+    "agency_agents": {
+      "localCollection": "recruited: string[]",
+      "fields": {
+        "role_slug": "Each recruited array value",
+        "is_recruited": "true for each recruited role; false for a future explicit removal",
+        "recruited_by": "No local value today; must be set from an authenticated administrator by a future SQL adapter",
+        "recruited_at": "No local value today; populate only when recruitment time is known"
+      },
+      "note": "No rows seeded. Runtime default ceo is not automatically inserted by SQL. Prompts and skills remain versioned files from roster.json, not credentials or per-client data in this table."
+    },
+    "agent_sources": {
+      "localCollection": "sources: Source[]",
+      "fields": {
+        "id": "id",
+        "name": "name",
+        "client_id": "clientId; convert empty string to SQL NULL for shared agency sources",
+        "content": "content, max 18000 characters",
+        "url": "url, optional HTTPS, max 1000 characters",
+        "created_by": "No local value today; authenticated administrator in a future adapter"
+      },
+      "note": "URL is a reference only. No fetch, crawler, connector or retrieval service is started by SQL."
+    },
+    "agent_runs": {
+      "localCollection": "jobs: Job[]",
+      "fields": {
+        "id": "id",
+        "client_id": "clientId",
+        "campaign_id": "campaignId",
+        "onboarding_id": "onboardingId; absent -> SQL NULL",
+        "roles": "roles, ordered array",
+        "source_ids": "sourceIds, ordered UUID array",
+        "task": "task",
+        "provider": "provider",
+        "requested_model": "model captured before execution; empty may mean CLI default",
+        "status": "status",
+        "steps": "steps JSON array preserving role, content, actual model, usage and completedAt",
+        "error": "error, nullable max 300 characters",
+        "created_at": "createdAt",
+        "updated_at": "No local value today; SQL adapter would set it at mutation"
+      },
+      "note": "One active queued/running run and one run per non-null onboarding_id. Source/campaign/onboarding client scope checked when assigned; deleted source IDs can remain as historical references. Revalidate actual content at execution. Role slugs and prompts validated against versioned roster by application."
+    }
+  },
+  "deliverables": {
+    "table": "ai_deliverables",
+    "content": "TEXT nullable; final Markdown/text body, never interpreted as a filesystem path",
+    "provider": "Nullable provider used to execute generation",
+    "model": "Nullable actual model returned by the provider; never fill with requested model if unknown",
+    "requested_model": "Nullable requested model before execution",
+    "relative_path": "Historical metadata remains; serving content does not authorize reading an arbitrary local path"
+  },
+  "access": {
+    "agency_agents": "service_role only; server must require an authenticated active admin",
+    "agent_sources": "service_role only; server must require an authenticated active admin and validate client scope",
+    "agent_runs": "service_role only; server must require an authenticated active admin and validate client scope"
+  },
+  "limitations": [
+    "No migration/import of existing local JSON is provided or executed.",
+    "No SQL adapter, synchronization, listener, job worker or cron is activated.",
+    "No real credentials, jobs, roster records, clients or sources are seeded.",
+    "The service_role bypasses RLS. SQL privileges do not replace HTTP authentication/authorization.",
+    "Local queue behavior and SQL constraints are separate implementations; runtime execution remains in local files."
+  ]
+}

@@ -1,0 +1,26 @@
+Local BizOS
+Copyright 2026 BizOS
+
+This application displays the BizOS chat-first shell, whose messenger anatomy
+was adapted from Rakazo (https://github.com/elie222/rakazo), licensed under the
+Apache License 2.0. The audited visual source revision is
+de73adc62acacc312c413873cf5d90ead786c540. The complete attribution and license
+are packaged at licenses/rakazo-Apache-2.0.txt.
+
+Local BizOS does not embed Rakazo API, worker, agent harness, model provider,
+marketing copy, names or demo data.
+
+The local (Codex) runtime — the `codex app-server` driver, its model
+catalogue reader, the retry/backoff policy, the process and PATH helpers,
+the redacted protocol tee and the scripted fake app-server used by the
+tests — was adapted from OpenMausBot (https://github.com/milind-soni/OpenMausBot),
+licensed under the Apache License 2.0. The ported revision is
+cb0d376bd144f5f71641ba6dcf52bca2775851d0. The complete attribution and
+license are packaged at licenses/openmausbot-Apache-2.0.txt.
+
+Local BizOS does not embed OpenMausBot's box, browser, phone or computer
+integrations, its driver registry, its names or its demo data.
+
+This source package preserves the AGPL-3.0-only license in LICENSE.
+The embedded LeadFactory agency kit retains its MIT license and upstream notices
+in agency-kit/LICENSE, agency-kit/UPSTREAM-LICENSE.txt and agency-kit/THIRD_PARTY_NOTICES.md.

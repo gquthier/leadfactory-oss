@@ -1,0 +1,10 @@
+.git
+node_modules
+data
+exports
+.env
+.env.*
+*.log
+integrations
+ecommerce
+test*

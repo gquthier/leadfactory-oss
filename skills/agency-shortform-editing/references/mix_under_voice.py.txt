@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""Mix a supplied instrumental quietly under a voice, without editing the originals."""
+import argparse, json, subprocess, tempfile, wave
+from pathlib import Path
+import numpy as np
+
+SR=48000
+def pcm(path, target, start=0, duration=None):
+    args=['ffmpeg','-v','error','-y','-ss',str(start),'-i',str(path)]
+    if duration is not None:args+=['-t',str(duration)]
+    subprocess.run(args+['-vn','-ar',str(SR),'-ac','2','-c:a','pcm_s16le',str(target)],check=True)
+    with wave.open(str(target)) as w:
+        return np.frombuffer(w.readframes(w.getnframes()),dtype='<i2').reshape(-1,2).astype(float)/32768
+def rms(a):return float(np.sqrt(np.mean(a*a)))
+def db(a):return float(20*np.log10(max(rms(a),1e-12)))
+def main():
+    ap=argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--voice',type=Path,required=True)
+    ap.add_argument('--music',type=Path,required=True)
+    ap.add_argument('--out',type=Path,required=True,help='New WAV output')
+    ap.add_argument('--music-start',type=float,default=0)
+    ap.add_argument('--music-gap-db',type=float,default=25)
+    ap.add_argument('--clicks',type=Path,help='Optional JSON list: {file, at, gain}; paths relative to JSON')
+    a=ap.parse_args()
+    if a.out.resolve() in [a.voice.resolve(),a.music.resolve()]:ap.error('Output must differ from inputs')
+    if a.out.exists() or a.out.with_suffix('.mix.json').exists():ap.error('Output or report exists; choose a new path')
+    if a.music_start < 0:ap.error('Music start must be non-negative')
+    if a.out.suffix.lower() != '.wav':ap.error('Output must use a .wav extension')
+    if not 10<=a.music_gap_db<=45:ap.error('Music gap must be 10–45 dB')
+    with tempfile.TemporaryDirectory(prefix='caption-mix-') as td:
+        td=Path(td);voice=pcm(a.voice,td/'voice.wav');n=len(voice);duration=n/SR
+        if rms(voice)<1e-6:ap.error('No usable voice signal')
+        music=pcm(a.music,td/'music.wav',a.music_start,duration)
+        if len(music)<n:ap.error('Music is shorter than voice; provide a longer segment')
+        music=music[:n]
+        if rms(music)<1e-7:ap.error('No usable music signal')
+        music*=10**((db(voice)-a.music_gap_db-db(music))/20)
+        t=np.arange(n)/SR
+        music*=np.clip(np.minimum(t/.8,(duration-t)/1.2),0,1)[:,None]
+        energy=np.array([rms(voice[j:j+2400]) for j in range(0,n,2400)])
+        env=np.interp(np.arange(n),np.arange(len(energy))*2400,energy)
+        music*=(1-.20*np.clip(env/max(rms(voice)*1.5,1e-6),0,1))[:,None]
+        effects=np.zeros_like(voice)
+        if a.clicks:
+            for i,event in enumerate(json.loads(a.clicks.read_text())):
+                at=float(event['at']);gain=float(event.get('gain',.44))
+                if at<0 or at>=duration:ap.error('Click outside voice window')
+                sound=pcm(a.clicks.parent/event['file'],td/f'click{i}.wav')*gain
+                offset=round(at*SR);count=min(len(sound),n-offset)
+                effects[offset:offset+count]+=sound[:count]
+        mix=voice+music+effects;gain=min(1,10**(-1.5/20)/np.max(np.abs(mix)))
+        a.out.parent.mkdir(parents=True,exist_ok=True)
+        with wave.open(str(a.out),'wb') as w:
+            w.setnchannels(2);w.setsampwidth(2);w.setframerate(SR)
+            w.writeframes((np.clip(mix*gain,-.999,.999)*32767).astype('<i2').tobytes())
+        report={'duration':duration,'voice_rms_dbfs':db(voice),'music_rms_dbfs':db(music),'voice_minus_music_db':db(voice)-db(music),'global_gain_db':20*np.log10(gain),'sample_peak_dbfs':20*np.log10(np.max(abs(mix*gain))),'voice_timing_unchanged':True}
+        a.out.with_suffix('.mix.json').write_text(json.dumps(report,indent=2));print(json.dumps(report))
+if __name__=='__main__':main()

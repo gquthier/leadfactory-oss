@@ -1,0 +1,170 @@
+[
+  {
+    "name": "shopify-setup",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "shopify-themes",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "shopify-liquid",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "shopify-catalog",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "shopify-testing",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "shopify-performance",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "shopify-api-graphql",
+    "upstream": "https://github.com/OrcaQubits/agentic-commerce-skills-plugins",
+    "sourceCommit": "4366f7c11731c9ff07573bef8aa74db9d1ac0aee",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "amazon-product-research",
+    "upstream": "https://github.com/nexscope-ai/Amazon-Skills",
+    "sourceCommit": "5a99d7efeaafa47454c97cbe8473ea8a41e40407",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "ecommerce-competitor-analyzer",
+    "upstream": "https://github.com/buluslan/ecommerce-competitor-analyzer",
+    "sourceCommit": "7f95cc876e1319069f9868f72ee2f719ba0465a1",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "copywriting",
+    "upstream": "https://github.com/coreyhaines31/marketingskills",
+    "sourceCommit": "bd8eb1a0e5a82379537298c0570e85279ca27337",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "cro",
+    "upstream": "https://github.com/coreyhaines31/marketingskills",
+    "sourceCommit": "bd8eb1a0e5a82379537298c0570e85279ca27337",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "facebook-ads",
+    "upstream": "https://github.com/thatrebeccarae/claude-marketing",
+    "sourceCommit": "a8a63ec1341f05ec9c1e9cb52b4edeb14e3bdcba",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "klaviyo-analyst",
+    "upstream": "https://github.com/thatrebeccarae/claude-marketing",
+    "sourceCommit": "a8a63ec1341f05ec9c1e9cb52b4edeb14e3bdcba",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "landing-page-optimizer",
+    "upstream": "https://github.com/thatrebeccarae/claude-marketing",
+    "sourceCommit": "a8a63ec1341f05ec9c1e9cb52b4edeb14e3bdcba",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "google-ads-audit",
+    "upstream": "https://github.com/nowork-studio/toprank",
+    "sourceCommit": "4ebce4dffd3954f829084076feaf23981836c87c",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "google-ads",
+    "upstream": "https://github.com/nowork-studio/toprank",
+    "sourceCommit": "4ebce4dffd3954f829084076feaf23981836c87c",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "meta-ads-audit",
+    "upstream": "https://github.com/nowork-studio/toprank",
+    "sourceCommit": "4ebce4dffd3954f829084076feaf23981836c87c",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "meta-ads",
+    "upstream": "https://github.com/nowork-studio/toprank",
+    "sourceCommit": "4ebce4dffd3954f829084076feaf23981836c87c",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "competitor-ads-analyst",
+    "upstream": "https://github.com/thatrebeccarae/claude-marketing",
+    "sourceCommit": "a8a63ec1341f05ec9c1e9cb52b4edeb14e3bdcba",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "brand-dna",
+    "upstream": "https://github.com/thatrebeccarae/claude-marketing",
+    "sourceCommit": "a8a63ec1341f05ec9c1e9cb52b4edeb14e3bdcba",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "ad-creative",
+    "upstream": "https://github.com/coreyhaines31/marketingskills",
+    "sourceCommit": "bd8eb1a0e5a82379537298c0570e85279ca27337",
+    "license": "MIT",
+    "adapted": true
+  },
+  {
+    "name": "ecommerce-orchestrator",
+    "upstream": null,
+    "license": "MIT",
+    "adapted": false,
+    "origin": "Original BizOS workflow"
+  },
+  {
+    "name": "product-economics",
+    "upstream": null,
+    "license": "MIT",
+    "adapted": false,
+    "origin": "Original BizOS workflow"
+  },
+  {
+    "name": "ecommerce-operations",
+    "upstream": null,
+    "license": "MIT",
+    "adapted": false,
+    "origin": "Original BizOS workflow"
+  }
+]

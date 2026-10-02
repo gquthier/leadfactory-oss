@@ -1,0 +1,1 @@
+export default function Page(){return <main className="p-8"><h1>Document à personnaliser</h1><p>Ajoutez ici les informations de votre propre agence avant de proposer un portail public. Aucune identité juridique de l’agence d’origine n’est fournie.</p></main>;}

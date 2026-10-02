@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Local event ledger. Does not fetch events, send emails, or control a provider."""
+import argparse
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import sqlite3
+
+TYPES = {'accepted', 'delivered', 'replied', 'positive_reply', 'out_of_office', 'soft_bounce',
+         'hard_bounce', 'opt_out', 'complaint', 'meeting_booked', 'meeting_held',
+         'quote_sent', 'order_paid', 'reorder_paid'}
+GLOBAL = {'hard_bounce', 'opt_out', 'complaint'}
+STOP = GLOBAL | {'replied', 'positive_reply', 'out_of_office', 'soft_bounce'}
+
+def connect(path):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path)
+    os.chmod(path, 0o600)
+    db.executescript('''
+    CREATE TABLE IF NOT EXISTS events (
+      provider TEXT NOT NULL, event_id TEXT NOT NULL, campaign_id TEXT NOT NULL,
+      account_id TEXT NOT NULL, email TEXT NOT NULL, event_type TEXT NOT NULL,
+      occurred_at TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(provider,event_id));
+    CREATE TABLE IF NOT EXISTS suppressed (email TEXT PRIMARY KEY, reason TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS stopped (
+      campaign_id TEXT NOT NULL, email TEXT NOT NULL, reason TEXT NOT NULL,
+      PRIMARY KEY(campaign_id,email));
+    ''')
+    return db
+
+def ingest(db, events):
+    if not isinstance(events, list):
+        raise ValueError('Expected an array')
+    added = 0
+    with db:
+        for e in events:
+            for k in ('provider', 'event_id', 'campaign_id', 'account_id', 'email', 'event_type', 'occurred_at', 'evidence'):
+                if not e.get(k) or not isinstance(e[k], str):
+                    raise ValueError('Missing event field: ' + k)
+            if e['event_type'] not in TYPES:
+                raise ValueError('Unsupported event type')
+            stamp = dt.datetime.fromisoformat(e['occurred_at'].replace('Z', '+00:00'))
+            if stamp.tzinfo is None:
+                raise ValueError('Timestamp must have a timezone')
+            email = e['email'].strip().lower()
+            if '@' not in email:
+                raise ValueError('Missing email')
+            payload = dict(e, email=email)
+            encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            old = db.execute('SELECT payload FROM events WHERE provider=? AND event_id=?', (e['provider'], e['event_id'])).fetchone()
+            if old:
+                if old[0] != encoded:
+                    raise ValueError('Conflicting payload for existing event ID')
+                continue
+            db.execute('INSERT INTO events VALUES (?,?,?,?,?,?,?,?)',
+                       (e['provider'], e['event_id'], e['campaign_id'], e['account_id'], email,
+                        e['event_type'], e['occurred_at'], encoded))
+            added += 1
+            if e['event_type'] in GLOBAL:
+                db.execute('INSERT OR IGNORE INTO suppressed VALUES (?,?)', (email, e['event_type']))
+            if e['event_type'] in STOP:
+                db.execute('INSERT OR IGNORE INTO stopped VALUES (?,?,?)', (e['campaign_id'], email, e['event_type']))
+    return added
+
+def report(db):
+    events = [json.loads(r[0]) for r in db.execute('SELECT payload FROM events')]
+    campaigns = {}
+    for campaign in sorted({e['campaign_id'] for e in events}):
+        rows = [e for e in events if e['campaign_id'] == campaign]
+        contacted = {e['account_id'] for e in rows if e['event_type'] == 'accepted'}
+        replied = {e['account_id'] for e in rows if e['event_type'] in ('replied', 'positive_reply')}
+        positive = {e['account_id'] for e in rows if e['event_type'] == 'positive_reply'}
+        campaigns[campaign] = {'contacted_accounts': len(contacted), 'replying_accounts': len(replied),
+            'positive_accounts': len(positive),
+            'reply_rate_on_contacted': len(replied & contacted) / len(contacted) if contacted else None,
+            'events_by_type': {k: sum(e['event_type'] == k for e in rows) for k in sorted(TYPES) if any(e['event_type'] == k for e in rows)}}
+    return {'campaigns': campaigns,
+            'global_suppressions': db.execute('SELECT count(*) FROM suppressed').fetchone()[0],
+            'stopped_campaign_contacts': db.execute('SELECT count(*) FROM stopped').fetchone()[0],
+            'note': 'Counts reflect imported evidence only; suppression propagation is not performed by this script.'}
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--db', required=True)
+    sub = p.add_subparsers(dest='command', required=True)
+    s = sub.add_parser('ingest')
+    s.add_argument('--input', required=True)
+    sub.add_parser('report')
+    args = p.parse_args()
+    with connect(args.db) as db:
+        if args.command == 'ingest':
+            result = {'inserted': ingest(db, json.loads(Path(args.input).read_text()))}
+        else:
+            result = report(db)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+if __name__ == '__main__':
+    main()

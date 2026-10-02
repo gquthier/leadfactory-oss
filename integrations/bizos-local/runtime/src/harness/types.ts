@@ -1,0 +1,593 @@
+// Domain contract for the Local BizOS runtime.
+//
+// This file is the main-process mirror of `src/lib/localbizos/types.ts` in
+// the renderer (lot 1). The preload bridge (`window.localbizos`) speaks
+// exactly these shapes, so any change here is a change to the renderer's
+// contract — keep the two in step.
+
+export type RuntimeMode = "cloud" | "local";
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+export type SandboxMode = "read-only" | "workspace-write";
+
+/** Whether a CLI still asks before it acts. `ask` is the product: every
+ * permission request becomes an approval card. `skip-all` is the dangerous
+ * global escape hatch — nobody is asked, for ANY agent, Claude or Codex. */
+export type PermissionPolicy = "ask" | "skip-all";
+
+/** Light, dark, or whatever this Mac is set to. Mirrors
+ * `src/lib/localbizos/theme.ts` — the renderer's name for the same three. */
+export type ThemePreference = "system" | "light" | "dark";
+
+export type PlanProviderSetting = "codex" | "claude" | "cursor";
+
+export interface LocalRuntimeSettings {
+  codexPath?: string;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  sandbox: SandboxMode;
+  workingDir?: string;
+  autoApproveReads: boolean;
+  /** Global permission policy for every agent — mirror in the renderer's
+   * `src/lib/localbizos/types.ts` and keep the two in step. */
+  permissions?: PermissionPolicy;
+  /** Which connected plan answers new turns. Opaque `pln_…` id, or null. */
+  activePlanId?: string | null;
+  /** Preferred CLI family when resolving among connected plans. */
+  provider?: PlanProviderSetting;
+  /** An external API-key provider (Settings → Plans & usage) that answers
+   * turns instead of a plan, through codex's `model_providers`. `null` or
+   * absent means the plans do. */
+  inferenceProviderId?: string | null;
+  /** Proactive heartbeat (sidecar only). Absent ⇒ ON every 30 minutes,
+   * 08:00–21:00 local. See `harness/heartbeat.ts`. */
+  heartbeat?: { enabled: boolean; everyMinutes: number };
+}
+
+export interface RuntimeSettings {
+  mode: RuntimeMode;
+  local: LocalRuntimeSettings;
+  /** How this app should look. It is persisted HERE rather than left to the
+   * window's `localStorage` because the MAIN process is the one that needs it:
+   * `nativeTheme.themeSource` paints the title bar, the menus and every sheet
+   * the OS draws on our behalf, and none of those can read a web page's
+   * storage. The renderer keeps a copy in `localStorage` purely so the next
+   * launch paints the right colour before this file has been read. */
+  appearance: { theme: ThemePreference };
+  /** What the user shared with their agents (Settings → Access). Persisted
+   * in the same 0600 `settings.json`; it is never written through
+   * `runtime.setSettings`, only through the `access` calls. */
+  access: AccessSettings;
+}
+
+/** `read` means the folder is named to the bot and readable by the BizOS
+ * document tool; `read-write` additionally puts it in the codex sandbox's
+ * writable roots. Nothing else distinguishes them — see
+ * `docs/architecture/05-infra-devops-security.md`. */
+export type AccessMode = "read" | "read-write";
+
+/** `"all"` is every bot; a list is exactly those bot ids. */
+export type AccessScope = "all" | string[];
+
+export interface AccessGrant {
+  id: string;
+  /** Canonical (`realpath`ed) absolute path. */
+  path: string;
+  label: string;
+  mode: AccessMode;
+  scope: AccessScope;
+  grantedAt: string;
+}
+
+export interface AccessSettings {
+  grants: AccessGrant[];
+  /** Lets the BizOS document tool read anywhere in the home folder, minus
+   * the folders no grant can ever cover. */
+  fullDiskRead: boolean;
+}
+
+/** A folder shortcut the app offers without granting anything.
+ *
+ * `folderId` is what the renderer sends back to `access.grantKnown`: the MAIN
+ * process resolves the id to a path with `app.getPath`, so tapping "Documents"
+ * cannot become "share `<home>`" by editing one string in a compromised
+ * page. */
+export interface FolderSuggestion {
+  folderId: string;
+  path: string;
+  label: string;
+}
+
+/** What the native picker hands back. `nonce` is single-use and bound to the
+ * canonical path the user actually chose in the system dialog; `access.grant`
+ * takes the nonce and nothing else. */
+export interface PickedFolder extends FolderSuggestion {
+  nonce: string;
+}
+
+/** Everything Settings → Access draws, in one answer. */
+export interface AccessState extends AccessSettings {
+  suggestions: FolderSuggestion[];
+  /** Folders the app refuses to share, whatever the user picks. */
+  denied: string[];
+  /** The home folder, so the screen can say `~/Documents` the way the
+   * Finder does instead of a full path nobody reads. */
+  home: string;
+}
+
+/** What `AccessStore.grant` takes — INSIDE the main process, after a path has
+ * been proved to come from the picker or from a known-folder id. It is not
+ * what crosses the bridge; see `AccessGrantRequest`. */
+export interface AccessGrantInput {
+  path: string;
+  label?: string;
+  mode?: AccessMode;
+  scope?: AccessScope;
+}
+
+/**
+ * What crosses the BRIDGE. There is no `path`.
+ *
+ * A renderer that can name a folder can name `~/.ssh`, and `grant({path})`
+ * accepted exactly that: a compromised page could hand itself a durable
+ * read-write grant with no dialog and no click. So a grant now names either the
+ * `nonce` the native picker just issued, or the `folderId` of a shortcut the
+ * main process resolves itself.
+ */
+export type AccessGrantRequest =
+  | { nonce: string; label?: string; mode?: AccessMode; scope?: AccessScope }
+  | { folderId: string; label?: string; mode?: AccessMode; scope?: AccessScope };
+
+export type AccessGrantPatch = Partial<Pick<AccessGrant, "label" | "mode" | "scope">>;
+
+/** One codex installation the main process found and vetted. Mirrors
+ * `CodexCandidate` in the renderer's bridge contract
+ * (`src/lib/localbizos/bridge.ts`) — the picker programs against THAT, so this
+ * is the shape `runtime.codexCandidates()` must answer with. */
+export interface CodexCandidate {
+  /** Opaque and stable for a canonical path. The picker sends THIS back — a
+   * free-text path from the renderer is a program this app would spawn. */
+  id: string;
+  path: string;
+  version?: string;
+}
+
+export interface CodexStatus {
+  found: boolean;
+  path?: string;
+  version?: string;
+  authenticated?: boolean;
+  error?: string;
+}
+
+export type AvatarKind = "procedural" | "upload" | "generated";
+export type BotStatus = "idle" | "working" | "waiting";
+export type AvatarGenerationStatus =
+  | "pending"
+  | "needs_configuration"
+  | "submitting"
+  | "submitted"
+  | "ready"
+  | "failed"
+  | "submission_unknown";
+
+export interface PublicAvatarGeneration {
+  status: AvatarGenerationStatus;
+  errorCode?: string;
+}
+
+/** Persisted atomically with the bot row. This never crosses a public API. */
+export interface InternalAvatarGeneration {
+  active: boolean;
+  state: AvatarGenerationStatus;
+  errorCode?: string;
+  revision: number;
+  jobId: string;
+  prompt: string;
+  taskId?: string;
+  leaseToken?: string;
+  leaseWorkerId?: string;
+  leaseExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Bot {
+  id: string;
+  name: string;
+  title?: string;
+  description?: string;
+  instructions?: string;
+  color: string;
+  avatarUrl?: string;
+  avatarKind: AvatarKind;
+  /** Status-only public projection. Worker details are kept below and stripped by the harness. */
+  avatarGeneration?: PublicAvatarGeneration;
+  avatarGenerationInternal?: InternalAvatarGeneration;
+  model?: string;
+  thinking?: ReasoningEffort;
+  /** Where this bot's turns run, when the person chose a folder. Absolute. */
+  workspacePath?: string;
+  /** The plan this bot answers with, when pinned to one. */
+  planId?: string;
+  /** The external API-key provider this bot answers with, when pinned to one. */
+  providerId?: string;
+  pinned: boolean;
+  archived: boolean;
+  unread: boolean;
+  sectionId?: string;
+  notifyOnFinish: boolean;
+  status: BotStatus;
+  lastMessagePreview?: string;
+  /** Where the bot sits in the roster. Persisted, so a drag-to-reorder
+   * survives a reload instead of springing back. */
+  sortOrder: number;
+  /** How many "always allow" decisions are remembered for this bot. Derived
+   * at the bridge from `approvals.json`, never persisted on the row — it is
+   * what makes `bots.clearApprovals` an honest, visible affordance. */
+  approvalsRemembered?: number;
+  createdAt: string;
+}
+
+export interface CreateBotInput {
+  name: string;
+  title?: string;
+  description?: string;
+  instructions?: string;
+  color?: string;
+  model?: string;
+  thinking?: ReasoningEffort;
+  workspacePath?: string;
+  /** Trusted on-demand role slug used only while seeding a new agent folder.
+   * It is not persisted as authority; verified affiliation lives in the
+   * collaboration index. */
+  roleSlug?: string;
+  planId?: string;
+  providerId?: string;
+  sectionId?: string;
+  notifyOnFinish?: boolean;
+  /** Explicit user image direction. Never derived from instructions or business context. */
+  avatarPrompt?: string;
+  /** A canonical local image supplied during creation suppresses automatic generation atomically. */
+  avatarDataUrl?: string;
+}
+
+export type UpdateBotInput = Partial<
+  Omit<CreateBotInput, "name" | "roleSlug"> & {
+    name: string;
+    pinned: boolean;
+    archived: boolean;
+    unread: boolean;
+    avatarKind: AvatarKind;
+    sortOrder: number;
+  }
+>;
+
+export interface Group {
+  id: string;
+  name: string;
+  memberIds: string[];
+  pinned: boolean;
+  archived: boolean;
+  unread: boolean;
+  lastMessagePreview?: string;
+  createdAt: string;
+}
+
+export type ThreadTarget = { botId: string } | { groupId: string } | { chatId: string };
+
+export interface Attachment {
+  id: string;
+  name: string;
+  mimeType?: string;
+  size?: number;
+  dataUrl?: string;
+  url?: string;
+}
+
+export interface StepItem {
+  id: string;
+  label: string;
+  state: "running" | "done" | "failed";
+}
+
+export interface AskChoice {
+  value: string;
+  label: string;
+  /** One line under the label, when the question came with one. */
+  description?: string;
+}
+
+/** How heavy a permission ask is — see `harness/ask-impact.ts`. */
+export type AskImpact = "low" | "medium" | "high";
+
+export interface AskDetails {
+  kind: "text" | "command" | "diff" | "recipients";
+  text?: string;
+  items?: string[];
+  added?: number;
+  removed?: number;
+}
+
+/** A link in a reply: the label the agent wrote (`[label](url)`) or the URL. */
+export interface ReplyLink {
+  label: string;
+  url: string;
+}
+
+/** The card for the first external link of a reply, fetched by the runtime
+ * (the sender). The image, when there is one, is a file the runtime keeps
+ * and serves like an attachment. */
+export interface LinkPreview {
+  url: string;
+  title?: string;
+  description?: string;
+  domain?: string;
+  /** ISO instant the page declares. */
+  date?: string;
+  image?: { id: string; path: string; contentType: string; size: number; width?: number; height?: number };
+}
+
+export type MessageBlock =
+  | { kind: "text"; text: string; streaming?: boolean }
+  | { kind: "card"; title: string; body?: string; href?: string }
+  | {
+      kind: "ask";
+      askId: string;
+      runId: string;
+      requestType: "permission" | "question";
+      tool: string;
+      /** The QUESTION, as a sentence a person answers: "Allow Vega to run an
+       * operation in BizOS?". Written by `approvalTitle`, never by the CLI. */
+      summary: string;
+      /** The technical truth behind it — tool + arguments, the command, the
+       * files — for the card's collapsed "Details". */
+      detailText?: string;
+      choices?: AskChoice[];
+      /** Verb first, for the card's title: "Send 12 emails", "Run `ls`".
+       * `summary` stays the fallback. */
+      action?: string;
+      /** What it acts on: the command, the file, the recipients. */
+      target?: string;
+      impact?: AskImpact;
+      /** Absent: the runtime cannot tell. */
+      reversible?: boolean;
+      /** Whether "Always allow" may be offered. Never for a high-impact or
+       * irreversible action (owner decision, 2026-09-26). */
+      allowAlways?: boolean;
+      details?: AskDetails;
+      /** `expired` is NOT `answered`: nobody denied this, the window closed.
+       * Rendering the two the same way told the user they had refused
+       * something they never saw. */
+      status: AskStatus;
+      answered?: { kind: AskAnsweredKind; at: string };
+    }
+  | { kind: "meta"; text: string }
+  | { kind: "progress"; phase: string; detail?: string }
+  | { kind: "steps"; items: StepItem[] }
+  | { kind: "subagent"; name: string; summary?: string; state: "running" | "done" | "failed" }
+  /** `url` is what the old renderer draws (a data URL for a person's
+   * upload). An agent's image adds `path` — the file, in the workspace, that
+   * the sidecar serves under `id` — and what it knows about it. */
+  | { kind: "image"; url: string; alt?: string; id?: string; path?: string; fileName?: string; mimeType?: string; size?: number; width?: number; height?: number }
+  | { kind: "file"; name: string; url?: string; mimeType?: string; id?: string; path?: string; size?: number }
+  /** Onboarding in the chat (2026-09-26): short answers the agent offered
+   * under its reply (`offer_quick_replies`), and one proposal the person can
+   * accept or change (`propose_company_name`). Additive: an older renderer
+   * skips the kinds it does not draw. */
+  | { kind: "quick_replies"; choices: string[] }
+  | { kind: "proposal"; proposalKind: "company-name"; value: string }
+  | { kind: "handoff"; fromBotId: string; toBotId: string; reason?: string }
+  | { kind: "bot_message_sent"; toBotId: string; preview?: string }
+  | { kind: "bot_message_received"; fromBotId: string; preview?: string };
+
+export type AskStatus = "pending" | "answered" | "expired";
+
+/** Every way an ask block can end, as the harness records it. The renderer
+ * labels exactly these — no other value ever reaches a transcript. */
+export type AskAnsweredKind = "allow_once" | "allow_always" | "deny" | "text" | "choice" | "expired";
+
+export type MessageRole = "user" | "bot" | "system";
+
+export interface ThreadMessage {
+  /** Control records stay private; completed public text is immutable. */
+  deliveryState?: "control" | "complete";
+  id: string;
+  threadId: string;
+  seq: number;
+  role: MessageRole;
+  blocks: MessageBlock[];
+  botId?: string;
+  replyToMessageId?: string;
+  runId?: string;
+  thumbsUp?: boolean;
+  /** Links found in this reply's text, in reading order. */
+  links?: ReplyLink[];
+  /** The card for its first external link, once fetched (a later update to
+   * the same message — the reply itself never waits for it). */
+  preview?: LinkPreview;
+  createdAt: string;
+}
+
+export interface ThreadSnapshot {
+  threadId: string;
+  target: ThreadTarget;
+  messages: ThreadMessage[];
+  olderCursor: string | null;
+  activeRunIds: string[];
+  unread: boolean;
+  updatedAt: string;
+}
+
+export type RunState = "queued" | "working" | "waiting_input" | "completed" | "failed" | "cancelled";
+
+export interface Run {
+  id: string;
+  threadId: string;
+  botId: string;
+  state: RunState;
+  startedAt: string;
+  endedAt?: string;
+  error?: string;
+  messageId?: string;
+  routineId?: string;
+  /** A proactive heartbeat wake (sidecar only), never a person's message. */
+  heartbeat?: boolean;
+  /** How a routine/heartbeat run ended for the person: `silent` answered
+   * exactly [SILENT] and published nothing. */
+  outcome?: RoutineRunOutcome;
+  task?: import("./task.js").TaskCheckpoint;
+  inference?: { kind: "ollama"; providerId: string; model: string; locality: "local" }
+    | { kind: "api"; providerId: string; model: string; locality: "remote" };
+  usage?: { inputTokens: number; outputTokens: number; cachedInputTokens?: number };
+  /** Last write to this record (checkpoint, state, usage). */
+  updatedAt?: string;
+  /** An app shutdown or crash cut this run while its task was in_progress;
+   * `resumed` once the next start has continued it (see `Dispatcher`). */
+  interruption?: "shutdown" | "resumed";
+  /** How many restart-resumes in a row led to this run. */
+  restartResumes?: number;
+}
+
+export type RoutineFrequency = "once" | "daily" | "interval";
+
+export type RoutineRunOutcome = "ok" | "failed" | "silent" | "cancelled";
+
+/** The only triggers that exist.
+ *
+ * There is no `webhook`: nothing in this app ever listened for one, so a
+ * webhook routine was persisted, drawn as armed, and never fired. A shape
+ * the runtime cannot honour is not a feature, it is a lie with a toggle. */
+export type RoutineTrigger =
+  /** `at` is a full ISO instant, and it must be in the future when set. */
+  | { kind: "schedule"; frequency: "once"; at: string }
+  /** `time` is HH:MM local; `weekdays` 0 = Sunday … 6 = Saturday. */
+  | { kind: "schedule"; frequency: "daily"; time: string; weekdays?: number[] }
+  | { kind: "schedule"; frequency: "interval"; everyMinutes: number };
+
+export interface Routine {
+  id: string;
+  botId: string;
+  name: string;
+  prompt: string;
+  trigger: RoutineTrigger;
+  enabled: boolean;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  running: boolean;
+  createdAt: string;
+  updatedAt?: string;
+  /** Self-expiring watch: the scheduler never fires at or after this ISO
+   * instant, and disables the routine (marking `expiredAt`) once it passes. */
+  endsAt?: string;
+  /** Set when the routine ended by itself (its `endsAt` passed, or its owner
+   * reported the watched thing finished). Cleared when it is re-armed. */
+  expiredAt?: string;
+  /** The last terminal outcome of one of its runs. */
+  lastOutcome?: { outcome: RoutineRunOutcome; at: string; runId?: string };
+  /** The previous NON-silent result, truncated: continuity for the next run. */
+  lastReport?: { text: string; at: string };
+}
+
+export interface CreateRoutineInput {
+  botId: string;
+  name: string;
+  prompt: string;
+  trigger: RoutineTrigger;
+  enabled?: boolean;
+  /** ISO instant in the future, or null/absent for no end. */
+  endsAt?: string | null;
+}
+
+/** What a person can send back. `expired` is absent on purpose: it is an
+ * outcome the runtime records, never a decision the user makes. */
+export type AskAnswer =
+  | { kind: "allow_once" }
+  | { kind: "allow_always" }
+  | { kind: "deny" }
+  | { kind: "text"; text: string }
+  | { kind: "choice"; value: string };
+
+export type ProductEvent =
+  | { type: "quick-chat.expired"; threadId: string; chatId: string }
+  | { type: "thread.message.created"; threadId: string; message: ThreadMessage }
+  | { type: "thread.message.updated"; threadId: string; message: ThreadMessage }
+  | { type: "thread.progress"; threadId: string; messageId: string; phase: string; detail?: string }
+  | { type: "thread.ask"; threadId: string; messageId: string; runId: string; askId: string }
+  | { type: "thread.meta"; threadId: string; messageId: string; text: string }
+  | { type: "thread.subagent"; threadId: string; messageId: string; name: string; state: string }
+  | { type: "run.started"; runId: string; threadId: string; botId: string }
+  | { type: "run.waiting_input"; runId: string; threadId: string; botId: string }
+  | { type: "run.completed"; runId: string; threadId: string; botId: string }
+  | { type: "run.failed"; runId: string; threadId: string; botId: string; error?: string }
+  | { type: "run.cancelled"; runId: string; threadId: string; botId: string }
+  | { type: "agent.tool.called"; threadId: string; runId: string; tool: string }
+  /** A routine delivered a NON-silent reply. Published right BEFORE the reply
+   * messages are appended, so `at` sorts before them. */
+  | {
+      type: "routine.fired";
+      routineId: string;
+      botId: string;
+      runId: string;
+      threadId: string;
+      at: string;
+      routine: { name: string; trigger: RoutineTrigger; endsAt?: string };
+    }
+  /** The runtime itself changed a routine: it expired or its owner ended it. */
+  | { type: "routine.updated"; routineId: string; botId: string; reason: "expired" | "ended"; at: string }
+  | { type: "bot.spawned"; bot: Bot }
+  | { type: "bot.archived"; botId: string }
+  | { type: "bot.deleted"; botId: string }
+  | { type: "group.created"; group: Group }
+  | { type: "group.updated"; group: Group };
+
+export interface BridgeError {
+  code: string;
+  message: string;
+}
+
+export function threadIdForTarget(target: ThreadTarget): string {
+  if ("chatId" in target) return `chat:${target.chatId}`;
+  return "botId" in target ? `bot:${target.botId}` : `group:${target.groupId}`;
+}
+
+export function targetForThreadId(threadId: string): ThreadTarget | null {
+  if (threadId.startsWith("chat:")) return { chatId: threadId.slice(5) };
+  if (threadId.startsWith("bot:")) return { botId: threadId.slice(4) };
+  if (threadId.startsWith("group:")) return { groupId: threadId.slice(6) };
+  return null;
+}
+
+// ── Appareils (Settings → Devices, F11) ─────────────────────────────────
+
+/** Ce que la table `local_devices` accepte. Une plateforme exotique est rangée
+ * sous `linux` par `devicePlatform()` plutôt que de faire échouer un
+ * enregistrement. */
+export type DevicePlatform = "darwin" | "win32" | "linux" | "ios" | "android";
+
+/** Ce que la machine dit d'elle-même à chaque battement. Tout est optionnel :
+ * une capacité absente veut dire « on ne sait pas », jamais « non ». */
+export interface DeviceCapabilities {
+  localRuntime?: boolean;
+  codex?: { found?: boolean; version?: string | null };
+  accessGrants?: number;
+  remoteTasks?: boolean;
+  /** Dernier battement d'une app qui se ferme proprement. */
+  shuttingDown?: boolean;
+}
+
+/** Ce que l'écran Devices sait de CETTE machine — l'autre moitié (le reste du
+ * parc) vient de `GET /api/devices`. `remoteTasksEnabled` est celui que le
+ * dernier battement a rapporté, pas celui qu'on croyait avoir. */
+export interface DeviceAgentState {
+  registered: boolean;
+  deviceId: string | null;
+  name: string;
+  platform: DevicePlatform;
+  appVersion: string;
+  remoteTasksEnabled: boolean;
+  /** Dernier battement RÉUSSI, ou `null` si aucun. */
+  lastSeenAt: string | null;
+  /** Une tâche distante tourne en ce moment sur cette machine. */
+  busy: boolean;
+  error?: string;
+}
