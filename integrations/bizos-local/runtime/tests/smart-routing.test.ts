@@ -310,6 +310,33 @@ describe("a turn under Smart choice", () => {
     expect(calls).toBe(0);
   });
 
+  it("refuses routing changes while a classifier is preparing or a turn is active, but allows key revocation", async () => {
+    let complete!: (response: Response) => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const { harness, turns } = fixture(async () => {
+      entered();
+      return new Promise<Response>(resolve => { complete = resolve; });
+    });
+    await harness.smartRouting.configure({ enabled: true, preferredFamily: "claude", apiKey: "ts_fixture_key_0123456789" });
+    const bot = await harness.bots.create({ name: "Preparing fixture" });
+    await harness.threads.send({ botId: bot.id }, { text: HARD });
+    await started;
+    for (const patch of [{ enabled: false }, { preference: "economy" }, { preferredFamily: "codex" }]) {
+      await expect(harness.smartRouting.configure(patch)).rejects.toThrow("Stop the active run");
+    }
+    expect(harness.smartRouting.state()).toMatchObject({ enabled: true, preference: "balanced", preferredFamily: "claude" });
+    await harness.smartRouting.configure({ apiKey: "" });
+    expect(harness.smartRouting.state().hasKey).toBe(false);
+    complete(new Response(JSON.stringify({ answers: { difficulty: { type: "score", score: 1.9 } } })));
+    await waitForTurns(turns, 1);
+    expect(turns[0]).toMatchObject({ driver: "claude", input: { model: "opus" } });
+    await expect(harness.smartRouting.configure({ enabled: false })).rejects.toThrow("Stop the active run");
+    finish(turns[0]!);
+    await harness.smartRouting.configure({ enabled: false, preferredFamily: "codex" });
+    expect(harness.smartRouting.state()).toMatchObject({ enabled: false, preferredFamily: "codex" });
+  });
+
   it("uses the heuristic, not TypeSafe, for text the owner did not type", async () => {
     let calls = 0;
     const { harness } = fixture(async () => { calls += 1; return new Response("{}", { status: 500 }); });

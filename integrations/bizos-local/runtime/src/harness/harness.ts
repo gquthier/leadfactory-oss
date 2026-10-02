@@ -1522,6 +1522,13 @@ export class LocalBizosHarness {
       };
     },
     configure: async (input: { enabled?: unknown; preference?: unknown; apiKey?: unknown; preferredFamily?: unknown }) => {
+      // Match concrete default selection: a preparing classifier already owns
+      // a run, and may not race a workspace routing/pin change. Key-only
+      // revocation stays available while a turn is active.
+      const changesRouting = input.enabled !== undefined || input.preference !== undefined || input.preferredFamily !== undefined;
+      if (changesRouting && this.runStore.list(Number.MAX_SAFE_INTEGER).some(run => ["working", "queued", "waiting_input"].includes(run.state))) {
+        throw new SettingsError("Stop the active run before changing its model");
+      }
       const current = this.settingsStore.get().local.smart;
       if (input.preference !== undefined && !isSmartPreference(input.preference)) {
         throw new SettingsError('preference must be "economy", "balanced" or "best"');
