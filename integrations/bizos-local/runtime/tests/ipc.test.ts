@@ -266,6 +266,17 @@ describe("handlers", () => {
     if (surprise.ok === false) expect(surprise.error.message).toMatch(/does not accept somethingElse/);
   });
 
+  it("passes only guided or full autonomy through template apply", async () => {
+    const { harness, calls } = fakeHarness();
+    const handler = buildHandlers(harness)["lbz:brain:applyTemplate"]!;
+    expect(await runHandler(handler, ["software", null, { autonomy: "full" }])).toMatchObject({ ok: true });
+    expect(calls.at(-1)).toMatchObject({ name: "templates.apply", args: ["software", undefined, { autonomy: "full" }] });
+    expect(await runHandler(handler, ["software", null, { autonomy: "guided" }])).toMatchObject({ ok: true });
+    const invalid = await runHandler(handler, ["software", null, { autonomy: "automatic" }]) as IpcEnvelope;
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.error.code).toBe("invalid_payload");
+  });
+
   it("passes long chat text intact through both internal send paths", async () => {
     const { harness, calls } = fakeHarness();
     const handlers = buildHandlers(harness);

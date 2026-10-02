@@ -296,6 +296,22 @@ describe("POST /api/local/brain/templates/apply", () => {
     ]);
   });
 
+  it("passes only guided or full autonomy and leaves an absent choice guided by default", async () => {
+    const calls: unknown[][] = [];
+    const facade = facadeWith(calls);
+    await facade.applyBrainTemplate({ id: "software", autonomy: "guided" });
+    await facade.applyBrainTemplate({ id: "software", autonomy: "full" });
+    await facade.applyBrainTemplate({ id: "software" });
+    expect(calls).toEqual([
+      ["software", undefined, { autonomy: "guided" }],
+      ["software", undefined, { autonomy: "full" }],
+      ["software", undefined, {}],
+    ]);
+    await expect(facade.applyBrainTemplate({ id: "software", autonomy: "automatic" })).rejects.toMatchObject({ status: 400, code: "invalid_payload" });
+    await expect(facade.applyBrainTemplate({ id: "software", autonomy: null })).rejects.toMatchObject({ status: 400, code: "invalid_payload" });
+    expect(calls).toHaveLength(3);
+  });
+
   it("ignores a malformed owner or language instead of refusing the install, and still refuses unknown fields", async () => {
     const calls: unknown[][] = [];
     const facade = facadeWith(calls);

@@ -44,7 +44,7 @@ Dans **Second cerveau → Dossier**, vous retrouvez les rôles, processus, `skil
 
 Les modifications des agents sont recherchées toutes les trois secondes par le cockpit. Si vous êtes en train de rédiger ou avez un brouillon non enregistré, il le conserve et signale les nouvelles données.
 
-Aucune routine n’est activée par défaut. Les comptes de cold email, de publicité et de génération d’images ou de vidéos sont les vôtres ; les actions externes ne partent pas automatiquement à l’installation.
+Le démarrage **guidé**, utilisé par défaut, n’active aucune routine. Le choix explicite **Full autonomous** à la création installe une seule routine locale quotidienne à 09:00 pour CEO : elle avance les objectifs connus, exécute ou délègue du travail borné et rend ses preuves sans attendre une nouvelle instruction. Elle ne lance rien immédiatement, exige que BizOS et le Mac soient actifs à l’échéance et ne contourne ni STOP, ni permissions, ni budgets. Elle n’autorise aucun investissement, dépense, publication, contact externe ou promesse de revenu. Les installations guidées ou historiques ne sont jamais converties automatiquement. Les comptes de cold email, de publicité et de génération d’images ou de vidéos sont les vôtres ; les actions externes ne partent pas automatiquement à l’installation.
 
 ## Ce qui est inclus
 

@@ -2454,7 +2454,7 @@ export class CollaborationFacade {
   // half-written roster.
   brainTemplates() { return this.brainCall("lbz:brain:templates", []); }
   async applyBrainTemplate(raw: unknown) {
-    const input = objectBody(raw, ["id", "rootId", "owner", "language", "companyName", "context"]);
+    const input = objectBody(raw, ["id", "rootId", "owner", "language", "companyName", "context", "autonomy"]);
     const id = requiredString(input.id, "id", 64);
     if (!isTemplateId(id)) throw new HttpError(404, "not_found", "That template is not in the catalogue.");
     const rootId = input.rootId === undefined || input.rootId === null ? undefined : requiredString(input.rootId, "rootId", 64);
@@ -2464,8 +2464,10 @@ export class CollaborationFacade {
     const owner = input.owner && typeof input.owner === "object" && !Array.isArray(input.owner) ? input.owner as Record<string, unknown> : {};
     const name = typeof owner.name === "string" && owner.name.trim() && owner.name.trim().length <= 80 ? owner.name.trim() : undefined;
     const language = input.language === "fr" || input.language === "en" ? input.language : undefined;
+    if (input.autonomy !== undefined && input.autonomy !== "guided" && input.autonomy !== "full") throw new HttpError(400, "invalid_payload", "autonomy must be guided or full");
+    const autonomy = input.autonomy === "guided" || input.autonomy === "full" ? input.autonomy : undefined;
     let options: ReturnType<typeof parseCreationOptions>;
-    try { options = parseCreationOptions({ ...(name ? { owner: { name } } : {}), ...(language ? { language } : {}), ...(input.companyName !== undefined ? { companyName: input.companyName } : {}), ...(input.context !== undefined ? { context: input.context } : {}) }); }
+    try { options = parseCreationOptions({ ...(name ? { owner: { name } } : {}), ...(language ? { language } : {}), ...(input.companyName !== undefined ? { companyName: input.companyName } : {}), ...(input.context !== undefined ? { context: input.context } : {}), ...(autonomy ? { autonomy } : {}) }); }
     catch (error) { throw new HttpError(400, "invalid_payload", error instanceof Error ? error.message : String(error)); }
     const args: unknown[] = Object.keys(options).length ? [id, rootId ?? null, options] : rootId ? [id, rootId] : [id];
     return this.exclusive(() => this.brainCall("lbz:brain:applyTemplate", args));

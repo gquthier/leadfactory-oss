@@ -157,6 +157,15 @@ import { readClaudeUsage } from "./claude-usage.js";
 
 /** How long a plan's reported usage is trusted before the CLI is asked again. */
 const USAGE_CACHE_MS = 5 * 60_000;
+const FULL_AUTONOMY_ROUTINE_NAME = "Daily company progress";
+const FULL_AUTONOMY_ROUTINE_PROMPT = [
+  "Advance the company's current objectives using its current business context and the owner's latest directions.",
+  "Choose and execute the most useful bounded tasks available now; recruit or delegate to a specialist when that improves the result.",
+  "Verify facts and real tool outcomes, preserve unknowns, record evidence, and report what changed, blockers, and the next action.",
+  "Respect STOP, budgets, tool limits, permissions, and existing rights.",
+  "Do not spend money, make investments, publish, contact people, or promise revenue without explicit authorization.",
+  "If no useful task can proceed, report the concrete missing decision without inventing it.",
+].join(" ");
 import {
   executionProviderFor,
   INFERENCE_PRESETS,
@@ -2012,7 +2021,9 @@ export class LocalBizosHarness {
     // A pre-feature pending journal has no creation snapshot. It must finish
     // the old six/eleven-agent install it started; only a newly journalled
     // creation receives the CEO-only derived template.
-    const creationOptions = existing ? {} : priorPending?.creationOptions ?? options;
+    const creationOptions: CreationOptions = existing
+      ? { autonomy: existing.autonomy === "full" ? "full" : "guided" }
+      : priorPending?.creationOptions ?? options;
     const template = creationMode ? creationTemplateOf(sourceTemplate, creationOptions) : sourceTemplate;
     validateTemplate(template);
     if (existing) {
@@ -2211,8 +2222,33 @@ export class LocalBizosHarness {
       if (!planned.created) pending = journal({ group: { ...planned, created: true } });
       groupId = group?.id;
     }
-    // A template's routines are NOT created: nothing scheduled comes from a
-    // catalogue row.
+    // Full autonomy is an explicit new-company effect. Its durable id is in
+    // the installation journal before RoutineStore writes anything, so a
+    // lost response or restart reuses the same row. A row marked created but
+    // later deleted is respected; a retry never brings it back.
+    const routineIds: string[] = [];
+    if (creationOptions.autonomy === "full" && bots.ceo) {
+      let planned = pending.routine;
+      if (!planned) {
+        planned = { id: newId("rtn"), created: false };
+        pending = journal({ routine: planned });
+      }
+      let routine = this.routineStore.get(planned.id);
+      if (!planned.created) {
+        // The idempotent store returns an existing row unchanged after a
+        // lost response, including a pause made before this retry.
+        routine = await this.routines.create({
+          id: planned.id,
+          botId: bots.ceo,
+          name: FULL_AUTONOMY_ROUTINE_NAME,
+          prompt: FULL_AUTONOMY_ROUTINE_PROMPT,
+          trigger: { kind: "schedule", frequency: "daily", time: "09:00" },
+          enabled: true,
+        });
+      }
+      if (!planned.created) pending = journal({ routine: { ...planned, created: true } });
+      if (routine) routineIds.push(routine.id);
+    }
 
     const installation: TemplateInstallation = {
       id,
@@ -2223,11 +2259,12 @@ export class LocalBizosHarness {
       vault,
       bots,
       ...(groupId ? { groupId } : {}),
-      routineIds: [],
+      routineIds,
       ...(creationMode ? { creationMode: CEO_ON_DEMAND_CREATION } : {}),
       ...(pending.onboardingVersion === 1 ? { onboardingVersion: 1 as const } : {}),
       ...(creationOptions.context ? { contextImported: true as const } : {}),
       ...(creationOptions.context && "kind" in creationOptions.context ? { contextReference: creationOptions.context } : {}),
+      ...(creationMode ? { autonomy: creationOptions.autonomy ?? "guided" } : {}),
     };
     this.updateRegistry((current) => {
       current.installations[id] = installation;
@@ -3719,7 +3756,8 @@ export class LocalBizosHarness {
     if (!binding) return null;
     const installed = readTemplateRegistry(this.storage).installations[binding.templateId];
     if (installed?.onboardingVersion !== 1 || installed.bots.ceo !== botId) return null;
-    if (installed.onboardingCompletedAt) return { stage: "ready", contextImported: false, waitingForNameAnswer: false };
+    const autonomy = installed.autonomy === "full" ? "full" : "guided";
+    if (installed.onboardingCompletedAt) return { stage: "ready", autonomy, contextImported: false, waitingForNameAnswer: false };
     // The UI snapshot contains only the newest 60 messages. Recover the
     // complete onboarding evidence even after a restart or a long exchange,
     // then persist the terminal transition so reads never repeat this scan.
@@ -3729,7 +3767,7 @@ export class LocalBizosHarness {
       page = this.threadStore.page({ botId }, page.olderCursor);
       messages.unshift(...page.messages);
     }
-    const status = readOnboardingStatus(binding.path, messages);
+    const status = readOnboardingStatus(binding.path, messages, autonomy);
     if (status.stage === "ready") this.updateRegistry(current => {
       const row = current.installations[binding.templateId];
       if (row?.bots.ceo === botId && !row.onboardingCompletedAt) row.onboardingCompletedAt = this.clock.nowIso();

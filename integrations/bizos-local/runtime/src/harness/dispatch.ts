@@ -1333,7 +1333,7 @@ export class Dispatcher {
     const turn = this.activeTurnFor(scope, "Offering quick replies");
     const choices = parseQuickReplies(raw);
     const onboarding = this.deps.onboardingStatus?.(scope.botId);
-    if (onboarding && onboarding.stage !== "ready") {
+    if (onboarding && onboarding.stage !== "ready" && onboarding.autonomy !== "full") {
       if (turn.onboardingNameProposed) throw new Error("Wait for the person's answer to the company name before asking about priorities.");
       if (onboarding.stage === "name") throw new Error("Resolve the company name first. Record an already known name in Company.md; otherwise propose only the name and wait for the answer.");
     }
@@ -1358,7 +1358,7 @@ export class Dispatcher {
 
   assertOnboardingRecruitment(scope: { botId: string; threadId: string; runId: string }): void {
     const onboarding = this.deps.onboardingStatus?.(scope.botId);
-    if (!onboarding || onboarding.stage === "ready") return;
+    if (!onboarding || onboarding.stage === "ready" || onboarding.autonomy === "full") return;
     const turn = this.activeTurnFor(scope, "Recruiting");
     if (onboarding.stage === "name" || turn.onboardingNameProposed) throw new Error("Resolve the company name and wait for the person's answer before asking for priorities or recruiting.");
     throw new Error("Ask for the first priority and wait for the person's separate answer before recruiting a specialist.");

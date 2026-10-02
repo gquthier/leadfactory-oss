@@ -860,14 +860,15 @@ export function buildHandlers(
     // here and again at the harness boundary; no caller-selected source path.
     "lbz:brain:applyTemplate": (args) => {
       const raw = at(args, 2);
-      const options = raw === undefined || raw === null ? {} : asStrictRecord(raw, "options", ["owner", "language", "companyName", "context"]);
+      const options = raw === undefined || raw === null ? {} : asStrictRecord(raw, "options", ["owner", "language", "companyName", "context", "autonomy"]);
       const owner = options.owner === undefined || options.owner === null ? undefined : asStrictRecord(options.owner, "owner", ["name"]);
       const name = owner ? asOptionalString(owner.name, "owner.name", 80) : undefined;
       const language = options.language === undefined || options.language === null ? undefined : asEnum(options.language, "language", ["fr", "en"] as const);
+      const autonomy = options.autonomy === undefined ? undefined : asEnum(options.autonomy, "autonomy", ["guided", "full"] as const);
       return harness.templates.apply(asEnum(at(args, 0), "id", TEMPLATE_IDS), asOptionalString(at(args, 1), "rootId", 64), {
         ...(name ? { owner: { name } } : {}),
         ...(language ? { language } : {}),
-        ...parseCreationOptions({ ...(options.companyName !== undefined ? { companyName: options.companyName } : {}), ...(options.context !== undefined ? { context: options.context } : {}) }),
+        ...parseCreationOptions({ ...(options.companyName !== undefined ? { companyName: options.companyName } : {}), ...(options.context !== undefined ? { context: options.context } : {}), ...(autonomy ? { autonomy } : {}) }),
       });
     },
     // The workspace's template and vault: chosen once, then pinned.
