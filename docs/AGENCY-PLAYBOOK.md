@@ -4,7 +4,7 @@ Ce parcours est une méthode générique, personnalisable. Chaque étape laisse 
 
 ## 1. Définir l'offre
 
-Renseigner dans le second cerveau : client cible, problème précis, service livré, périmètre, tarif, capacité de livraison, exclusions et preuves disponibles. Séparer faits vérifiés, hypothèses à tester et promesses commerciales. Ne pas réutiliser les performances d'une autre agence comme preuve.
+Renseigner dans **Start Here** du cockpit : client cible, problème précis, service livré, périmètre, tarif, capacité de livraison, exclusions et preuves disponibles. Séparer faits vérifiés, hypothèses à tester et promesses commerciales. Ne pas réutiliser les performances d'une autre agence comme preuve.
 
 **Livrable :** fiche d'offre et critères de qualification. **Passage :** une cible accessible, un besoin explicite et une prestation que l'équipe sait réellement livrer.
 

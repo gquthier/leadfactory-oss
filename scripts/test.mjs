@@ -1,10 +1,10 @@
-// Keep the dependency-free cockpit suite separate from the optional BizOS runtime.
+// Runs the dependency-free cockpit and skills test suites.
 import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const root = resolve(import.meta.dirname, '..');
-const files = ['test', 'test-skills', 'test-pack', 'ecommerce/test'].flatMap((dir) =>
+const files = ['test', 'test-skills'].flatMap((dir) =>
   readdirSync(resolve(root, dir))
     .filter((name) => name.endsWith('.test.mjs'))
     .sort()

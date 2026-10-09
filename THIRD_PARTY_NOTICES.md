@@ -1,11 +1,6 @@
 # Third-party notices
 
-## Périmètres de licence
-
-Le cockpit autonome, les documents et les éléments originaux du kit d’agence sont sous **MIT**, voir [LICENSE](LICENSE). Les sources du runtime BizOS local embarquées dans [`integrations/bizos-local/runtime/`](integrations/bizos-local/runtime/) sont sous **AGPL-3.0-only**, voir leur [LICENSE](integrations/bizos-local/runtime/LICENSE). La licence MIT du kit ne remplace pas celle de ce sous-dossier.
-
-Le runtime conserve ses attributions amont, notamment les éléments Apache-2.0 documentés dans son `NOTICE` et son dossier `licenses/`. Son build copie le cockpit, les skills et les notes du présent kit comme ressources ; ces ressources conservent leurs licences et notices d’origine. Les fichiers du runtime sont des sources de l’intégration locale, pas un export du moteur cloud privé.
-
+Le logiciel (cockpit), les documents et les éléments originaux du kit sont sous **MIT**, voir [LICENSE](LICENSE).
 
 ## Skills (`skills/`)
 
@@ -75,7 +70,3 @@ SOFTWARE.
 
 Also referenced (official SDK, not vendored): `higgsfield-ai/higgsfield-client`
 (Python SDK) and `higgsfield-ai/cli`.
-
-## E-commerce template
-
-The second business template and its 24 skills retain their own [source and license notices](ecommerce/THIRD_PARTY_NOTICES.md). Training transcripts and private business context are not part of this distribution.

@@ -2,7 +2,7 @@
   "name": "leadfactory-oss",
   "version": "0.3.0",
   "private": true,
-  "description": "Templates métier locaux Agency et E-commerce : dashboards, skills et intégration BizOS",
+  "description": "LeadFactory open source : logiciel de gestion d'agence lead gen (cockpit local) et 23 skills d'agence",
   "type": "module",
   "engines": {
     "node": ">=22"
